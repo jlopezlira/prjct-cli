@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.78.0] - 2026-07-28
+
+### Added
+- done
+
 ## [3.77.0] - 2026-07-28
 
 ### Fixed
@@ -20,13 +25,11 @@
 
 - bind print-mode runs to work cycles (#595)
 
-
 ## [3.75.0] - 2026-07-21
 
 ### Features
 
 - prjct body tools + guard prefix on edit/write (#594)
-
 
 ## [3.74.0] - 2026-07-21
 
@@ -34,13 +37,11 @@
 
 - owned print-mode agent loop with root-scoped tools (#593)
 
-
 ## [3.73.0] - 2026-07-21
 
 ### Features
 
 - multi-brain profiles for owned agent loop foundation (#592)
-
 
 ## [3.72.0] - 2026-07-19
 
