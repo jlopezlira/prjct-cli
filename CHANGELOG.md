@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [3.77.0] - 2026-07-28
+
+### Fixed
+
+- **Plans and work data: SQLite only — never physical files.** Templates stopped *instructing* `.prjct/sessions/` writes in v2.19.7, but stale customized agents kept dumping `plan.md` / `impl.md` into client repos (not traceable). Every `prjct sync` now (1) **ingests** text from `.prjct/{sessions,audits,deploy}/` into project SQLite (`prjct remember` context, topic `worktree-ghost-ingest`) then **deletes** those dirs (no re-home onto disk), and (2) **force-refreshes** crew agent files / `CLAUDE.md` / `CREW.md` that still instruct disk writes (including `SESSION_ROOT` / `~/.prjct-cli/**/sessions/` hideouts). Durable surface: `prjct plan` / `prjct spec` / `prjct crew record-run` / `prjct remember` — project SQL only. Only hand-editable file under `.prjct/` is `prjct.config.json`.
+
 ## [3.76.1] - 2026-07-22
 
 ### Fixed
