@@ -151,15 +151,12 @@ class SyncService {
       // long ago. The pre-v2.19.7 crew-disk sweep below is a separate concern
       // (kv_store CHECKPOINTS/team.json) and stays.
 
-      // 2d. Legacy crew-disk sweep (spec a50b32d1 AC #10) — detect
-      // pre-v2.19.7 `.prjct/CHECKPOINTS.md` and `.prjct/team.json`,
-      // migrate into kv_store, emit one-shot inbox warnings on
-      // post-migration hand-edits. mtime-cached so re-syncs are silent.
-      //
-      // Deprecation track: pre-v2.19.7 was ~12 months ago — every active
-      // install migrated long ago. Set PRJCT_SKIP_CREW_SWEEP=1 to skip this
-      // phase entirely (mirrors PRJCT_SKIP_JSON_MIGRATION). v3.0 removes
-      // the sweep file along with migrate-json.
+      // 2d. Legacy crew-disk sweep (spec a50b32d1 AC #10 + worktree hygiene):
+      //   - pre-v2.19.7 `.prjct/CHECKPOINTS.md` / `.prjct/team.json` → kv_store
+      //   - EVERY sync: purge `.prjct/{sessions,audits,deploy}/` from the
+      //     customer worktree and repair crew agent files that still instruct
+      //     agents to write plans/reports into the repo (customer #3 2026-07).
+      // Set PRJCT_SKIP_CREW_SWEEP=1 to skip (mirrors PRJCT_SKIP_JSON_MIGRATION).
       if (process.env.PRJCT_SKIP_CREW_SWEEP !== '1') {
         await phase('legacy-crew-sweep', async () => {
           try {
@@ -170,6 +167,8 @@ class SyncService {
               result.teamMigrated ||
               result.checkpointsHandEditWarned ||
               result.teamHandEditWarned ||
+              result.ghostDirsPurged.length > 0 ||
+              result.agentFilesRepaired.length > 0 ||
               result.errors.length > 0
             ) {
               log.info('Legacy crew sweep ran', {
@@ -177,6 +176,9 @@ class SyncService {
                 teamMigrated: result.teamMigrated,
                 checkpointsHandEditWarned: result.checkpointsHandEditWarned,
                 teamHandEditWarned: result.teamHandEditWarned,
+                ghostDirsPurged: result.ghostDirsPurged,
+                agentFilesRepaired: result.agentFilesRepaired,
+                ghostFilesIngested: result.ghostFilesIngested,
                 errors: result.errors.length,
               })
             }

@@ -128,4 +128,4 @@ Match the implementer count to the work. One subtask → one implementer. Three 
 
 ## Hard persistence rule
 
-Never write audit, checklist, review, deploy, or report markdown into any new file or subdirectory under the prjct state folder. The ONLY hand-editable file in that folder is `.prjct/prjct.config.json`. Durable state — checkpoints, audits, reviews, decisions, learnings — goes through `prjct` CLI verbs (`prjct crew checkpoints set`, `prjct remember`, `prjct spec record-review`). SQLite is the only allowed persistence surface.
+Never write audit, checklist, review, deploy, plan, or report markdown into any physical file — not under `.prjct/`, not under `~/.prjct-cli/`, not anywhere else on disk. Physical files are not traceable. The ONLY hand-editable file in the project folder is `.prjct/prjct.config.json`. Durable state lives in **project SQLite** via CLI verbs: `prjct plan` / `prjct spec` (plans), `prjct crew record-run` (crew outcomes), `prjct remember` (decisions/learnings), `prjct crew checkpoints set` (gates), `prjct spec record-review` (reviews).

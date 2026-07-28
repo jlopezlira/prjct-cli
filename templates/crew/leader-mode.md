@@ -39,5 +39,5 @@ If you need durable state that outlives the session, persist via `prjct` CLI ver
 
 ### Hard persistence rule
 
-Never write audit, checkpoint, review, deploy, or report markdown into any new file or subdirectory under the prjct state folder, and no scratch `.md` anywhere else in the worktree. The ONLY hand-editable file in that folder is `.prjct/prjct.config.json`. Everything else — checkpoints, audits, decisions, learnings, deploy notes — lives in SQLite, written through `prjct` CLI verbs (`prjct crew checkpoints set`, `prjct remember`, `prjct spec record-review`). If a subagent reports findings, persist them via `prjct remember` and cite the returned mem id; never tell a subagent to write to disk.
+Never write audit, checkpoint, review, deploy, plan, or report markdown into any physical file — not under `.prjct/`, not under `~/.prjct-cli/`, not anywhere else on disk. Physical files are not traceable. The ONLY hand-editable file in the project folder is `.prjct/prjct.config.json`. Everything durable lives in **project SQLite** via `prjct plan` / `prjct spec` / `prjct crew record-run` / `prjct remember` / `prjct crew checkpoints set` / `prjct spec record-review`. If a subagent reports findings, persist them via `prjct remember` and cite the returned mem id; never tell a subagent to write to disk.
 <!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->
