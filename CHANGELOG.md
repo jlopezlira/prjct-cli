@@ -10,6 +10,13 @@
   - **B1 Delivery kill switch** — `delivery.killSwitch: "on"` in `.prjct/prjct.config.json` removes the ship mutation path before task complete / workflow. Outranks `--no-judgment-gate` / `--no-spec-gate` / `--force-pressure`. Lift only by setting `off`.
   - **C1 Frozen audit candidate hash** — `prjct spec audit` stamps `audit_candidate_hash`; each lens review binds `candidateHash`; body edits clear reviews + demote `reviewed`→`draft`; promote gate refuses drifted candidates. Legacy specs without a hash keep prior lens-only behavior.
 
+## [3.78.0] - 2026-07-29
+
+### Features
+
+- steal g-ai v2.2 authority teeth — stamp, candidate hash, kill switch (#598)
+
+
 ## [3.77.0] - 2026-07-28
 
 ### Fixed
