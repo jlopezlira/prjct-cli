@@ -1,39 +1,26 @@
 /**
- * Legacy-disk sweep for crew persistence.
+ * Legacy-disk sweep for crew persistence + client-tree hygiene.
  *
  * Runs on every `prjct sync` (SessionStart). Best-effort, never throws to
  * the caller — errors are collected on the result.
  *
- * ## Phase A — pre-v2.19.8 migrations (kv_store adoption)
- *   .prjct/CHECKPOINTS.md  →  kv_store['crew:checkpoints']    source='migrated'
- *   .prjct/team.json       →  kv_store['team:enrollment']     + atomic mirror regen
- * Idempotent via mtime flags. Never auto-deletes either file.
- *
- * ## Phase B — customer-worktree hygiene (HARD LAW, every sync)
- * Product invariant: **SQLite is the only persistence surface for plans and
- * work data.** Physical plan/impl/review/audit files are not traceable and
- * are forbidden — in the customer worktree AND under ~/.prjct-cli as free
- * markdown dumps. Durable state goes through prjct verbs:
- *   - plans → `prjct plan` / `prjct spec` (kv_store + specs table)
- *   - crew runs → `prjct crew record-run` (kv_store crew-run:*)
- *   - memory → `prjct remember` (memories / events)
- * The ONLY hand-editable file under `.prjct/` is `prjct.config.json`.
+ * ## HARD LAW (customer worktree)
+ * The ONLY allowed file under `.prjct/` in a client repo is
+ * `prjct.config.json`. Everything else is product state and MUST live in
+ * project SQLite (`~/.prjct-cli/projects/<id>/prjct.db`). Physical dumps
+ * are not traceable.
  *
  * Every sync:
- *   1. **Purge ghost dirs** under `.prjct/` (`sessions/`, `audits/`, `deploy/`).
- *      Textual content is **ingested into SQLite** (`prjct remember` context
- *      rows tagged `worktree-ghost-ingest`) then the directory is deleted.
- *      Nothing is re-homed onto disk.
- *   2. **Repair crew agent instructions** that still tell subagents to write
- *      plan.md / impl.md anywhere on disk. Force-refresh from current templates.
+ *   1. **Migrate then DELETE** known leftovers:
+ *        CHECKPOINTS.md → kv `crew:checkpoints` then unlink
+ *        team.json      → kv `team:enrollment` then unlink (no disk mirror)
+ *   2. **Ingest then DELETE** ghost dirs `sessions/`, `audits/`, `deploy/`
+ *        (text → `prjct remember` context, topic worktree-ghost-ingest)
+ *   3. **Belt**: delete ANY remaining entry under `.prjct/` except
+ *        `prjct.config.json` (ingest text first when possible)
+ *   4. **Repair** crew agent files that still instruct disk writes
  *
- * Customer reports:
- *   #1 pre-2.19.7 — `.prjct/sessions/<task>/<role>.md` ghost files
- *   #2 post-2.23.7 — `.prjct/audits/`, `.prjct/CHECKPOINTS.md`, deploy checklists
- *   #3 2026-07    — stale customized crew agents still instructing disk writes
- *                  long after templates were fixed (alliance-redesign, etc.)
- *
- * See spec a50b32d1 AC #10 + product invariant "SQLite only".
+ * See product invariant "SQLite only / nothing in client repo".
  */
 
 import fs from 'node:fs/promises'
@@ -43,7 +30,6 @@ import { type AgentRole, getAgentModelPolicy } from '../schemas/model'
 import checkpointsStorage from '../storage/checkpoints-storage'
 import prjctDb from '../storage/database'
 import teamEnrollmentStorage, { type TeamEnrollment } from '../storage/team-enrollment-storage'
-import { writeFileAtomic } from '../utils/file-helper'
 import log from '../utils/logger'
 import { CREW_ROLES } from './agent-dispatch'
 
@@ -123,8 +109,10 @@ interface FlagRow {
 
 export interface LegacySweepResult {
   checkpointsMigrated: boolean
+  /** @deprecated hand-edits are re-adopted into SQL then deleted — kept for log compat */
   checkpointsHandEditWarned: boolean
   teamMigrated: boolean
+  /** @deprecated same as checkpoints — re-adopt + delete */
   teamHandEditWarned: boolean
   /** Ghost dirs purged from the customer worktree this run (e.g. `sessions`). */
   ghostDirsPurged: string[]
@@ -132,18 +120,16 @@ export interface LegacySweepResult {
   agentFilesRepaired: string[]
   /** Number of ghost text files ingested into SQLite before purge. */
   ghostFilesIngested: number
+  /**
+   * Names under `.prjct/` removed this run after migrate/ingest
+   * (e.g. `CHECKPOINTS.md`, `team.json`, `sessions`).
+   */
+  clientPrjctJunkPurged: string[]
   errors: Array<{ file: string; reason: string }>
 }
 
-function renderMirror(enrollment: TeamEnrollment): string {
-  const mirror: Record<string, unknown> = {
-    required: enrollment.required,
-    minVersion: enrollment.minVersion,
-    enrolledAt: enrollment.enrolledAt,
-  }
-  if (enrollment.enrolledBy !== null) mirror.enrolledBy = enrollment.enrolledBy
-  return `${JSON.stringify(mirror, null, 2)}\n`
-}
+/** Only file allowed under client `.prjct/`. */
+export const CLIENT_PRJCT_ALLOWLIST = ['prjct.config.json'] as const
 
 async function statMtimeMs(filePath: string): Promise<number | null> {
   try {
@@ -293,43 +279,48 @@ async function sweepCheckpoints(
   if (mtimeMs === null) return // file doesn't exist — nothing to do
 
   const flag = readFlag(projectId, FLAG_CHECKPOINTS)
+  const content = await tryReadFile(filePath)
 
-  // First-time detection — migrate content into kv_store.
-  if (flag === null) {
-    const content = await tryReadFile(filePath)
-    if (content === null) {
-      out.errors.push({ file: LEGACY_CHECKPOINTS_PATH, reason: 'read failed' })
-      return
-    }
+  // Migrate into SQLite first (never leave client as source of truth).
+  if (content !== null) {
     try {
-      checkpointsStorage.set(projectId, content, 'migrated')
-      writeFlag(projectId, FLAG_CHECKPOINTS, mtimeMs)
-      out.checkpointsMigrated = true
-      await captureInboxWarning(
-        projectPath,
-        `Legacy .prjct/CHECKPOINTS.md migrated into kv_store crew:checkpoints. Manage with 'prjct crew checkpoints show|set|reset|export'. Original file left in place (not authoritative).`,
-        { 'migration:v2.19.8': '1', topic: 'crew-checkpoints' }
-      )
+      if (flag === null) {
+        checkpointsStorage.set(projectId, content, 'migrated')
+        writeFlag(projectId, FLAG_CHECKPOINTS, mtimeMs)
+        out.checkpointsMigrated = true
+        await captureInboxWarning(
+          projectPath,
+          `Legacy .prjct/CHECKPOINTS.md migrated into kv_store crew:checkpoints and DELETED from the client worktree. Manage with 'prjct crew checkpoints show|set|reset|export'. Product law: nothing but prjct.config.json under client .prjct/.`,
+          { 'migration:v3.79': '1', topic: 'crew-checkpoints' }
+        )
+      } else if (mtimeMs > flag.mtime_ms) {
+        // Hand-edit after prior migrate — re-adopt then delete.
+        checkpointsStorage.set(projectId, content, 'migrated')
+        writeFlag(projectId, FLAG_CHECKPOINTS, mtimeMs)
+        out.checkpointsHandEditWarned = true
+        await captureInboxWarning(
+          projectPath,
+          `Legacy .prjct/CHECKPOINTS.md hand-edited after migration — content re-adopted into kv_store and file DELETED. Prefer 'prjct crew checkpoints set' going forward.`,
+          { 'migration:v3.79': '1', topic: 'crew-checkpoints', state: 're-adopted' }
+        )
+      }
     } catch (error) {
       out.errors.push({
         file: LEGACY_CHECKPOINTS_PATH,
         reason: error instanceof Error ? error.message : String(error),
       })
+      // Still attempt delete below — config-only law.
     }
-    return
   }
 
-  // Already migrated. If disk mtime advanced past the last-flagged
-  // mtime, the user hand-edited the file after migration. Warn once
-  // (update the flag so we don't re-fire on every sync).
-  if (mtimeMs > flag.mtime_ms) {
-    await captureInboxWarning(
-      projectPath,
-      `Legacy .prjct/CHECKPOINTS.md hand-edited after migration — content NOT applied. Run 'prjct crew checkpoints set --file ${LEGACY_CHECKPOINTS_PATH}' to adopt, or delete the legacy file.`,
-      { 'migration:v2.19.8': '1', topic: 'crew-checkpoints', state: 'hand-edited' }
-    )
-    writeFlag(projectId, FLAG_CHECKPOINTS, mtimeMs)
-    out.checkpointsHandEditWarned = true
+  try {
+    await fs.rm(filePath, { force: true })
+    out.clientPrjctJunkPurged.push('CHECKPOINTS.md')
+  } catch (error) {
+    out.errors.push({
+      file: LEGACY_CHECKPOINTS_PATH,
+      reason: error instanceof Error ? error.message : String(error),
+    })
   }
 }
 
@@ -344,56 +335,64 @@ async function sweepTeamJson(
 
   const flag = readFlag(projectId, FLAG_TEAM)
   const dbRow = teamEnrollmentStorage.get(projectId)
+  const content = await tryReadFile(filePath)
 
-  // First-time detection. If DB is empty, adopt disk; otherwise the row
-  // was likely set by `prjct team` post-migration — we just need to
-  // record the mtime so future hand-edits get flagged once.
-  if (flag === null) {
-    const content = await tryReadFile(filePath)
-    if (content === null) {
-      out.errors.push({ file: LEGACY_TEAM_PATH, reason: 'read failed' })
-      return
-    }
+  if (content !== null) {
     try {
-      if (dbRow === null) {
-        const parsed = JSON.parse(content) as Record<string, unknown>
-        const enrollment: TeamEnrollment = {
-          required: parsed.required === true,
-          minVersion: typeof parsed.minVersion === 'string' ? parsed.minVersion : '0.0.0',
-          enrolledAt:
-            typeof parsed.enrolledAt === 'string' ? parsed.enrolledAt : new Date().toISOString(),
-          enrolledBy: typeof parsed.enrolledBy === 'string' ? parsed.enrolledBy : null,
+      if (flag === null || dbRow === null) {
+        if (dbRow === null) {
+          const parsed = JSON.parse(content) as Record<string, unknown>
+          const enrollment: TeamEnrollment = {
+            required: parsed.required === true,
+            minVersion: typeof parsed.minVersion === 'string' ? parsed.minVersion : '0.0.0',
+            enrolledAt:
+              typeof parsed.enrolledAt === 'string' ? parsed.enrolledAt : new Date().toISOString(),
+            enrolledBy: typeof parsed.enrolledBy === 'string' ? parsed.enrolledBy : null,
+          }
+          teamEnrollmentStorage.set(projectId, enrollment)
+          out.teamMigrated = true
+          await captureInboxWarning(
+            projectPath,
+            `Legacy .prjct/team.json adopted into kv_store team:enrollment and DELETED from the client worktree. Team state is SQL-only; manage with 'prjct team'.`,
+            { 'migration:v3.79': '1', topic: 'team-enrollment' }
+          )
         }
-        teamEnrollmentStorage.set(projectId, enrollment)
-        // Regenerate the mirror so a future `prjct team check` finds
-        // identical canonical content on both sides. Render shape mirrors
-        // renderTeamMirror() in core/commands/team.ts — keep them in sync.
-        await writeFileAtomic(filePath, renderMirror(enrollment))
-        out.teamMigrated = true
-        await captureInboxWarning(
-          projectPath,
-          `Legacy .prjct/team.json adopted into kv_store team:enrollment. The disk file is now a derived mirror — do not hand-edit; run 'prjct team check' to detect drift.`,
-          { 'migration:v2.19.8': '1', topic: 'team-enrollment' }
-        )
+        writeFlag(projectId, FLAG_TEAM, mtimeMs)
+      } else if (mtimeMs > flag.mtime_ms) {
+        // Hand-edit: re-adopt into DB then delete (disk is never SoT).
+        try {
+          const parsed = JSON.parse(content) as Record<string, unknown>
+          const enrollment: TeamEnrollment = {
+            required: parsed.required === true,
+            minVersion: typeof parsed.minVersion === 'string' ? parsed.minVersion : '0.0.0',
+            enrolledAt:
+              typeof parsed.enrolledAt === 'string' ? parsed.enrolledAt : new Date().toISOString(),
+            enrolledBy: typeof parsed.enrolledBy === 'string' ? parsed.enrolledBy : null,
+          }
+          teamEnrollmentStorage.set(projectId, enrollment)
+        } catch {
+          /* keep existing DB row if disk JSON is garbage */
+        }
+        writeFlag(projectId, FLAG_TEAM, mtimeMs)
+        out.teamHandEditWarned = true
       }
-      writeFlag(projectId, FLAG_TEAM, mtimeMs)
     } catch (error) {
       out.errors.push({
         file: LEGACY_TEAM_PATH,
         reason: error instanceof Error ? error.message : String(error),
       })
     }
-    return
   }
 
-  if (mtimeMs > flag.mtime_ms) {
-    await captureInboxWarning(
-      projectPath,
-      `.prjct/team.json hand-edited after migration — your edit was NOT applied (file is a derived mirror). Run 'prjct team check' to rewrite the mirror from DB, or 'prjct team' to re-enroll with new values.`,
-      { 'migration:v2.19.8': '1', topic: 'team-enrollment', state: 'hand-edited' }
-    )
-    writeFlag(projectId, FLAG_TEAM, mtimeMs)
-    out.teamHandEditWarned = true
+  // NEVER leave team.json in the client tree (no derived mirror).
+  try {
+    await fs.rm(filePath, { force: true })
+    out.clientPrjctJunkPurged.push('team.json')
+  } catch (error) {
+    out.errors.push({
+      file: LEGACY_TEAM_PATH,
+      reason: error instanceof Error ? error.message : String(error),
+    })
   }
 }
 
@@ -665,9 +664,73 @@ async function repairCrewDiskWriteInstructions(
 }
 
 /**
+ * Final belt: `.prjct/` may contain ONLY `prjct.config.json`.
+ * Any leftover file/dir is ingested (text) then deleted.
+ */
+async function enforcePrjctConfigOnly(
+  projectPath: string,
+  projectId: string,
+  out: LegacySweepResult
+): Promise<void> {
+  const prjctDir = path.join(projectPath, '.prjct')
+  if (!(await pathExists(prjctDir))) return
+
+  let entries: string[]
+  try {
+    entries = await fs.readdir(prjctDir)
+  } catch {
+    return
+  }
+
+  for (const name of entries) {
+    if ((CLIENT_PRJCT_ALLOWLIST as readonly string[]).includes(name)) continue
+    const abs = path.join(prjctDir, name)
+    try {
+      const st = await fs.stat(abs)
+      if (st.isDirectory()) {
+        const files = await listFilesRecursive(abs)
+        for (const f of files) {
+          const rel = path.relative(projectPath, f)
+          const ok = await ingestGhostFileToSql(projectPath, projectId, f, rel)
+          if (ok) out.ghostFilesIngested += 1
+        }
+      } else if (st.isFile()) {
+        const rel = path.relative(projectPath, abs)
+        // CHECKPOINTS / team already migrated above; still ingest unknown text.
+        if (name !== 'CHECKPOINTS.md' && name !== 'team.json') {
+          const ok = await ingestGhostFileToSql(projectPath, projectId, abs, rel)
+          if (ok) out.ghostFilesIngested += 1
+        }
+      }
+      await fs.rm(abs, { recursive: true, force: true })
+      if (!out.clientPrjctJunkPurged.includes(name)) {
+        out.clientPrjctJunkPurged.push(name)
+      }
+    } catch (error) {
+      out.errors.push({
+        file: `.prjct/${name}`,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  if (out.clientPrjctJunkPurged.length === 0) return
+  const flag = readFlag(projectId, FLAG_GHOST_PURGE_WARN)
+  // Reuse ghost purge warn only when we also purged dirs; else one-shot config-only warn
+  if (flag === null && out.ghostDirsPurged.length === 0) {
+    await captureInboxWarning(
+      projectPath,
+      `Client .prjct/ cleaned to config-only. Removed: ${out.clientPrjctJunkPurged.join(', ')}. Durable state is SQLite only (prjct crew checkpoints / prjct team / prjct remember).`,
+      { 'migration:v3.79': '1', topic: 'client-prjct-config-only' }
+    )
+    writeFlag(projectId, FLAG_GHOST_PURGE_WARN, Date.now())
+  }
+}
+
+/**
  * Run the legacy sweep. Best-effort: errors are collected and returned
  * but never thrown (sync must not fail on this — it runs every session
- * start and should be a quiet no-op once the user has migrated).
+ * start and should be a quiet no-op once the client tree is clean).
  */
 export async function legacyCrewSweep(
   projectPath: string,
@@ -681,8 +744,10 @@ export async function legacyCrewSweep(
     ghostDirsPurged: [],
     agentFilesRepaired: [],
     ghostFilesIngested: 0,
+    clientPrjctJunkPurged: [],
     errors: [],
   }
+  // Migrate-then-delete known files first so we never lose content.
   await sweepCheckpoints(projectPath, projectId, out).catch((error) => {
     out.errors.push({
       file: LEGACY_CHECKPOINTS_PATH,
@@ -695,11 +760,16 @@ export async function legacyCrewSweep(
       reason: error instanceof Error ? error.message : String(error),
     })
   })
-  // Phase B: always run. Order matters — purge ghost dirs first, then
-  // rewrite any agent files still instructing agents to recreate them.
   await purgeWorktreeGhostDirs(projectPath, projectId, out).catch((error) => {
     out.errors.push({
       file: '.prjct/*/',
+      reason: error instanceof Error ? error.message : String(error),
+    })
+  })
+  // Final belt: only prjct.config.json may remain.
+  await enforcePrjctConfigOnly(projectPath, projectId, out).catch((error) => {
+    out.errors.push({
+      file: '.prjct/',
       reason: error instanceof Error ? error.message : String(error),
     })
   })
@@ -709,33 +779,5 @@ export async function legacyCrewSweep(
       reason: error instanceof Error ? error.message : String(error),
     })
   })
-  // Also sanitize a leftover on-disk CHECKPOINTS.md if it still lists
-  // session artifacts (file is non-authoritative post-migration but agents
-  // may still open it if present).
-  await sanitizeLegacyCheckpointsFile(projectPath, out).catch((error) => {
-    out.errors.push({
-      file: LEGACY_CHECKPOINTS_PATH,
-      reason: error instanceof Error ? error.message : String(error),
-    })
-  })
   return out
-}
-
-async function sanitizeLegacyCheckpointsFile(
-  projectPath: string,
-  out: LegacySweepResult
-): Promise<void> {
-  const filePath = path.join(projectPath, LEGACY_CHECKPOINTS_PATH)
-  const content = await tryReadFile(filePath)
-  if (content === null) return
-  if (!containsForbiddenWriteInstruction(content)) return
-  try {
-    await fs.writeFile(filePath, sanitizeCheckpointsContent(content), 'utf-8')
-    out.agentFilesRepaired.push(LEGACY_CHECKPOINTS_PATH)
-  } catch (error) {
-    out.errors.push({
-      file: LEGACY_CHECKPOINTS_PATH,
-      reason: error instanceof Error ? error.message : String(error),
-    })
-  }
 }

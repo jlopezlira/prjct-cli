@@ -2,13 +2,9 @@
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- **gentle-ai v2.2.0 value steals (authority, not ceremony):**
-  - **A1 Content-bound no-stamp fail-closed** — under code-strict, approved judgment without a content-bound stamp hard-blocks `prjct ship` (consent: `--no-judgment-gate` only). `prjct judgment approve` fails closed if stamp cannot be written.
-  - **A2 Judgment ledger RMW** — ledger writes go through `updateDoc` (no silent LWW clobber on concurrent approve/challenge).
-  - **B1 Delivery kill switch** — `delivery.killSwitch: "on"` in `.prjct/prjct.config.json` removes the ship mutation path before task complete / workflow. Outranks `--no-judgment-gate` / `--no-spec-gate` / `--force-pressure`. Lift only by setting `off`.
-  - **C1 Frozen audit candidate hash** — `prjct spec audit` stamps `audit_candidate_hash`; each lens review binds `candidateHash`; body edits clear reviews + demote `reviewed`→`draft`; promote gate refuses drifted candidates. Legacy specs without a hash keep prior lens-only behavior.
+- **Client `.prjct/` is config-only on every sync.** `CHECKPOINTS.md`, `team.json`, ghost dirs, and any other leftover are **migrated to project SQLite first** (checkpoints → `crew:checkpoints`, team → `team:enrollment`, text → remember ingest) then **deleted** from the customer worktree. The only allowed file is `prjct.config.json` — no more "left in place" legacy files.
 
 ## [3.78.0] - 2026-07-29
 

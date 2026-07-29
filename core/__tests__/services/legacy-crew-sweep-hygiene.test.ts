@@ -213,3 +213,68 @@ describe('legacyCrewSweep — worktree hygiene', () => {
     expect(next).toMatch(/Hard persistence rule|Never write/i)
   })
 })
+
+describe('legacyCrewSweep — client .prjct config-only', () => {
+  let projectPath: string
+  let projectId: string
+
+  beforeEach(async () => {
+    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cfgonly-'))
+    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
+    projectId = `cfg-${Math.random().toString(36).slice(2, 10)}`
+    await configManager.writeConfig(projectPath, {
+      projectId,
+      dataPath: path.join(projectPath, '.prjct-data'),
+    })
+    patchPathManager(projectPath)
+    prjctDb.get(projectId, 'SELECT 1')
+  })
+
+  afterEach(async () => {
+    restorePathManager()
+    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+  })
+
+  test('migrates CHECKPOINTS.md to SQLite then deletes it from client tree', async () => {
+    const cp = path.join(projectPath, '.prjct', 'CHECKPOINTS.md')
+    await fs.writeFile(cp, '# CHECKPOINTS\n- [ ] custom gate\n', 'utf-8')
+
+    const result = await legacyCrewSweep(projectPath, projectId)
+    expect(result.checkpointsMigrated).toBe(true)
+    expect(result.clientPrjctJunkPurged).toContain('CHECKPOINTS.md')
+    await expect(fs.access(cp)).rejects.toBeDefined()
+
+    // still only config
+    const entries = await fs.readdir(path.join(projectPath, '.prjct'))
+    expect(entries).toEqual(['prjct.config.json'])
+  })
+
+  test('migrates team.json then deletes — no disk mirror left', async () => {
+    const tj = path.join(projectPath, '.prjct', 'team.json')
+    await fs.writeFile(
+      tj,
+      JSON.stringify({
+        required: true,
+        minVersion: '3.0.0',
+        enrolledAt: '2026-01-01T00:00:00.000Z',
+        enrolledBy: 'test',
+      }),
+      'utf-8'
+    )
+
+    const result = await legacyCrewSweep(projectPath, projectId)
+    expect(result.teamMigrated).toBe(true)
+    expect(result.clientPrjctJunkPurged).toContain('team.json')
+    await expect(fs.access(tj)).rejects.toBeDefined()
+    const entries = await fs.readdir(path.join(projectPath, '.prjct'))
+    expect(entries).toEqual(['prjct.config.json'])
+  })
+
+  test('second sync is quiet no-op when only config remains', async () => {
+    await legacyCrewSweep(projectPath, projectId)
+    const again = await legacyCrewSweep(projectPath, projectId)
+    expect(again.clientPrjctJunkPurged).toEqual([])
+    expect(again.ghostDirsPurged).toEqual([])
+    expect(again.errors).toEqual([])
+  })
+})
