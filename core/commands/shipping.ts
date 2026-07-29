@@ -78,6 +78,23 @@ export class ShippingCommands extends PrjctCommandsBase {
       if (!proj.ok) return proj.result
       const projectId = proj.value
 
+      // B1: delivery kill switch — removes mutation path without fake approval.
+      // Outranks --no-judgment-gate / --no-spec-gate / --force-pressure.
+      try {
+        const shipConfigEarly = await configManager.readConfig(projectPath)
+        if (shipConfigEarly?.delivery?.killSwitch === 'on') {
+          return {
+            success: false,
+            error:
+              'Delivery kill-switch ON — mutation path removed. ' +
+              'Lift only by setting `delivery.killSwitch` to `off` in `.prjct/prjct.config.json` ' +
+              '(not via --no-judgment-gate / --no-spec-gate).',
+          }
+        }
+      } catch {
+        /* config read best-effort — never invent kill-on from a bad read */
+      }
+
       // Crash recovery: a prior ship that pushed a version but died before
       // recording the shipped row left a marker. Reconcile it idempotently
       // (skip if that version is already recorded) before doing anything.
@@ -282,18 +299,22 @@ export class ShippingCommands extends PrjctCommandsBase {
         }
         if (jv.message) console.log(jv.message)
 
-        // Content-bound stamp (Dynasty D2): approved treeHash must still match
-        // workspace paths — post-approve edits force re-judgment.
-        if (ledger?.contentBound?.treeHash && !options.noJudgmentGate) {
+        // Content-bound stamp (Dynasty D2 + A1): under code-strict, approved
+        // judgment without a stamp hard-blocks; with a stamp, post-approve
+        // edits force re-judgment. Override: --no-judgment-gate only.
+        if (codeStrict && !options.noJudgmentGate && jv.reason === 'approved') {
           try {
             const { contentBoundDriftVerdict, currentTreeHashForStamp } = await import(
               '../services/content-bound-stamp'
             )
-            const current = await currentTreeHashForStamp(projectPath, ledger.contentBound)
+            const stamp = ledger?.contentBound
+            const current = stamp?.treeHash
+              ? await currentTreeHashForStamp(projectPath, stamp)
+              : null
             const cv = contentBoundDriftVerdict({
-              stamp: ledger.contentBound,
+              stamp: stamp ?? null,
               currentTreeHash: current,
-              hard: codeStrict,
+              hard: true,
               override: false,
             })
             if (cv.blocked) {
@@ -303,13 +324,30 @@ export class ShippingCommands extends PrjctCommandsBase {
           } catch (err) {
             // Git infra must not fail-open the content-bound gate under
             // code-strict packs (null treeHash used to mean "unverified → pass").
-            if (codeStrict && err instanceof GitInfraError) {
+            if (err instanceof GitInfraError) {
               return {
                 success: false,
                 error: `Content-bound stamp unevaluable: ${err.message}. Re-run when git is healthy, or override with \`--no-judgment-gate\`.`,
               }
             }
-            /* non-strict / non-infra: best-effort */
+            /* non-infra: best-effort */
+          }
+        } else if (ledger?.contentBound?.treeHash && !options.noJudgmentGate) {
+          // Non-strict: keep advisory drift check when a stamp exists.
+          try {
+            const { contentBoundDriftVerdict, currentTreeHashForStamp } = await import(
+              '../services/content-bound-stamp'
+            )
+            const current = await currentTreeHashForStamp(projectPath, ledger.contentBound)
+            const cv = contentBoundDriftVerdict({
+              stamp: ledger.contentBound,
+              currentTreeHash: current,
+              hard: false,
+              override: false,
+            })
+            if (cv.message) console.log(cv.message)
+          } catch {
+            /* best-effort */
           }
         }
       } catch (err) {

@@ -23,12 +23,31 @@
  * rubric and resolve to the sonnet reviewer tier via the model policy fallback.
  */
 
+import { createHash } from 'node:crypto'
 import prjctDb from '../storage/database'
 import type { AIProviderName } from '../types/provider'
 import type { SpecContent } from '../types/spec'
 import type { DomainDefinition } from '../types/storage/extended'
 import { resolveDispatchMechanism } from './agent-dispatch'
 import { domainLensRubric, GENERIC_RUBRIC, LENS_CATALOG } from './review-lenses'
+
+/**
+ * Canonical digest of the reviewable body of a spec (C1).
+ * Lens results bind to this hash; content edits invalidate admission.
+ */
+export function computeAuditCandidateHash(content: SpecContent): string {
+  const payload = {
+    goal: content.goal,
+    eli10: content.eli10,
+    stakes: content.stakes,
+    acceptance_criteria: content.acceptance_criteria,
+    scope: content.scope,
+    out_of_scope: content.out_of_scope,
+    risks: content.risks,
+    test_plan: content.test_plan,
+  }
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
+}
 
 /**
  * Does this spec touch a domain? A keyword present in the combined text, or a
@@ -99,6 +118,22 @@ export function selectReviewers(content: SpecContent, domains: DomainDefinition[
  * back to the three baseline lenses.
  */
 export function reviewsGatePassedRelational(projectId: string, specId: string): boolean {
+  // Load content blob for candidate-hash admission (C1). Relational tables
+  // only carry verdicts — the frozen hash lives on specs.content.
+  const row = prjctDb.get<{ content: string }>(
+    projectId,
+    'SELECT content FROM specs WHERE id = ?',
+    specId
+  )
+  let content: SpecContent | null = null
+  if (row?.content) {
+    try {
+      content = JSON.parse(row.content) as SpecContent
+    } catch {
+      content = null
+    }
+  }
+
   const selected = prjctDb
     .query<{ lens: string }>(
       projectId,
@@ -115,8 +150,32 @@ export function reviewsGatePassedRelational(projectId: string, specId: string): 
       )
       .map((r) => r.lens)
   )
-  if (selected.length > 0) return selected.every((lens) => passed.has(lens))
-  return passed.has('strategic') && passed.has('architecture') && passed.has('design')
+
+  const lensesPass =
+    selected.length > 0
+      ? selected.every((lens) => passed.has(lens))
+      : passed.has('strategic') && passed.has('architecture') && passed.has('design')
+  if (!lensesPass) return false
+
+  // C1: when audit stamped a frozen candidate, every pass must bind to it
+  // and the body must still hash to the same digest. Legacy specs without
+  // audit_candidate_hash keep prior lens-only behavior.
+  const frozen = content?.audit_candidate_hash
+  if (!frozen) return true
+  if (computeAuditCandidateHash(content!) !== frozen) return false
+  const reviews = content?.reviews ?? {}
+  for (const lens of selected.length > 0 ? selected : Object.keys(reviews)) {
+    const r = reviews[lens]
+    if (!r || r.verdict !== 'pass') continue
+    if (r.candidateHash !== frozen) return false
+  }
+  // selected lenses that passed relationally must also exist with matching hash
+  for (const lens of selected.length > 0 ? selected : ['strategic', 'architecture', 'design']) {
+    if (!passed.has(lens)) continue
+    const r = reviews[lens]
+    if (!r || r.candidateHash !== frozen) return false
+  }
+  return true
 }
 
 /**

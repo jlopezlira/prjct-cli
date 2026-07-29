@@ -106,10 +106,16 @@ describe('content-bound-stamp', () => {
     expect(override.reason).toBe('override')
   })
 
-  it('no-stamp and unverified never hard-block', () => {
+  it('no-stamp hard-blocks under code-strict (A1); soft when not hard', () => {
+    const hard = contentBoundDriftVerdict({ stamp: null, currentTreeHash: 'x', hard: true })
+    expect(hard.blocked).toBe(true)
+    expect(hard.reason).toBe('no-stamp')
     expect(
-      contentBoundDriftVerdict({ stamp: null, currentTreeHash: 'x', hard: true }).blocked
+      contentBoundDriftVerdict({ stamp: null, currentTreeHash: 'x', hard: false }).blocked
     ).toBe(false)
+  })
+
+  it('unverified still does not hard-block (IO advisory)', () => {
     const stamp = stampFromContents([{ path: 'a.ts', content: 'ok' }], { stampedAt: 't0' })
     const u = contentBoundDriftVerdict({
       stamp,

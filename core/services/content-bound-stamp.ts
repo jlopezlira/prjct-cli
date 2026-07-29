@@ -118,6 +118,17 @@ export function contentBoundDriftVerdict(input: {
     return { blocked: false, reason: 'override', message: '' }
   }
   if (!input.stamp?.treeHash) {
+    // A1 (gentle-ai v2.2 steal): under hard/code-strict, approved authority
+    // without a content stamp is fail-closed — not silent pass.
+    if (input.hard) {
+      return {
+        blocked: true,
+        reason: 'no-stamp',
+        message:
+          'Content-bound stamp missing: re-run `prjct judgment approve` so ship binds to the reviewed tree. ' +
+          'Override only with consent: `prjct ship --no-judgment-gate`.',
+      }
+    }
     return { blocked: false, reason: 'no-stamp', message: '' }
   }
   if (input.stamp.pathCount === 0) {

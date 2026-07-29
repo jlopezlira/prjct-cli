@@ -120,6 +120,15 @@ export interface LocalConfig {
     hardBlockShip?: boolean
   }
   /**
+   * Delivery kill switch (gentle-ai v2.2 steal B1).
+   * When `on`, `prjct ship` hard-fails BEFORE task complete / workflow / gate
+   * overrides — removes the mutation path without fabricating approval.
+   * Lift only by setting killSwitch back to `off` (not via --no-judgment-gate).
+   */
+  delivery?: {
+    killSwitch?: 'off' | 'on'
+  }
+  /**
    * Delivery-geometry gate at work start when the working tree is already large.
    *   - off — never
    *   - advisory — surface in work output (default for code pack)

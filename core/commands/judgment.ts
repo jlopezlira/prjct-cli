@@ -644,17 +644,22 @@ export class JudgmentCommands extends PrjctCommandsBase {
     const ledger = judgmentLedgerStorage.get(proj.value)
     if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
 
-    const stampApprove = async (l: typeof ledger) => {
+    const stampApprove = async (l: typeof ledger): Promise<{ bit: string; ok: boolean }> => {
       try {
         const { shortHash, stampForApprove } = await import('../services/content-bound-stamp')
         const now = getTimestamp()
         const stamp = await stampForApprove(projectPath, l.scopePaths, now)
         l.contentBound = stamp
-        return stamp.pathCount > 0
-          ? ` · content-bound tree=${shortHash(stamp.treeHash)} (${stamp.pathCount} paths)`
-          : ' · content-bound (empty scope)'
-      } catch {
-        return ''
+        const bit =
+          stamp.pathCount > 0
+            ? ` · content-bound tree=${shortHash(stamp.treeHash)} (${stamp.pathCount} paths)`
+            : ' · content-bound (empty scope)'
+        return { bit, ok: true }
+      } catch (err) {
+        // A1: do not silently approve without stamp under non-skip intensity —
+        // ship would then fail-closed on no-stamp under code-strict.
+        const msg = err instanceof Error ? err.message : String(err)
+        return { bit: ` · content-bound FAILED (${msg})`, ok: false }
       }
     }
 
@@ -662,12 +667,18 @@ export class JudgmentCommands extends PrjctCommandsBase {
     if (ledger.findings.length === 0) {
       ledger.verdict = 'approved'
       ledger.updatedAt = getTimestamp()
-      const stampBit = await stampApprove(ledger)
+      const stamped = await stampApprove(ledger)
+      if (!stamped.ok && ledger.intensity !== 'skip') {
+        return failWith(
+          `Cannot approve: content-bound stamp failed${stamped.bit}. Fix git/workspace then re-approve.`,
+          options
+        )
+      }
       judgmentLedgerStorage.set(proj.value, ledger)
       print(
         options,
         '## Judgment APPROVED',
-        `Ledger \`${ledger.id}\` APPROVED (empty review attestation)${stampBit}. Ship gate will pass.`
+        `Ledger \`${ledger.id}\` APPROVED (empty review attestation)${stamped.bit}. Ship gate will pass.`
       )
       return { success: true, ledger, verdict: 'approved', emptyAttestation: true }
     }
@@ -689,7 +700,13 @@ export class JudgmentCommands extends PrjctCommandsBase {
         options
       )
     }
-    const stampBit = await stampApprove(finalized)
+    const stamped = await stampApprove(finalized)
+    if (!stamped.ok && finalized.intensity !== 'skip') {
+      return failWith(
+        `Cannot approve: content-bound stamp failed${stamped.bit}. Fix git/workspace then re-approve.`,
+        options
+      )
+    }
     judgmentLedgerStorage.set(proj.value, finalized)
     print(
       options,
@@ -698,7 +715,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
         (finalized.precisionHint !== undefined
           ? ` · precision≈${Math.round(finalized.precisionHint * 100)}%`
           : '') +
-        `${stampBit}. Ship gate will pass.`
+        `${stamped.bit}. Ship gate will pass.`
     )
     return { success: true, ledger: finalized, verdict: 'approved' }
   }
