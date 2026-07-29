@@ -27,11 +27,23 @@ class JudgmentLedgerStorage {
   }
 
   set(projectId: string, ledger: JudgmentLedger): JudgmentLedger {
-    const row = JudgmentLedgerSchema.parse({
-      ...ledger,
-      updatedAt: ledger.updatedAt || getTimestamp(),
-    })
-    prjctDb.setDoc(projectId, JUDGMENT_ACTIVE_KEY, row)
+    // A2: RMW via updateDoc so concurrent approve/challenge/add cannot
+    // silently last-write-wins clobber mid-transition (gentle-ai CAS spirit).
+    const stamp = ledger.updatedAt || getTimestamp()
+    const row = prjctDb.updateDoc<JudgmentLedger>(
+      projectId,
+      JUDGMENT_ACTIVE_KEY,
+      () =>
+        JudgmentLedgerSchema.parse({
+          ...ledger,
+          updatedAt: stamp,
+        }),
+      () =>
+        JudgmentLedgerSchema.parse({
+          ...ledger,
+          updatedAt: stamp,
+        })
+    )
     return row
   }
 

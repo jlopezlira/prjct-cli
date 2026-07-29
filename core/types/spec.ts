@@ -27,6 +27,8 @@ const SpecReviewSchema = z.object({
   verdict: z.enum(['pass', 'fail']),
   notes: z.string(),
   ts: z.string(),
+  /** Hash of frozen audit candidate at the time this lens recorded its verdict. */
+  candidateHash: z.string().optional(),
 })
 export type SpecReview = z.infer<typeof SpecReviewSchema>
 
@@ -62,6 +64,12 @@ export const SpecContentSchema = z.object({
   // and re-runs the loop. Existing specs read as null via Zod's default fill
   // (no DB migration needed; specs.content is a JSON blob).
   tasks_created_at: z.string().nullable().default(null),
+  /**
+   * Frozen candidate body hash at audit time (C1 / gentle-ai v2.2 steal).
+   * Lens results must carry the same hash; content edits clear reviews + demote.
+   * null = legacy / not yet audited under candidate-bound admission.
+   */
+  audit_candidate_hash: z.string().nullable().default(null),
 })
 
 export type SpecContent = z.infer<typeof SpecContentSchema>

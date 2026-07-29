@@ -86,8 +86,10 @@ describe('spec update --json shallow-merge', () => {
       'X-RateLimit-* headers',
     ])
     expect(refreshed?.content.scope).toEqual(['auth/middleware.ts'])
-    expect(refreshed?.content.reviews?.strategic?.verdict).toBe('pass')
-    expect(refreshed?.content.reviews?.strategic?.notes).toBe('scope is right')
+    // C1: goal is part of the frozen audit candidate — body drift clears
+    // lens results (fail-closed admission). Omitted fields (ACs/scope) still
+    // must survive the shallow merge.
+    expect(refreshed?.content.reviews?.strategic).toBeUndefined()
   })
 
   test('explicit field in patch replaces existing value (not merged into array)', async () => {

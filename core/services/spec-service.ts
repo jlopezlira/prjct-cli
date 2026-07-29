@@ -23,7 +23,7 @@ import {
 } from '../types/spec'
 import { getTimestamp } from '../utils/date-helper'
 import { execFileAsync } from '../utils/exec'
-import { reviewsGatePassedRelational } from './spec-audit-dispatch'
+import { computeAuditCandidateHash, reviewsGatePassedRelational } from './spec-audit-dispatch'
 
 /**
  * Read git HEAD sha at `projectPath`. Returns null when not a git repo
@@ -151,7 +151,24 @@ class SpecService {
 
   async update(projectPath: string, id: string, content: SpecContent): Promise<Spec | null> {
     const projectId = await this.requireProjectId(projectPath)
-    return specStorage.updateContent(projectId, id, content)
+    const prev = specStorage.get(projectId, id)
+    if (!prev) return null
+    const prevHash = computeAuditCandidateHash(prev.content)
+    const nextHash = computeAuditCandidateHash(content)
+    let next = content
+    if (prevHash !== nextHash) {
+      // C1: body drifted — invalidate lens admission and demote reviewed → draft.
+      next = {
+        ...content,
+        reviews: {},
+        selected_reviewers: [],
+        audit_candidate_hash: null,
+      }
+      if (prev.status === 'reviewed' || prev.status === 'in_progress') {
+        specStorage.setStatus(projectId, id, 'draft')
+      }
+    }
+    return specStorage.updateContent(projectId, id, next)
   }
 
   async recordReview(
@@ -179,9 +196,25 @@ class SpecService {
       const spec = specStorage.get(projectId, id)
       if (!spec) return null
 
-      const fullReview: SpecReview = { ...review, ts: getTimestamp() }
+      const frozen = spec.content.audit_candidate_hash ?? computeAuditCandidateHash(spec.content)
+      // Refuse recording against a drifted body (hash no longer matches frozen).
+      if (
+        spec.content.audit_candidate_hash &&
+        computeAuditCandidateHash(spec.content) !== spec.content.audit_candidate_hash
+      ) {
+        throw new Error(
+          `SPEC_CANDIDATE_DRIFT: body no longer matches audit_candidate_hash. Re-run \`prjct spec audit ${id}\` then re-record reviews.`
+        )
+      }
+      const fullReview: SpecReview = {
+        ...review,
+        ts: getTimestamp(),
+        candidateHash: frozen,
+      }
       const nextContent: SpecContent = {
         ...spec.content,
+        // Ensure frozen hash is stamped even for legacy audits mid-flight.
+        audit_candidate_hash: frozen,
         reviews: {
           ...(spec.content.reviews ?? {}),
           [reviewer]: fullReview,
@@ -297,9 +330,13 @@ class SpecService {
     const projectId = await this.requireProjectId(projectPath)
     const spec = specStorage.get(projectId, id)
     if (!spec) return null
+    const hash = computeAuditCandidateHash(spec.content)
     return specStorage.updateContent(projectId, id, {
       ...spec.content,
       selected_reviewers: lenses,
+      audit_candidate_hash: hash,
+      // Fresh audit invalidates prior lens results on a previous candidate.
+      reviews: {},
     })
   }
 
