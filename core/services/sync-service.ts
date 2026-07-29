@@ -151,12 +151,10 @@ class SyncService {
       // long ago. The pre-v2.19.7 crew-disk sweep below is a separate concern
       // (kv_store CHECKPOINTS/team.json) and stays.
 
-      // 2d. Legacy crew-disk sweep (spec a50b32d1 AC #10 + worktree hygiene):
-      //   - pre-v2.19.7 `.prjct/CHECKPOINTS.md` / `.prjct/team.json` → kv_store
-      //   - EVERY sync: purge `.prjct/{sessions,audits,deploy}/` from the
-      //     customer worktree and repair crew agent files that still instruct
-      //     agents to write plans/reports into the repo (customer #3 2026-07).
-      // Set PRJCT_SKIP_CREW_SWEEP=1 to skip (mirrors PRJCT_SKIP_JSON_MIGRATION).
+      // 2d. Client-tree hygiene (HARD LAW): only `.prjct/prjct.config.json`
+      // may remain in the customer worktree. Everything else is migrated to
+      // project SQLite then DELETED (CHECKPOINTS.md, team.json, sessions/,
+      // audits/, deploy/, any other junk). Set PRJCT_SKIP_CREW_SWEEP=1 to skip.
       if (process.env.PRJCT_SKIP_CREW_SWEEP !== '1') {
         await phase('legacy-crew-sweep', async () => {
           try {
@@ -169,6 +167,7 @@ class SyncService {
               result.teamHandEditWarned ||
               result.ghostDirsPurged.length > 0 ||
               result.agentFilesRepaired.length > 0 ||
+              result.clientPrjctJunkPurged.length > 0 ||
               result.errors.length > 0
             ) {
               log.info('Legacy crew sweep ran', {
@@ -179,6 +178,7 @@ class SyncService {
                 ghostDirsPurged: result.ghostDirsPurged,
                 agentFilesRepaired: result.agentFilesRepaired,
                 ghostFilesIngested: result.ghostFilesIngested,
+                clientPrjctJunkPurged: result.clientPrjctJunkPurged,
                 errors: result.errors.length,
               })
             }
