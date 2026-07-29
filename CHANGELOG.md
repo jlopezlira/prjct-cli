@@ -6,6 +6,13 @@
 
 - **Client `.prjct/` is config-only on every sync.** `CHECKPOINTS.md`, `team.json`, ghost dirs, and any other leftover are **migrated to project SQLite first** (checkpoints → `crew:checkpoints`, team → `team:enrollment`, text → remember ingest) then **deleted** from the customer worktree. The only allowed file is `prjct.config.json` — no more "left in place" legacy files.
 
+## [3.78.1] - 2026-07-29
+
+### Bug Fixes
+
+- sync migrates then deletes all client .prjct junk (config-only) (#599)
+
+
 ## [3.78.0] - 2026-07-29
 
 ### Features
