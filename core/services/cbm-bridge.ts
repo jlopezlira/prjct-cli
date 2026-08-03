@@ -6,7 +6,6 @@
  * making it a hard dependency.
  */
 
-import { access } from 'node:fs/promises'
 import path from 'node:path'
 import { execFileAsync } from '../utils/exec'
 
@@ -64,19 +63,6 @@ export async function detectCbm(): Promise<CbmStatus> {
 export function formatCbmStatus(s: CbmStatus): string {
   if (!s.available) return `CBM: not installed — ${s.note}`
   return `CBM: ${s.path}${s.version ? ` (${s.version})` : ''} — ${s.note}`
-}
-
-/** Soft path check for a project-local binary too. */
-export async function detectCbmNear(projectPath: string): Promise<string | null> {
-  const global = await which('codebase-memory-mcp')
-  if (global) return global
-  const local = path.join(projectPath, 'node_modules', '.bin', 'codebase-memory-mcp')
-  try {
-    await access(local)
-    return local
-  } catch {
-    return null
-  }
 }
 
 export interface CbmCliResult {

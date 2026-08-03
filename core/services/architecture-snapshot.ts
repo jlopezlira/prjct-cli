@@ -5,13 +5,12 @@
 
 import { loadGraph } from '../domain/import-graph'
 import {
-  fileFanIn,
+  fileFanInByFile,
   hasSymbolIndex,
   listAllSymbols,
   loadMeta,
   searchSymbols,
 } from '../domain/symbol-graph'
-import { loadFileInventory } from './project-file-inventory'
 
 export interface ArchitectureSnapshot {
   ready: boolean
@@ -78,22 +77,20 @@ export function buildArchitectureSnapshot(projectId: string): ArchitectureSnapsh
   // Hotspots: top files by call fan-in (cap work)
   const files = [...fileMap.keys()]
   const hotspotScores: ArchitectureSnapshot['hotspots'] = []
+  const fanInByFile = fileFanInByFile(projectId)
   // Sample up to 400 files for fan-in cost
   const sample = files.length > 400 ? files.slice(0, 400) : files
   for (const f of sample) {
-    const fanIn = fileFanIn(projectId, f)
+    const fanIn = fanInByFile.get(f) ?? 0
     if (fanIn > 0) {
       hotspotScores.push({ file: f, fanIn, symbolCount: fileMap.get(f) ?? 0 })
     }
   }
   hotspotScores.sort((a, b) => b.fanIn - a.fanIn)
 
-  // Package roots from import graph / inventory top-level dirs
+  // Package roots from import graph + symbol files. The graph also preserves
+  // top-level directories whose files contain imports but no indexed symbol.
   const packages = new Set<string>()
-  const inv = loadFileInventory(projectId)
-  if (inv?.extensions) {
-    /* inventory may not have paths */
-  }
   const graph = loadGraph(projectId)
   if (graph) {
     for (const f of Object.keys(graph.forward).slice(0, 2000)) {
@@ -101,7 +98,7 @@ export function buildArchitectureSnapshot(projectId: string): ArchitectureSnapsh
       if (top && !top.startsWith('.')) packages.add(top)
     }
   }
-  for (const f of files.slice(0, 500)) {
+  for (const f of files.slice(0, 2000)) {
     const top = f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'
     if (top && top !== '.') packages.add(top)
   }

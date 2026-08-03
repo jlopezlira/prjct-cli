@@ -23,6 +23,7 @@ import {
   searchSymbols,
   tracePath,
 } from '../domain/symbol-graph'
+import configManager from '../infrastructure/config-manager'
 import {
   buildArchitectureSnapshot,
   formatArchitectureMd,
@@ -34,6 +35,7 @@ import {
   importCodeGraphArtifact,
   maybeExportAfterIndex,
   maybeUploadCodeGraphToCloud,
+  shouldAutoUploadCodeGraph,
 } from '../services/code-graph-artifact'
 import { findDeadCode, formatDeadCodeMd, formatDeadCodeText } from '../services/dead-code'
 import {
@@ -352,7 +354,10 @@ export class CodeCommands extends PrjctCommandsBase {
     const proj = await requireProject(projectPath, options)
     if (!proj.ok) return proj.result
     const meta = await indexSymbols(projectPath, proj.value)
-    await maybeExportAfterIndex(proj.value)
+    const config = await configManager.readConfig(projectPath).catch(() => null)
+    await maybeExportAfterIndex(proj.value, {
+      uploadToCloud: shouldAutoUploadCodeGraph(config),
+    })
     const msg = `Indexed ${meta.symbolCount} symbols · ${meta.edgeCount} edges · ${meta.fileCount} files`
     if (options.md) console.log(mdOutput('## Code reindex', `> ${msg}`))
     else out.success(msg)

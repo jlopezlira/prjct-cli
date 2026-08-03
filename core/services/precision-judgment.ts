@@ -214,13 +214,6 @@ export function applyMechanicalStyleRefute(finding: JudgmentFinding): JudgmentFi
   return finding
 }
 
-/** Pipeline used by judgment add/merge: severity floor → evidence tax → mechanical style. */
-export function prepareFinding(finding: JudgmentFinding): JudgmentFinding {
-  // Import cycle-safe: applySeverityFloor is defined later — call order at runtime is fine
-  // after full module init. Callers may pass already-floored findings.
-  return applyMechanicalStyleRefute(applyEvidenceTax(finding))
-}
-
 // ── Blast-radius rank (fix order) ──────────────────────────────────────────
 
 const SEV_WEIGHT: Record<FindingSeverity, number> = {

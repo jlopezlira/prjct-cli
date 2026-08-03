@@ -16,14 +16,6 @@ import { hasSymbolIndex, listAllSymbols, loadMeta } from '../domain/symbol-graph
 import prjctDb from '../storage/database'
 import type { CodeSymbolEdge, SymbolEdgeType } from '../types/domain.js'
 
-/**
- * @deprecated No default cloud caps. Kept as Infinity so any leftover import
- * that treats these as ceilings stays uncapped.
- */
-export const CLOUD_GRAPH_MAX_NODES = Number.POSITIVE_INFINITY
-/** @deprecated See CLOUD_GRAPH_MAX_NODES — no default link cap. */
-export const CLOUD_GRAPH_MAX_LINKS = Number.POSITIVE_INFINITY
-
 export type CloudGraphNodeKind =
   | 'Function'
   | 'Method'

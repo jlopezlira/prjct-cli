@@ -80,8 +80,8 @@ ensure_setup() {
   CLAUDE_STATUSLINE="$HOME/.claude/prjct-statusline.sh"
 
   if [ -f "$STATUSLINE_SRC" ]; then
-    mkdir -p "$STATUSLINE_DIR" 2>/dev/null
     if [ ! -f "$STATUSLINE_DEST" ] || [ "$STATUSLINE_SRC" -nt "$STATUSLINE_DEST" ]; then
+      mkdir -p "$STATUSLINE_DIR" 2>/dev/null
       cp "$STATUSLINE_SRC" "$STATUSLINE_DEST" 2>/dev/null
       chmod +x "$STATUSLINE_DEST" 2>/dev/null
 
@@ -101,6 +101,7 @@ ensure_setup() {
       done
 
       # Symlink to ~/.claude
+      mkdir -p "$(dirname "$CLAUDE_STATUSLINE")" 2>/dev/null
       rm -f "$CLAUDE_STATUSLINE" 2>/dev/null
       ln -s "$STATUSLINE_DEST" "$CLAUDE_STATUSLINE" 2>/dev/null || cp "$STATUSLINE_DEST" "$CLAUDE_STATUSLINE" 2>/dev/null
       chmod +x "$CLAUDE_STATUSLINE" 2>/dev/null

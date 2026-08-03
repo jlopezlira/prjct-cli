@@ -12,10 +12,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
-import { hasSymbolIndex, indexSymbols, listAllSymbols, loadMeta } from '../domain/symbol-graph'
+import { hasSymbolIndex, listAllSymbols, loadMeta } from '../domain/symbol-graph'
 import pathManager from '../infrastructure/path-manager'
 import prjctDb from '../storage/database'
+import type { LocalConfig } from '../types/config'
 import type { CodeSymbol, CodeSymbolEdge, SymbolGraphMeta } from '../types/domain.js'
+import type { CloudCodeGraphSnapshot } from './code-graph-cloud'
 
 const ARTIFACT_NAME = 'code-graph.json.gz'
 
@@ -167,16 +169,34 @@ export async function bootstrapCodeGraphFromArtifact(
   }
 }
 
-/** After a successful full index, refresh the per-project cache (non-fatal). */
-export async function maybeExportAfterIndex(projectId: string): Promise<void> {
+export function shouldAutoUploadCodeGraph(
+  config: Pick<LocalConfig, 'cloud'> | null | undefined
+): boolean {
+  return config?.cloud?.enabled === true && config.cloud.paused !== true
+}
+
+export interface CodeGraphUploadDependencies {
+  buildSnapshot?: (projectId: string) => CloudCodeGraphSnapshot | null
+  upload?: (
+    projectId: string,
+    graph: CloudCodeGraphSnapshot
+  ) => Promise<{ ok: boolean; nodes?: number; links?: number; reason?: string }>
+}
+
+/** After a successful full index, always refresh the local cache (non-fatal). */
+export async function maybeExportAfterIndex(
+  projectId: string,
+  options: { uploadToCloud: boolean; uploadDependencies?: CodeGraphUploadDependencies }
+): Promise<void> {
   try {
     await exportCodeGraphArtifact(projectId)
   } catch {
     /* non-critical */
   }
+  if (!options.uploadToCloud) return
   // Best-effort cloud upload so the SPA 3D graph stays structural (not knowledge).
   try {
-    await maybeUploadCodeGraphToCloud(projectId)
+    await maybeUploadCodeGraphToCloud(projectId, options.uploadDependencies)
   } catch {
     /* non-critical — offline / unauthed */
   }
@@ -184,16 +204,22 @@ export async function maybeExportAfterIndex(projectId: string): Promise<void> {
 
 /** Build full structural snapshot (no node/link caps) and POST to /sync/projects/{id}/code-graph. */
 export async function maybeUploadCodeGraphToCloud(
-  projectId: string
+  projectId: string,
+  dependencies: CodeGraphUploadDependencies = {}
 ): Promise<{ uploaded: boolean; nodes?: number; links?: number; reason?: string }> {
-  const { buildCloudCodeGraphSnapshot, isUploadableGraph } = await import('./code-graph-cloud')
-  const snap = buildCloudCodeGraphSnapshot(projectId)
-  if (!isUploadableGraph(snap)) {
+  const cloudGraph = await import('./code-graph-cloud')
+  const snap = (dependencies.buildSnapshot ?? cloudGraph.buildCloudCodeGraphSnapshot)(projectId)
+  if (!cloudGraph.isUploadableGraph(snap)) {
     return { uploaded: false, reason: 'no symbol index or empty graph' }
   }
   try {
-    const { default: syncClient } = await import('../sync/sync-client')
-    const res = await syncClient.uploadCodeGraph(projectId, snap)
+    const upload =
+      dependencies.upload ??
+      (async (id: string, graph: CloudCodeGraphSnapshot) => {
+        const { default: syncClient } = await import('../sync/sync-client')
+        return syncClient.uploadCodeGraph(id, graph)
+      })
+    const res = await upload(projectId, snap)
     if (!res.ok) {
       return {
         uploaded: false,
@@ -213,14 +239,4 @@ export async function maybeUploadCodeGraphToCloud(
       reason: e instanceof Error ? e.message : String(e),
     }
   }
-}
-
-export async function ensureIndexWithBootstrap(
-  projectPath: string,
-  projectId: string
-): Promise<SymbolGraphMeta | null> {
-  if (hasSymbolIndex(projectId)) return loadMeta(projectId)
-  const boot = await bootstrapCodeGraphFromArtifact(projectId)
-  if (boot.bootstrapped) return loadMeta(projectId)
-  return indexSymbols(projectPath, projectId)
 }

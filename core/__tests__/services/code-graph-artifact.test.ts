@@ -8,6 +8,8 @@ import {
   artifactPath,
   exportCodeGraphArtifact,
   importCodeGraphArtifact,
+  maybeExportAfterIndex,
+  shouldAutoUploadCodeGraph,
 } from '../../services/code-graph-artifact'
 import prjctDb from '../../storage/database'
 
@@ -94,5 +96,75 @@ describe('code-graph-artifact', () => {
     const imp = await importCodeGraphArtifact(otherId)
     expect(imp.imported).toBe(false)
     expect(imp.reason).toMatch(/mismatch/)
+  })
+
+  it('gates automatic cloud upload on enabled and active local config', () => {
+    expect(shouldAutoUploadCodeGraph(undefined)).toBe(false)
+    expect(shouldAutoUploadCodeGraph({ cloud: { enabled: false } })).toBe(false)
+    expect(shouldAutoUploadCodeGraph({ cloud: { enabled: true, paused: true } })).toBe(false)
+    expect(shouldAutoUploadCodeGraph({ cloud: { enabled: true, paused: false } })).toBe(true)
+    expect(shouldAutoUploadCodeGraph({ cloud: { enabled: true } })).toBe(true)
+  })
+
+  it('always exports a restorable local artifact without building or uploading cloud graph', async () => {
+    await fs.writeFile(path.join(sourceDir, 'svc.ts'), `export function localOnly() { return 1 }\n`)
+    await indexSymbols(sourceDir, testProjectId)
+    const before = listAllSymbols(testProjectId).length
+    let buildCalls = 0
+    let uploadCalls = 0
+
+    await maybeExportAfterIndex(testProjectId, {
+      uploadToCloud: shouldAutoUploadCodeGraph(undefined),
+      uploadDependencies: {
+        buildSnapshot: () => {
+          buildCalls++
+          throw new Error('cloud snapshot must not build for local-only config')
+        },
+        upload: async () => {
+          uploadCalls++
+          return { ok: true }
+        },
+      },
+    })
+
+    expect(buildCalls).toBe(0)
+    expect(uploadCalls).toBe(0)
+    expect(await exists(artifactPath(testProjectId))).toBe(true)
+
+    prjctDb.transaction(testProjectId, (db) => {
+      db.prepare('DELETE FROM code_symbols').run()
+      db.prepare('DELETE FROM code_symbol_edges').run()
+    })
+    const restored = await importCodeGraphArtifact(testProjectId)
+    expect(restored.imported).toBe(true)
+    expect(listAllSymbols(testProjectId)).toHaveLength(before)
+  })
+
+  it('uploads exactly one complete snapshot when cloud is enabled and active', async () => {
+    await fs.writeFile(
+      path.join(sourceDir, 'svc.ts'),
+      `export function first() { return second() }\nexport function second() { return 2 }\n`
+    )
+    const meta = await indexSymbols(sourceDir, testProjectId)
+    let uploadCalls = 0
+    let uploadedNodes = 0
+    let uploadedSymbols = 0
+
+    await maybeExportAfterIndex(testProjectId, {
+      uploadToCloud: shouldAutoUploadCodeGraph({ cloud: { enabled: true } }),
+      uploadDependencies: {
+        upload: async (_projectId, graph) => {
+          uploadCalls++
+          uploadedNodes = graph.nodes.length
+          uploadedSymbols = graph.nodes.filter((node) => node.kind !== 'File').length
+          return { ok: true, nodes: graph.nodes.length, links: graph.links.length }
+        },
+      },
+    })
+
+    expect(uploadCalls).toBe(1)
+    expect(uploadedNodes).toBeGreaterThanOrEqual(meta.symbolCount)
+    expect(uploadedSymbols).toBe(meta.symbolCount)
+    expect(await exists(artifactPath(testProjectId))).toBe(true)
   })
 })

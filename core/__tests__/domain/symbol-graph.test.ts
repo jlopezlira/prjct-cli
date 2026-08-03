@@ -8,6 +8,8 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   extractFile,
+  fileFanIn,
+  fileFanInByFile,
   hasSymbolIndex,
   indexSymbols,
   scoreFilesFromQuery,
@@ -122,11 +124,19 @@ function checkId(id: string) { return id.length > 0 }
     it('traces login as inbound caller of validate (symbol-level CALLS)', async () => {
       await fs.writeFile(
         path.join(testDir, 'validator.ts'),
-        `export function validate() { return true }\n`
+        `export function validate() { return true }\nexport function normalize() { return true }\n`
       )
       await fs.writeFile(
         path.join(testDir, 'auth.ts'),
-        `import { validate } from './validator'\nexport function login() { return validate() }\n`
+        `import { normalize, validate } from './validator'\nexport function login() { return validate() && normalize() }\nexport function admin() { return validate() }\n`
+      )
+      await fs.writeFile(
+        path.join(testDir, 'bootstrap.ts'),
+        `import { validate } from './validator'\nconst ready = validate()\nexport { ready }\n`
+      )
+      await fs.writeFile(
+        path.join(testDir, 'isolated.ts'),
+        `export function idle() { return true }\n`
       )
 
       await indexSymbols(testDir, testProjectId)
@@ -135,6 +145,14 @@ function checkId(id: string) { return id.length > 0 }
       expect(tr!.root.some((r) => r.name === 'validate')).toBe(true)
       // login should appear as a real caller symbol
       expect(tr!.inbound.some((h) => h.symbol.name === 'login')).toBe(true)
+
+      const fanIn = fileFanIn(testProjectId, 'validator.ts')
+      // login calls two target symbols but counts once; admin and the
+      // top-level file:bootstrap.ts node are two more distinct callers.
+      const fanInByFile = fileFanInByFile(testProjectId)
+      expect(fanIn).toBe(3)
+      expect(fanInByFile.get('validator.ts')).toBe(fanIn)
+      expect(fanInByFile.has('isolated.ts')).toBe(false)
     })
 
     it('resolves @/ and tsconfig paths for CALLS', async () => {
