@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { buildSessionContext } from '../../hooks/session-start'
 import pathManager from '../../infrastructure/path-manager'
+import { createStalenessChecker } from '../../services/staleness-checker'
 import { prjctDb } from '../../storage/database'
 import type { LocalConfig } from '../../types/config'
 
@@ -79,5 +80,27 @@ describe('SessionStart — understanding staleness', () => {
     expect(r).toContain('## Project identity (cwd)')
     expect(r).not.toContain('Understanding may be stale')
     expect(r).not.toContain('commits since')
+  })
+
+  it('keeps exact commit counts and unique final changed paths for low drift', async () => {
+    const synced = git('rev-parse --short HEAD')
+    prjctDb.setDoc(projectId, 'project', {
+      name: 'x',
+      lastSync: new Date().toISOString(),
+      lastSyncCommit: synced,
+    })
+
+    await fs.appendFile(path.join(repo, 'f.txt'), 'first\n')
+    git('commit -qam first')
+    await fs.writeFile(path.join(repo, 'package.json'), '{"name":"staleness-fixture"}\n')
+    git('add package.json')
+    git('commit -qm package')
+    await fs.appendFile(path.join(repo, 'f.txt'), 'last\n')
+    git('commit -qam last')
+
+    const status = await createStalenessChecker(repo).check(projectId)
+    expect(status.commitsSinceSync).toBe(3)
+    expect([...status.changedFiles].sort()).toEqual(['f.txt', 'package.json'])
+    expect(status.significantChanges).toEqual(['package.json'])
   })
 })

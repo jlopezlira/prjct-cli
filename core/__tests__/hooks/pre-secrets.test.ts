@@ -53,6 +53,65 @@ describe('scanHookToolInput', () => {
     })
     expect(hits).toContain('GitHub PAT')
   })
+
+  it('scans the tail of oversized tool input instead of allowing a padding bypass', () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const hits = scanHookToolInput({
+      tool_name: 'Write',
+      tool_input: {
+        file_path: '/tmp/generated.txt',
+        content: `${'x'.repeat(200_000)} ${syntheticKey}`,
+      },
+    })
+
+    expect(hits).toContain('OpenAI project key')
+  })
+
+  it('scans secrets in the middle of oversized tool input', () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const hits = scanHookToolInput({
+      tool_name: 'Write',
+      tool_input: {
+        content: `${'x'.repeat(110_000)} ${syntheticKey} ${'y'.repeat(110_000)}`,
+      },
+    })
+
+    expect(hits).toContain('OpenAI project key')
+  })
+
+  it('scans deeply nested tool input without a depth bypass', () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    let nested: unknown = { content: syntheticKey }
+    for (let depth = 0; depth < 12; depth++) nested = { nested }
+
+    expect(scanHookToolInput({ tool_name: 'custom', tool_input: nested })).toContain(
+      'OpenAI project key'
+    )
+  })
+
+  it('finds a secret crossing a chunk boundary', () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const content = `${'x'.repeat(65_530)} ${syntheticKey}${'y'.repeat(160_000)}`
+
+    expect(scanHookToolInput({ tool_input: { content } })).toContain('OpenAI project key')
+  })
+
+  it('handles cyclic object graphs without skipping nested secrets', () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const cyclic: { nested: unknown; self?: unknown } = {
+      nested: { content: syntheticKey },
+    }
+    cyclic.self = cyclic
+
+    expect(scanHookToolInput({ tool_input: cyclic })).toContain('OpenAI project key')
+  })
+
+  it('scans a 10 MB payload with a middle secret within the hook budget', () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const content = `${'x'.repeat(5_000_000)} ${syntheticKey}${'y'.repeat(5_000_000)}`
+
+    expect(scanHookToolInput({ tool_input: { content } })).toContain('OpenAI project key')
+  }, 1_000)
 })
 
 describe('decideSecrets', () => {
@@ -73,6 +132,19 @@ describe('decideSecrets', () => {
         tool_input: { command: 'bun test' },
       })
     ).toBeNull()
+  })
+
+  it('denies a secret hidden after oversized padding', () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const decision = _internal.decideSecrets({
+      tool_name: 'Write',
+      tool_input: {
+        file_path: '/tmp/generated.txt',
+        content: `${'x'.repeat(200_000)} ${syntheticKey}`,
+      },
+    })
+
+    expect(decision?.deny).toMatch(/credential guard/i)
   })
 })
 

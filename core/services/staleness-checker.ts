@@ -76,11 +76,24 @@ class StalenessChecker {
       status.lastSyncCommit = (projectJson.lastSyncCommit as string) || null
       const lastSync = projectJson.lastSync as string
 
+      // If no last sync commit, we can't compare.
+      if (!status.lastSyncCommit) {
+        status.isStale = true
+        status.reason = 'No sync commit recorded. Run `prjct sync` to track.'
+        return status
+      }
+
+      // Bounded git (timeouts match land-synthesis ~3s). HEAD resolution and
+      // exact range counting are independent, so start both before awaiting.
+      const cwd = this.projectPath
+      const gitOpts = { cwd, timeoutMs: 3000, maxBuffer: 1024 * 256 }
+      const range = `${status.lastSyncCommit}..HEAD`
+      const [head, revList] = await Promise.all([
+        runGit(['rev-parse', '--short', 'HEAD'], gitOpts),
+        runGit(['rev-list', '--count', range], gitOpts),
+      ])
+
       // Get current HEAD commit (bounded)
-      const head = await runGit(['rev-parse', '--short', 'HEAD'], {
-        cwd: this.projectPath,
-        timeoutMs: 3000,
-      })
       if (!head.ok) {
         // Typed exit = genuinely not a git repo; timeout/spawn = git is
         // broken — report unknown, never confuse the two.
@@ -90,27 +103,11 @@ class StalenessChecker {
       }
       status.currentCommit = head.stdout.trim()
 
-      // If no last sync commit, we can't compare
-      if (!status.lastSyncCommit) {
-        status.isStale = true
-        status.reason = 'No sync commit recorded. Run `prjct sync` to track.'
-        return status
-      }
-
       // Same commit = not stale
       if (status.lastSyncCommit === status.currentCommit) {
         status.reason = 'Context is up to date'
         return status
       }
-
-      // Bounded git (timeouts match land-synthesis ~3s). Count first —
-      // name lists only when needed for significant-file detection.
-      const cwd = this.projectPath
-      const gitOpts = { cwd, timeoutMs: 3000, maxBuffer: 1024 * 256 }
-      const revList = await runGit(
-        ['rev-list', '--count', `${status.lastSyncCommit}..HEAD`],
-        gitOpts
-      )
 
       if (!revList.ok) {
         if (revList.kind === 'exit') {
@@ -136,16 +133,12 @@ class StalenessChecker {
         )
       }
 
-      // Only fetch name-only when commit count alone may not decide staleness
-      // (under commit threshold) — avoids unbounded allocation when only the
-      // count is needed for drift-refresh / SessionStart.
+      // Only fetch names when commit count alone may not decide staleness
+      // (under commit threshold), avoiding the diff for high drift.
       const needNames =
         status.commitsSinceSync > 0 && status.commitsSinceSync < this.config.commitThreshold
       if (needNames) {
-        const diff = await runGit(
-          ['diff', '--name-only', `${status.lastSyncCommit}..HEAD`],
-          gitOpts
-        )
+        const diff = await runGit(['diff', '--name-only', range], gitOpts)
         // Cap name list so a huge range cannot blow SessionStart memory.
         // Any failure (exit or infra) degrades to an empty list — the
         // count-based verdict above already stands on its own.

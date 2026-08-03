@@ -107,61 +107,64 @@ export async function buildSessionContext(
     }
     if (!digest) digest = buildKnowledgeDigest(config.projectId)
   }
-  // Continuous understanding — once per session, flag genuine drift since the
-  // last sync so the model refreshes the architecture/risks map instead of
-  // trusting a frozen snapshot for the session's big calls.
-  const staleness = await buildStalenessNotice(projectPath, config.projectId)
-  // One-time heads-up for a project that had vault export switched on.
-  const { vaultRetirementNotice } = await import('../services/vault-retire-notice')
-  const vaultNotice = await vaultRetirementNotice(config, config.projectId)
-  // Session-close ritual cue when a cycle is still open.
-  let landCue: string | null = null
-  try {
-    const { buildLandCue } = await import('../services/land-cue')
-    landCue = await buildLandCue(config.projectId, projectPath, config)
-  } catch {
-    landCue = null
-  }
-
-  // Weak-model product mode banner (apuesta 7).
-  let weakBanner: string | null = null
-  try {
-    const { effectiveWeakModelMode, weakModelBanner } = await import('../services/weak-model-mode')
-    if (effectiveWeakModelMode(config) === 'on') weakBanner = weakModelBanner()
-  } catch {
-    weakBanner = null
-  }
-
-  // Pending multi-agent handoffs — cold-start only (variable; would bust
-  // mid-session prompt cache). Per-turn inject lives in the prompt hook.
-  let handoffCue: string | null = null
-  if (opts.digest) {
+  // Start independent post-digest probes together. Each retains its original
+  // failure contract, and output assembly below preserves their byte order.
+  const stalenessPromise = buildStalenessNotice(projectPath, config.projectId)
+  const vaultNoticePromise = import('../services/vault-retire-notice').then(
+    ({ vaultRetirementNotice }) => vaultRetirementNotice(config, config.projectId)
+  )
+  const landCuePromise = (async (): Promise<string | null> => {
     try {
-      const { formatPendingHandoffCue } = await import('../services/agent-switch')
-      const cue = formatPendingHandoffCue(config.projectId)
-      if (cue) handoffCue = `# prjct: pending handoff\n${cue}`
+      const { buildLandCue } = await import('../services/land-cue')
+      return await buildLandCue(config.projectId, projectPath, config)
     } catch {
-      handoffCue = null
+      return null
     }
-  }
-
-  // Managed session continuity — cold start only (variable stamp time).
-  let continuityCue: string | null = null
-  if (opts.digest) {
+  })()
+  const weakBannerPromise = (async (): Promise<string | null> => {
     try {
-      const { loadSessionContinuity, formatContinuitySessionCue } = await import(
-        '../services/session-continuity'
+      const { effectiveWeakModelMode, weakModelBanner } = await import(
+        '../services/weak-model-mode'
       )
-      continuityCue = formatContinuitySessionCue(loadSessionContinuity(config.projectId))
+      return effectiveWeakModelMode(config) === 'on' ? weakModelBanner() : null
     } catch {
-      continuityCue = null
+      return null
     }
-  }
-
-  // L1 cwd identity — NEVER from the global skill (multi-project poison).
-  // Always emit when we have projectId so the model never trusts a foreign
-  // skill stamp over this cwd (branch can change; acceptable on resume).
-  const identity = await buildProjectIdentityLine(projectPath, config.projectId)
+  })()
+  const handoffCuePromise: Promise<string | null> = opts.digest
+    ? (async () => {
+        try {
+          const { formatPendingHandoffCue } = await import('../services/agent-switch')
+          const cue = formatPendingHandoffCue(config.projectId)
+          return cue ? `# prjct: pending handoff\n${cue}` : null
+        } catch {
+          return null
+        }
+      })()
+    : Promise.resolve(null)
+  const continuityCuePromise: Promise<string | null> = opts.digest
+    ? (async () => {
+        try {
+          const { loadSessionContinuity, formatContinuitySessionCue } = await import(
+            '../services/session-continuity'
+          )
+          return formatContinuitySessionCue(loadSessionContinuity(config.projectId))
+        } catch {
+          return null
+        }
+      })()
+    : Promise.resolve(null)
+  const identityPromise = buildProjectIdentityLine(projectPath, config.projectId)
+  const [staleness, vaultNotice, landCue, weakBanner, handoffCue, continuityCue, identity] =
+    await Promise.all([
+      stalenessPromise,
+      vaultNoticePromise,
+      landCuePromise,
+      weakBannerPromise,
+      handoffCuePromise,
+      continuityCuePromise,
+      identityPromise,
+    ])
 
   // Nothing to say (no identity, persona, knowledge, drift) → stay silent.
   if (

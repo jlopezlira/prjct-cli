@@ -53,11 +53,9 @@ export function upsertTaskPipelineState(
   projectId: string,
   input: TaskPipelineStateInput
 ): TaskPipelineState {
-  const existing = getTaskPipelineState(projectId, input.taskId, input.workspaceId)
   const now = getTimestamp()
-  const createdAt = existing?.createdAt ?? now
 
-  prjctDb.run(
+  const rows = prjctDb.query<TaskPipelineRow>(
     projectId,
     `INSERT INTO task_pipeline_state (
       project_id, task_id, workspace_id, classification, station,
@@ -71,7 +69,8 @@ export function upsertTaskPipelineState(
       requires_tests_first = excluded.requires_tests_first,
       reason = excluded.reason,
       linked_spec_id = excluded.linked_spec_id,
-      updated_at = excluded.updated_at`,
+      updated_at = excluded.updated_at
+    RETURNING *`,
     projectId,
     input.taskId,
     input.workspaceId,
@@ -81,11 +80,13 @@ export function upsertTaskPipelineState(
     input.requiresTestsFirst ? 1 : 0,
     input.reason,
     input.linkedSpecId ?? null,
-    createdAt,
+    now,
     now
   )
 
-  return getTaskPipelineState(projectId, input.taskId, input.workspaceId)!
+  const row = rows[0]
+  if (!row) throw new Error('Task pipeline state upsert returned no row')
+  return toState(row)
 }
 
 export function getTaskPipelineState(
