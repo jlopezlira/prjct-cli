@@ -51,7 +51,9 @@ export const MANAGERS: Record<PkgManagerName, PkgManager> = {
   },
   pnpm: {
     name: 'pnpm',
-    installArgs: ['add', '-g', 'prjct-cli@latest', '--prefer-online'],
+    // pnpm 10 rejects npm's --prefer-online flag. The exact registry version
+    // pin already prevents a stale dist-tag from selecting an older release.
+    installArgs: ['add', '-g', 'prjct-cli@latest'],
     getInstallRoot: () => {
       try {
         return execFileSync('pnpm', ['root', '-g'], {
