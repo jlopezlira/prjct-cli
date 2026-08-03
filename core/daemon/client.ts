@@ -17,6 +17,18 @@ import { isBunAvailable } from '../utils/runtime'
 import { commandRequestTimeoutMs, DAEMON_PATHS, encodeMessage, isDaemonNamedPipe } from './protocol'
 import { releaseSpawnLock, tryAcquireSpawnLock } from './startup-lock'
 
+function systemErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || !('code' in error)) return null
+  const code = (error as { code?: unknown }).code
+  return typeof code === 'string' ? code : null
+}
+
+/** Only these connect failures prove that no live process owns the endpoint. */
+export function shouldUnlinkDaemonSocket(error: unknown): boolean {
+  const code = systemErrorCode(error)
+  return code === 'ENOENT' || code === 'ECONNREFUSED'
+}
+
 /**
  * Check if the daemon is running (socket file exists + responds to ping)
  */
@@ -42,9 +54,12 @@ export async function isDaemonRunning(): Promise<boolean> {
       { timeoutMs: 1_000 }
     )
     return response.success
-  } catch {
-    // Socket exists but daemon is dead — stale socket. Named pipes are not unlinkable files.
-    if (!namedPipe) {
+  } catch (error) {
+    // Only remove an endpoint when the OS proves there is no listener.
+    // Permission errors (sandbox EACCES/EPERM), timeouts, and malformed
+    // responses do not prove staleness and must not steal a live daemon's
+    // socket. Named pipes are not unlinkable files.
+    if (!namedPipe && shouldUnlinkDaemonSocket(error)) {
       try {
         fs.unlinkSync(socketPath)
       } catch {
@@ -256,19 +271,28 @@ export function forceKillDaemon(): boolean {
   const socketPath = DAEMON_PATHS.socket()
 
   let killed = false
+  let safeToCleanOwnership = !fs.existsSync(pidPath)
 
   // Try to kill via PID file
   if (fs.existsSync(pidPath)) {
     const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10)
-    if (!Number.isNaN(pid)) {
+    if (Number.isNaN(pid)) {
+      safeToCleanOwnership = true
+    } else {
       try {
         process.kill(pid, 'SIGKILL')
         killed = true
-      } catch {
-        // Process already dead
+        safeToCleanOwnership = true
+      } catch (error) {
+        // ESRCH proves the PID is stale. EPERM/EACCES or an unknown failure
+        // means a live process may still own the endpoint, so retain both
+        // files rather than orphaning an uncontrollable daemon.
+        safeToCleanOwnership = systemErrorCode(error) === 'ESRCH'
       }
     }
   }
+
+  if (!safeToCleanOwnership) return false
 
   // Clean up stale files
   try {

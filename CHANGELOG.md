@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.80.1] - 2026-08-03
+
+### Fixed
+- Fix pnpm upgrade compatibility and preserve live daemon ownership
+
 ## [3.80.0] - 2026-08-03
 
 ### Added

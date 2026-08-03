@@ -29,9 +29,14 @@ describe('upgrade installs from npm registry only', () => {
     }
   })
 
-  it('npm/pnpm prefer online registry over local cache', () => {
+  it('uses cache flags only when the selected package manager supports them', () => {
     expect(MANAGERS.npm.installArgs).toContain('--prefer-online')
-    expect(MANAGERS.pnpm.installArgs).toContain('--prefer-online')
+    expect(MANAGERS.pnpm.installArgs).not.toContain('--prefer-online')
+    expect(registryInstallArgs(MANAGERS.pnpm, 'prjct-cli@3.80.0')).toEqual([
+      'add',
+      '-g',
+      'prjct-cli@3.80.0',
+    ])
   })
 
   it('installArgs always name the registry package prjct-cli@…', () => {
