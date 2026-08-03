@@ -5,7 +5,6 @@
  * This class maintains backward compatibility while services handle implementation.
  */
 
-import UpdateChecker from '../infrastructure/update-checker'
 import { agentService } from '../services/agent-service'
 import { breakdownService } from '../services/breakdown-service'
 import { memoryService } from '../services/memory-service'
@@ -19,12 +18,10 @@ import type { Author, CommandResult } from '../types/commands'
  */
 export class PrjctCommandsBase {
   prjctDir: string
-  updateChecker: UpdateChecker
   updateNotificationShown: boolean
 
   constructor() {
     this.prjctDir = '.prjct'
-    this.updateChecker = new UpdateChecker()
     this.updateNotificationShown = false
   }
 

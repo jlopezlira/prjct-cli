@@ -111,8 +111,3 @@ export const HOOK_RUNNERS: Record<string, HookRunner> = Object.fromEntries(
 export function getHookRunner(name: string | undefined): HookRunner | undefined {
   return name && HOOK_LOADERS[name] ? HOOK_RUNNERS[name] : undefined
 }
-
-/** Test helper — clear lazy cache between cases. */
-export function _resetHookRunnerCacheForTests(): void {
-  runnerCache.clear()
-}

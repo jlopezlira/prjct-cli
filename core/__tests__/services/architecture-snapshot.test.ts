@@ -37,7 +37,7 @@ describe('architecture-snapshot', () => {
     await fs.mkdir(path.join(testDir, 'core'), { recursive: true })
     await fs.writeFile(
       path.join(testDir, 'core', 'main.ts'),
-      `export function main() {}\nexport class App {}\n`
+      `import { handler } from './router'\nexport function main() { return handler() }\nexport class App {}\n`
     )
     await fs.writeFile(
       path.join(testDir, 'core', 'router.ts'),
@@ -49,6 +49,7 @@ describe('architecture-snapshot', () => {
     expect(snap.symbols).toBeGreaterThan(0)
     expect(snap.kinds.some((k) => k.kind === 'function')).toBe(true)
     expect(snap.packages).toContain('core')
+    expect(snap.hotspots.some((h) => h.file === 'core/router.ts' && h.fanIn === 1)).toBe(true)
     const md = formatArchitectureMd(snap)
     expect(md).toContain('Architecture')
     expect(md).toContain('Symbols')

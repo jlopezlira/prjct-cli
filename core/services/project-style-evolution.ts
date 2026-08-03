@@ -10,6 +10,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { memoryFingerprint } from '../memory/content-fingerprint'
 import { projectMemory } from '../memory/project-memory'
 import { prjctDb } from '../storage/database'
 import llmAnalysisStorage from '../storage/llm-analysis-storage'
@@ -388,58 +389,110 @@ async function readPackageMeta(projectPath: string): Promise<{
  * UPSERT style memories so selective embeddings can recall house rules.
  * Uses tags.topic = style:<kind>:<key> for supersession.
  */
+interface StyleBridgeEntry {
+  type: 'decision' | 'pattern' | 'anti-pattern'
+  content: string
+  tags: Record<string, string>
+}
+
+function desiredStyleBridgeEntries(snapshot: ProjectStyleSnapshot): StyleBridgeEntry[] {
+  const p = snapshot.payload
+  const entries = [
+    ...p.conventions.slice(0, 25).map((c) => ({
+      type: 'decision' as const,
+      content: c.rule,
+      tags: {
+        topic: `style:convention:${c.key}`,
+        category: c.category ?? 'convention',
+        source: 'project-style',
+      },
+    })),
+    ...p.patterns.slice(0, 25).map((pat) => ({
+      type: 'pattern' as const,
+      content: `${pat.name}: ${pat.description}`,
+      tags: {
+        topic: `style:pattern:${pat.key}`,
+        name: pat.name,
+        source: 'project-style',
+        ...(pat.category ? { category: pat.category } : {}),
+      },
+    })),
+    ...p.antiPatterns.slice(0, 25).map((a) => ({
+      type: 'anti-pattern' as const,
+      content: `${a.issue}. Suggestion: ${a.suggestion}`,
+      tags: {
+        topic: `style:anti:${a.key}`,
+        name: a.issue,
+        source: 'project-style',
+        ...(a.severity ? { severity: a.severity } : {}),
+      },
+    })),
+  ]
+
+  // memory_entries intentionally deduplicates the same (type, content) across
+  // a project. Mirror that identity here so two style keys with identical
+  // knowledge do not keep reassigning the single stored row's topic_key on
+  // every sync. First occurrence wins, preserving the existing deterministic
+  // convention -> pattern -> anti-pattern order.
+  const seen = new Set<string>()
+  return entries.filter((entry) => {
+    const identity = `${entry.type}\0${memoryFingerprint(entry.content)}`
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
+}
+
+function styleBridgeIdentity(type: string, topic: string, contentHash: string): string {
+  return `${type}\0${topic}\0${contentHash}`
+}
+
 export async function bridgeStyleToMemory(
   projectPath: string,
   projectId: string,
   snapshot: ProjectStyleSnapshot
 ): Promise<number> {
-  let written = 0
-  const p = snapshot.payload
+  const desired = desiredStyleBridgeEntries(snapshot)
+  if (desired.length === 0) return 0
 
-  for (const c of p.conventions.slice(0, 25)) {
-    const topic = `style:convention:${c.key}`
+  let activeIdentities: Set<string> | null = null
+  try {
+    const topics = [...new Set(desired.map((entry) => entry.tags.topic!))]
+    const placeholders = topics.map(() => '?').join(',')
+    const rows = prjctDb.query<{
+      type: string
+      topic_key: string
+      content_hash: string
+    }>(
+      projectId,
+      `SELECT type, topic_key, content_hash
+       FROM memory_entries
+       WHERE project_id = ? AND deleted_at IS NULL
+         AND topic_key IN (${placeholders})`,
+      projectId,
+      ...topics
+    )
+    activeIdentities = new Set(
+      rows.map((row) => styleBridgeIdentity(row.type, row.topic_key, row.content_hash))
+    )
+  } catch {
+    // A preflight miss is cheaper than dropping style self-heal.
+    activeIdentities = null
+  }
+
+  let attempted = 0
+  for (const entry of desired) {
+    const topic = entry.tags.topic!
+    const identity = styleBridgeIdentity(entry.type, topic, memoryFingerprint(entry.content))
+    if (activeIdentities?.has(identity)) continue
     await projectMemory.remember(projectPath, {
-      type: 'decision',
-      content: c.rule,
-      tags: { topic, category: c.category ?? 'convention', source: 'project-style' },
+      ...entry,
       projectId,
       provenance: 'extracted',
     })
-    written++
+    attempted++
   }
-  for (const pat of p.patterns.slice(0, 25)) {
-    const topic = `style:pattern:${pat.key}`
-    await projectMemory.remember(projectPath, {
-      type: 'pattern',
-      content: `${pat.name}: ${pat.description}`,
-      tags: {
-        topic,
-        name: pat.name,
-        source: 'project-style',
-        ...(pat.category ? { category: pat.category } : {}),
-      },
-      projectId,
-      provenance: 'extracted',
-    })
-    written++
-  }
-  for (const a of p.antiPatterns.slice(0, 25)) {
-    const topic = `style:anti:${a.key}`
-    await projectMemory.remember(projectPath, {
-      type: 'anti-pattern',
-      content: `${a.issue}. Suggestion: ${a.suggestion}`,
-      tags: {
-        topic,
-        name: a.issue,
-        source: 'project-style',
-        ...(a.severity ? { severity: a.severity } : {}),
-      },
-      projectId,
-      provenance: 'extracted',
-    })
-    written++
-  }
-  return written
+  return attempted
 }
 
 /** Write analysis/repo-analysis.json so legacy context readers work. */

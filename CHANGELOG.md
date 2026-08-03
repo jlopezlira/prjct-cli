@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.79.0] - 2026-08-03
+
+### Added
+- optimize sync performance and remove dead code
+
 ### Fixed
 
 - **Client `.prjct/` is config-only on every sync.** `CHECKPOINTS.md`, `team.json`, ghost dirs, and any other leftover are **migrated to project SQLite first** (checkpoints → `crew:checkpoints`, team → `team:enrollment`, text → remember ingest) then **deleted** from the customer worktree. The only allowed file is `prjct.config.json` — no more "left in place" legacy files.
@@ -12,13 +17,11 @@
 
 - sync migrates then deletes all client .prjct junk (config-only) (#599)
 
-
 ## [3.78.0] - 2026-07-29
 
 ### Features
 
 - steal g-ai v2.2 authority teeth — stamp, candidate hash, kill switch (#598)
-
 
 ## [3.77.0] - 2026-07-28
 
@@ -38,13 +41,11 @@
 
 - bind print-mode runs to work cycles (#595)
 
-
 ## [3.75.0] - 2026-07-21
 
 ### Features
 
 - prjct body tools + guard prefix on edit/write (#594)
-
 
 ## [3.74.0] - 2026-07-21
 
@@ -52,13 +53,11 @@
 
 - owned print-mode agent loop with root-scoped tools (#593)
 
-
 ## [3.73.0] - 2026-07-21
 
 ### Features
 
 - multi-brain profiles for owned agent loop foundation (#592)
-
 
 ## [3.72.0] - 2026-07-19
 

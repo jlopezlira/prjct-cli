@@ -1371,6 +1371,31 @@ export function fileFanIn(projectId: string, filePath: string): number {
   return callers.size
 }
 
+/**
+ * Fan-in for every target file in one indexed aggregate.
+ *
+ * Architecture summaries used to call fileFanIn() for up to 400 files. Each
+ * call reloaded the complete CALLS edge set, turning a single report into
+ * hundreds of full-table reads. The grouped query preserves the exact
+ * semantics (distinct caller symbol/file ids across all symbols in a target
+ * file) while scanning the edge table once.
+ */
+export function fileFanInByFile(projectId: string): Map<string, number> {
+  try {
+    const rows = prjctDb.query<{ file: string; caller_count: number }>(
+      projectId,
+      `SELECT target.file AS file, COUNT(DISTINCT edge.src) AS caller_count
+       FROM code_symbol_edges AS edge
+       JOIN code_symbols AS target ON target.id = edge.dst
+       WHERE edge.edge_type = 'CALLS'
+       GROUP BY target.file`
+    )
+    return new Map(rows.map((row) => [row.file, row.caller_count]))
+  } catch {
+    return new Map()
+  }
+}
+
 /** Files that call into symbols defined in seed files (call-graph expand). */
 export function filesCallingInto(projectId: string, seedFiles: string[], maxDepth = 2): string[] {
   const seedSet = new Set(seedFiles)

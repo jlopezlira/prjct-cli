@@ -33,7 +33,11 @@ import type { Context7Status } from '../types/services.js'
 import type { VerificationReport } from '../types/sync-verifier'
 import { readJson } from '../utils/file-helper'
 import log from '../utils/logger'
-import { bootstrapCodeGraphFromArtifact, maybeExportAfterIndex } from './code-graph-artifact'
+import {
+  bootstrapCodeGraphFromArtifact,
+  maybeExportAfterIndex,
+  shouldAutoUploadCodeGraph,
+} from './code-graph-artifact'
 import { repairContextQuality } from './context-quality-service'
 import context7Service from './context7-service'
 import { writeProjectAgentSurfaces } from './project-agent-surfaces'
@@ -42,6 +46,7 @@ import { emptyCommands, emptyGitData, emptyStack, emptyStats } from './sync/defa
 import { detectIncrementalChanges } from './sync/incremental'
 import { archiveStaleData, recordSyncMetrics, saveDraftAnalysis } from './sync/persistence'
 import { runSyncPhase as phase, withPhaseTimeout as withTimeout } from './sync/phase-runner'
+import { type PostIndexWork, startPostIndexWork } from './sync/post-index'
 import {
   ensureProjectDirectories,
   logSyncEvent,
@@ -80,6 +85,7 @@ class SyncService {
       configPath: '',
       message: '',
     }
+    let postIndexWork: PostIndexWork | undefined
 
     try {
       // 1. Get project config
@@ -273,8 +279,27 @@ class SyncService {
                 : indexSymbols(this.projectPath, this.projectId!),
               indexCoChanges(this.projectPath, this.projectId!),
             ])
-            // Refresh per-project cache after a successful index pass
-            await maybeExportAfterIndex(this.projectId!)
+            // Start local artifact refresh + optional cloud upload now, then
+            // overlap it with the remaining independent sync phases.
+            const postIndexProjectId = this.projectId!
+            const postIndexProjectPath = this.projectPath
+            const postIndexConfig = await configManager
+              .readConfig(postIndexProjectPath)
+              .catch(() => null)
+            const uploadToCloud = shouldAutoUploadCodeGraph(postIndexConfig)
+            postIndexWork = startPostIndexWork(
+              () => maybeExportAfterIndex(postIndexProjectId, { uploadToCloud }),
+              {
+                onComplete: ({ totalMs, error }) => {
+                  log.debug('sync post-index work settled', {
+                    projectId: postIndexProjectId,
+                    uploadToCloud,
+                    totalMs,
+                    ...(error === undefined ? {} : { error: getErrorMessage(error) }),
+                  })
+                },
+              }
+            )
           } catch (error) {
             log.debug('File ranking index build failed (non-critical)', {
               error: getErrorMessage(error),
@@ -501,6 +526,8 @@ class SyncService {
           /* best-effort */
         }
       }
+
+      await postIndexWork?.settle()
 
       return {
         success: true,
