@@ -14,8 +14,9 @@
  *
  * Public API is intentionally load-bearing:
  *   - `scanForSecrets(text: string): string[]` — names of patterns hit
- *   - `scanHookToolInput(input: unknown): string[]` — flatten agent tool
- *     payloads (Claude + Gemini shapes) then scan
+ *   - `scanHookToolInput(input: unknown): string[]` — walk agent tool
+ *     payloads (Claude + Gemini shapes) and scan every string with bounded
+ *     working memory
  *
  * The API is treated as load-bearing. Renames or removals must update
  * both prjct-cli and the cloud package in lockstep.
@@ -52,21 +53,40 @@ export function scanForSecrets(text: string): string[] {
  * Walk an unknown tool payload and collect string leaves for scanning.
  * Host-agnostic: Claude (`command`, `file_path`, `content`) and Gemini
  * (`run_shell_command` args, `write_file` contents) all flatten the same way.
- * Caps total size so a huge paste cannot OOM the hook.
+ * Caps retained text so a huge paste cannot OOM the hook. When input exceeds
+ * the cap, retain both the head and tail: keeping only the prefix lets padding
+ * hide a credential at the end of an otherwise valid tool payload.
  */
 export function flattenToolInputText(input: unknown, maxChars = 200_000): string {
-  const parts: string[] = []
-  let used = 0
+  const limit = Math.max(0, maxChars)
+  const headLimit = Math.ceil(limit / 2)
+  const tailLimit = Math.floor(limit / 2)
+  let head = ''
+  let tail = ''
+  let full: string | null = ''
+  let totalChars = 0
+  let hasPart = false
 
   const push = (s: string) => {
-    if (!s || used >= maxChars) return
-    const slice = s.length + used > maxChars ? s.slice(0, maxChars - used) : s
-    parts.push(slice)
-    used += slice.length
+    if (!s || limit === 0) return
+    const chunk = `${hasPart ? '\n' : ''}${s}`
+    hasPart = true
+    totalChars += chunk.length
+
+    if (full !== null) {
+      if (totalChars <= limit) full += chunk
+      else full = null
+    }
+
+    if (head.length < headLimit) head += chunk.slice(0, headLimit - head.length)
+    if (tailLimit > 0) {
+      tail =
+        chunk.length >= tailLimit ? chunk.slice(-tailLimit) : `${tail}${chunk}`.slice(-tailLimit)
+    }
   }
 
   const walk = (v: unknown, depth: number) => {
-    if (used >= maxChars || depth > 8) return
+    if (depth > 8) return
     if (typeof v === 'string') {
       push(v)
       return
@@ -88,7 +108,60 @@ export function flattenToolInputText(input: unknown, maxChars = 200_000): string
   }
 
   walk(input, 0)
-  return parts.join('\n')
+  if (full !== null) return full
+  return totalChars > limit ? `${head}\n${tail}` : head
+}
+
+const TOOL_INPUT_CHUNK_CHARS = 64 * 1024
+const TOOL_INPUT_CHUNK_OVERLAP = 512
+
+function addSecretHits(text: string, hits: Set<string>): void {
+  if (!text) return
+  if (text.length <= 200_000) {
+    for (const hit of scanForSecrets(flattenToolInputText(text))) hits.add(hit)
+    return
+  }
+
+  const step = TOOL_INPUT_CHUNK_CHARS - TOOL_INPUT_CHUNK_OVERLAP
+  for (let start = 0; start < text.length; start += step) {
+    const end = Math.min(text.length, start + TOOL_INPUT_CHUNK_CHARS)
+    for (const hit of scanForSecrets(text.slice(start, end))) hits.add(hit)
+    if (end === text.length) break
+  }
+}
+
+/** Scan every string leaf without retaining or concatenating the full payload. */
+function scanUnknownStrings(input: unknown, hits: Set<string>): void {
+  const stack: unknown[] = [input]
+  const seen = new WeakSet<object>()
+
+  while (stack.length > 0) {
+    const value = stack.pop()
+    if (typeof value === 'string') {
+      addSecretHits(value, hits)
+      continue
+    }
+    if (!value || typeof value !== 'object' || seen.has(value)) continue
+    seen.add(value)
+
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) stack.push(value[i])
+      continue
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>)
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const [key, nested] = entries[i]
+      if (
+        /token|secret|password|api[_-]?key|authorization/i.test(key) &&
+        typeof nested === 'string'
+      ) {
+        stack.push(`${key}=${nested}`)
+      } else {
+        stack.push(nested)
+      }
+    }
+  }
 }
 
 /**
@@ -100,12 +173,13 @@ export function scanHookToolInput(payload: unknown): string[] {
   // Prefer tool_input / toolInput when present; also scan top-level for Gemini variants
   const obj = payload as Record<string, unknown>
   const toolInput = obj.tool_input ?? obj.toolInput ?? obj.parameters ?? payload
-  const text = flattenToolInputText(toolInput)
+  const hits = new Set<string>()
+  scanUnknownStrings(toolInput, hits)
   // Also scan shell command fields that hosts put at top level
-  const extra = [obj.command, obj.prompt, obj.content]
-    .filter((x): x is string => typeof x === 'string')
-    .join('\n')
-  return scanForSecrets(extra ? `${text}\n${extra}` : text)
+  for (const extra of [obj.command, obj.prompt, obj.content]) {
+    if (typeof extra === 'string') addSecretHits(extra, hits)
+  }
+  return [...hits]
 }
 
 /**

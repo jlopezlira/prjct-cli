@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.80.0] - 2026-08-03
+
+### Added
+- improve session performance, task efficiency, and secret scanning security
+
 ## [3.79.0] - 2026-08-03
 
 ### Added
