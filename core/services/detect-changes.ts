@@ -31,17 +31,7 @@ async function listWorkingTreeFiles(projectPath: string): Promise<string[]> {
 }
 
 async function listCommittedFiles(projectPath: string): Promise<string[]> {
-  let defaultRef = ''
-  const originHead = await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
-  if (originHead && originHead !== 'origin/HEAD') defaultRef = originHead
-  else {
-    for (const c of ['main', 'master']) {
-      if ((await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', c])) !== null) {
-        defaultRef = c
-        break
-      }
-    }
-  }
+  const defaultRef = await resolveDefaultRef(projectPath)
   if (!defaultRef) return []
   const base = await safeGit(projectPath, ['merge-base', defaultRef, 'HEAD'])
   if (!base) return []
@@ -49,22 +39,25 @@ async function listCommittedFiles(projectPath: string): Promise<string[]> {
   return names.split('\n').filter(Boolean)
 }
 
+async function resolveDefaultRef(projectPath: string): Promise<string> {
+  const originHead = await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
+  if (originHead && originHead !== 'origin/HEAD') return originHead
+  const candidates = await Promise.all(
+    ['main', 'master'].map(async (candidate) => ({
+      candidate,
+      exists:
+        (await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', candidate])) !== null,
+    }))
+  )
+  return candidates.find(({ exists }) => exists)?.candidate ?? ''
+}
+
 async function resolveDiffBase(
   projectPath: string,
   source: DetectChangesResult['source']
 ): Promise<string | null> {
   if (source === 'working-tree' || source === 'explicit') return 'HEAD'
-  let defaultRef = ''
-  const originHead = await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
-  if (originHead && originHead !== 'origin/HEAD') defaultRef = originHead
-  else {
-    for (const c of ['main', 'master']) {
-      if ((await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', c])) !== null) {
-        defaultRef = c
-        break
-      }
-    }
-  }
+  const defaultRef = await resolveDefaultRef(projectPath)
   if (!defaultRef) return 'HEAD'
   return (await safeGit(projectPath, ['merge-base', defaultRef, 'HEAD'])) ?? 'HEAD'
 }
@@ -75,34 +68,33 @@ async function resolveDiffBase(
  */
 export function parseChangedLinesFromUnifiedDiff(diff: string): Map<string, Set<number>> {
   const map = new Map<string, Set<number>>()
-  let currentFile: string | null = null
-  let newLine = 0
+  const parser: { currentFile: string | null; newLine: number } = { currentFile: null, newLine: 0 }
 
   for (const raw of diff.split('\n')) {
     if (raw.startsWith('+++ ')) {
       const p = raw.slice(4).trim()
       if (p === '/dev/null') {
-        currentFile = null
+        parser.currentFile = null
         continue
       }
-      currentFile = p.replace(/^b\//, '')
-      if (!map.has(currentFile)) map.set(currentFile, new Set())
+      parser.currentFile = p.replace(/^b\//, '')
+      if (!map.has(parser.currentFile)) map.set(parser.currentFile, new Set())
       continue
     }
-    if (!currentFile) continue
+    if (!parser.currentFile) continue
     const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
     if (hunk) {
-      newLine = Number.parseInt(hunk[1]!, 10)
+      parser.newLine = Number.parseInt(hunk[1]!, 10)
       continue
     }
     if (raw.startsWith('\\')) continue
     if (raw.startsWith('+') && !raw.startsWith('+++')) {
-      map.get(currentFile)?.add(newLine)
-      newLine++
+      map.get(parser.currentFile)?.add(parser.newLine)
+      parser.newLine++
     } else if (raw.startsWith('-') && !raw.startsWith('---')) {
       // deletion: does not advance new-file line
     } else if (raw.startsWith(' ') || raw === '') {
-      newLine++
+      parser.newLine++
     }
   }
   return map
@@ -124,10 +116,10 @@ async function loadHunkLines(
 
   const diff = (await safeGit(projectPath, args)) ?? ''
   // Also staged for working-tree
-  let staged = ''
-  if (source !== 'committed') {
-    staged = (await safeGit(projectPath, ['diff', '-U0', '--cached', '--', ...files])) ?? ''
-  }
+  const staged =
+    source !== 'committed'
+      ? ((await safeGit(projectPath, ['diff', '-U0', '--cached', '--', ...files])) ?? '')
+      : ''
   const map = parseChangedLinesFromUnifiedDiff(`${diff}\n${staged}`)
   return map
 }
@@ -147,11 +139,10 @@ export function symbolsTouchedByHunks(
   const names = new Set<string>()
   for (const line of lines) {
     // Nearest symbol with startLine <= line
-    let best = all[0]!
-    for (const s of all) {
-      if (s.startLine <= line) best = s
-      else break
-    }
+    const best = all.reduce(
+      (nearest, symbol) => (symbol.startLine <= line ? symbol : nearest),
+      all[0]!
+    )
     names.add(best.name)
     // Also any symbol starting exactly on a changed line
     for (const s of all) {
@@ -173,32 +164,32 @@ function classifyRisk(
   hunkSymbolCount: number
 ): { risk: ChangeRisk; reasons: string[] } {
   const reasons: string[] = []
-  let risk: ChangeRisk = 'low'
-
-  if (CRITICAL_PATH.test(file)) {
-    risk = 'critical'
+  const pathRisk: ChangeRisk = CRITICAL_PATH.test(file)
+    ? 'critical'
+    : HIGH_PATH.test(file)
+      ? 'high'
+      : 'low'
+  if (pathRisk === 'critical') {
     reasons.push('touches auth/security/billing/schema path')
-  } else if (HIGH_PATH.test(file)) {
-    risk = 'high'
+  } else if (pathRisk === 'high') {
     reasons.push('touches storage/sync/hooks/mcp path')
   }
 
+  const fanRisk: ChangeRisk =
+    fanIn >= 15 ? 'critical' : fanIn >= 5 ? 'high' : fanIn > 0 ? 'medium' : 'low'
   if (fanIn >= 15) {
-    risk = 'critical'
     reasons.push(`high call fan-in (${fanIn} callers)`)
   } else if (fanIn >= 5) {
-    if (risk === 'low') risk = 'high'
     reasons.push(`moderate call fan-in (${fanIn} callers)`)
   } else if (fanIn > 0) {
-    if (risk === 'low') risk = 'medium'
     reasons.push(`${fanIn} caller(s) via symbol graph`)
   }
 
+  const importerRisk: ChangeRisk =
+    importerCount >= 10 ? 'high' : importerCount >= 3 ? 'medium' : 'low'
   if (importerCount >= 10) {
-    if (risk !== 'critical') risk = 'high'
     reasons.push(`${importerCount} importers`)
   } else if (importerCount >= 3) {
-    if (risk === 'low') risk = 'medium'
     reasons.push(`${importerCount} importers`)
   }
 
@@ -210,6 +201,10 @@ function classifyRisk(
     reasons.push('leaf change (no graph neighbors)')
   }
 
+  const riskRank: Record<ChangeRisk, number> = { low: 0, medium: 1, high: 2, critical: 3 }
+  const risk = [pathRisk, fanRisk, importerRisk].reduce((highest, candidate) =>
+    riskRank[candidate] > riskRank[highest] ? candidate : highest
+  )
   if (reasons.length === 0) reasons.push('isolated or low connectivity')
   return { risk, reasons }
 }
@@ -223,20 +218,26 @@ export async function detectChanges(
     source?: 'working-tree' | 'committed' | 'auto'
   } = {}
 ): Promise<DetectChangesResult> {
-  let changedFiles = opts.files ?? []
-  let source: DetectChangesResult['source'] = 'explicit'
-
-  if (changedFiles.length === 0) {
+  const detected = await (async (): Promise<{
+    changedFiles: string[]
+    source: DetectChangesResult['source']
+  }> => {
+    if (opts.files && opts.files.length > 0) {
+      return { changedFiles: opts.files, source: 'explicit' }
+    }
     const mode = opts.source ?? 'auto'
     if (mode === 'working-tree' || mode === 'auto') {
-      changedFiles = await listWorkingTreeFiles(projectPath)
-      source = 'working-tree'
+      const changedFiles = await listWorkingTreeFiles(projectPath)
+      if (changedFiles.length > 0 || mode === 'working-tree') {
+        return { changedFiles, source: 'working-tree' }
+      }
     }
-    if (changedFiles.length === 0 && (mode === 'committed' || mode === 'auto')) {
-      changedFiles = await listCommittedFiles(projectPath)
-      source = 'committed'
+    if (mode === 'committed' || mode === 'auto') {
+      return { changedFiles: await listCommittedFiles(projectPath), source: 'committed' }
     }
-  }
+    return { changedFiles: [], source: 'explicit' }
+  })()
+  const { changedFiles, source } = detected
 
   const importGraph = loadGraph(projectId)
   const hasSymbols = hasSymbolIndex(projectId)
@@ -252,8 +253,8 @@ export async function detectChanges(
     for (const imp of importers) affected.add(imp)
   }
   if (hasSymbols) {
-    for (const f of filesCallingInto(projectId, changedFiles, 2)) {
-      affected.add(f)
+    for (const f2 of filesCallingInto(projectId, changedFiles, 2)) {
+      affected.add(f2)
     }
   }
 

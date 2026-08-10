@@ -51,12 +51,13 @@ interface SnapshotRow {
 }
 
 function rowToSnapshot(r: SnapshotRow): ProjectStyleSnapshot {
-  let payload: ProjectStylePayload
-  try {
-    payload = JSON.parse(r.payload_json) as ProjectStylePayload
-  } catch {
-    payload = emptyPayload()
-  }
+  const payload: ProjectStylePayload = (() => {
+    try {
+      return JSON.parse(r.payload_json) as ProjectStylePayload
+    } catch {
+      return emptyPayload()
+    }
+  })()
   return {
     id: r.id,
     capturedAt: r.captured_at,
@@ -262,13 +263,13 @@ export async function recomputeProjectStyle(
 
 function computeStyleCoverage(s: ProjectStyleSnapshot): number {
   // 0–100: stack known + patterns/conventions density
-  let score = 0
-  if (s.payload.stack.ecosystem !== 'unknown') score += 25
-  if (s.payload.stack.frameworks.length > 0 || s.payload.stack.keyLibraries.length > 0) score += 20
-  if (s.payload.stack.hasTests) score += 10
-  if (s.conventionCount > 0) score += Math.min(25, s.conventionCount * 5)
-  if (s.patternCount > 0) score += Math.min(15, s.patternCount * 3)
-  if (s.antiPatternCount > 0) score += Math.min(5, s.antiPatternCount)
+  const score =
+    (s.payload.stack.ecosystem !== 'unknown' ? 25 : 0) +
+    (s.payload.stack.frameworks.length > 0 || s.payload.stack.keyLibraries.length > 0 ? 20 : 0) +
+    (s.payload.stack.hasTests ? 10 : 0) +
+    Math.min(25, s.conventionCount * 5) +
+    Math.min(15, s.patternCount * 3) +
+    Math.min(5, s.antiPatternCount)
   return Math.min(100, score)
 }
 
@@ -337,7 +338,10 @@ function loadMemoryStyle(projectId: string): {
           suggestion: e.content.slice(0, 400),
         })
       } else if (topic.startsWith('style:convention:')) {
-        conventions.push({ rule: e.content.slice(0, 400), category: e.tags?.category })
+        conventions.push({
+          rule: e.content.slice(0, 400),
+          category: e.tags?.category,
+        })
       }
     }
   } catch {
@@ -358,27 +362,26 @@ async function readPackageMeta(projectPath: string): Promise<{
       packageManager?: string
     }
     const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) }
-    let packageManager: string | null = null
-    if (pkg.packageManager) {
-      packageManager = pkg.packageManager.split('@')[0] ?? null
-    } else {
-      const locks: Array<[string, string]> = [
-        ['bun.lockb', 'bun'],
-        ['bun.lock', 'bun'],
-        ['pnpm-lock.yaml', 'pnpm'],
-        ['yarn.lock', 'yarn'],
-        ['package-lock.json', 'npm'],
-      ]
-      for (const [file, pm] of locks) {
-        try {
-          await fs.access(path.join(projectPath, file))
-          packageManager = pm
-          break
-        } catch {
-          /* next */
-        }
-      }
-    }
+    const packageManager = pkg.packageManager
+      ? (pkg.packageManager.split('@')[0] ?? null)
+      : await (async () => {
+          const locks: Array<[string, string]> = [
+            ['bun.lockb', 'bun'],
+            ['bun.lock', 'bun'],
+            ['pnpm-lock.yaml', 'pnpm'],
+            ['yarn.lock', 'yarn'],
+            ['package-lock.json', 'npm'],
+          ]
+          for (const [file, pm] of locks) {
+            try {
+              await fs.access(path.join(projectPath, file))
+              return pm
+            } catch {
+              /* next */
+            }
+          }
+          return null
+        })()
     return { deps, packageManager }
   } catch {
     return { deps: {}, packageManager: null }
@@ -455,32 +458,33 @@ export async function bridgeStyleToMemory(
   const desired = desiredStyleBridgeEntries(snapshot)
   if (desired.length === 0) return 0
 
-  let activeIdentities: Set<string> | null = null
-  try {
-    const topics = [...new Set(desired.map((entry) => entry.tags.topic!))]
-    const placeholders = topics.map(() => '?').join(',')
-    const rows = prjctDb.query<{
-      type: string
-      topic_key: string
-      content_hash: string
-    }>(
-      projectId,
-      `SELECT type, topic_key, content_hash
+  const activeIdentities: Set<string> | null = (() => {
+    try {
+      const topics = [...new Set(desired.map((entry) => entry.tags.topic!))]
+      const placeholders = topics.map(() => '?').join(',')
+      const rows = prjctDb.query<{
+        type: string
+        topic_key: string
+        content_hash: string
+      }>(
+        projectId,
+        `SELECT type, topic_key, content_hash
        FROM memory_entries
        WHERE project_id = ? AND deleted_at IS NULL
          AND topic_key IN (${placeholders})`,
-      projectId,
-      ...topics
-    )
-    activeIdentities = new Set(
-      rows.map((row) => styleBridgeIdentity(row.type, row.topic_key, row.content_hash))
-    )
-  } catch {
-    // A preflight miss is cheaper than dropping style self-heal.
-    activeIdentities = null
-  }
+        projectId,
+        ...topics
+      )
+      return new Set(
+        rows.map((row) => styleBridgeIdentity(row.type, row.topic_key, row.content_hash))
+      )
+    } catch {
+      // A preflight miss is cheaper than dropping style self-heal.
+      return null
+    }
+  })()
 
-  let attempted = 0
+  const attempted: StyleBridgeEntry[] = []
   for (const entry of desired) {
     const topic = entry.tags.topic!
     const identity = styleBridgeIdentity(entry.type, topic, memoryFingerprint(entry.content))
@@ -490,9 +494,9 @@ export async function bridgeStyleToMemory(
       projectId,
       provenance: 'extracted',
     })
-    attempted++
+    attempted.push(entry)
   }
-  return attempted
+  return attempted.length
 }
 
 /** Write analysis/repo-analysis.json so legacy context readers work. */

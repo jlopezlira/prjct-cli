@@ -29,28 +29,24 @@ export interface InstallationInfo {
 }
 
 export async function getDirectorySize(dirPath: string): Promise<number> {
-  let totalSize = 0
-
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true })
-    for (const entry of entries) {
-      const entryPath = path.join(dirPath, entry.name)
-      if (entry.isDirectory()) {
-        totalSize += await getDirectorySize(entryPath)
-      } else {
+    const sizes = await Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = path.join(dirPath, entry.name)
+        if (entry.isDirectory()) return getDirectorySize(entryPath)
         try {
           const stats = await fs.stat(entryPath)
-          totalSize += stats.size
+          return stats.size
         } catch {
-          // Skip files we can't stat
+          return 0
         }
-      }
-    }
+      })
+    )
+    return sizes.reduce((total, size) => total + size, 0)
   } catch {
-    // Directory doesn't exist or can't be read
+    return 0
   }
-
-  return totalSize
 }
 
 export function formatSize(bytes: number): string {

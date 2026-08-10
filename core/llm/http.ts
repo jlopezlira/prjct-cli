@@ -46,16 +46,17 @@ export async function fetchJson(
         text.slice(0, 400)
       )
     }
-    let json: unknown
-    try {
-      json = text ? JSON.parse(text) : {}
-    } catch {
-      throw new LlmHttpError(
-        `LLM returned non-JSON from ${url}: ${text.slice(0, 200)}`,
-        res.status,
-        text.slice(0, 200)
-      )
-    }
+    const json = (() => {
+      try {
+        return text ? JSON.parse(text) : {}
+      } catch {
+        throw new LlmHttpError(
+          `LLM returned non-JSON from ${url}: ${text.slice(0, 200)}`,
+          res.status,
+          text.slice(0, 200)
+        )
+      }
+    })()
     return { status: res.status, json, text }
   } catch (err) {
     if (err instanceof LlmHttpError) throw err

@@ -125,14 +125,14 @@ export function reviewsGatePassedRelational(projectId: string, specId: string): 
     'SELECT content FROM specs WHERE id = ?',
     specId
   )
-  let content: SpecContent | null = null
-  if (row?.content) {
+  const content = (() => {
+    if (!row?.content) return null
     try {
-      content = JSON.parse(row.content) as SpecContent
+      return JSON.parse(row.content) as SpecContent
     } catch {
-      content = null
+      return null
     }
-  }
+  })()
 
   const selected = prjctDb
     .query<{ lens: string }>(
@@ -170,9 +170,9 @@ export function reviewsGatePassedRelational(projectId: string, specId: string): 
     if (r.candidateHash !== frozen) return false
   }
   // selected lenses that passed relationally must also exist with matching hash
-  for (const lens of selected.length > 0 ? selected : ['strategic', 'architecture', 'design']) {
-    if (!passed.has(lens)) continue
-    const r = reviews[lens]
+  for (const lens2 of selected.length > 0 ? selected : ['strategic', 'architecture', 'design']) {
+    if (!passed.has(lens2)) continue
+    const r = reviews[lens2]
     if (!r || r.candidateHash !== frozen) return false
   }
   return true

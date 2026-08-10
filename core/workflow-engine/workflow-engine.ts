@@ -114,18 +114,20 @@ async function runVerifyAction(rule: WorkflowRule, projectPath: string): Promise
   const { evaluateWorkflowRuleExecutable } = await import('../services/trust-boundary')
   const trust = evaluateWorkflowRuleExecutable(rule.trustSource, rule.description || rule.action)
   if (!trust.allow) throw new Error(trust.denyMessage)
-  let command = rule.action.slice(VERIFY_ACTION_PREFIX.length).trim()
-  if (!command) throw new Error(`Empty command in verify action '${rule.action}'`)
-  if (command === 'auto') {
-    const detected = await detectVerifyCommand(projectPath)
-    if (!detected) {
-      throw new Error(
-        'verify:auto found no test script (package.json `scripts.test`). ' +
-          'Specify an explicit check, e.g. `verify:bun test` or `verify:npm run typecheck`.'
-      )
-    }
-    command = detected
-  }
+  const configuredCommand = rule.action.slice(VERIFY_ACTION_PREFIX.length).trim()
+  if (!configuredCommand) throw new Error(`Empty command in verify action '${rule.action}'`)
+  const command =
+    configuredCommand === 'auto'
+      ? await detectVerifyCommand(projectPath).then((detected) => {
+          if (!detected) {
+            throw new Error(
+              'verify:auto found no test script (package.json `scripts.test`). ' +
+                'Specify an explicit check, e.g. `verify:bun test` or `verify:npm run typecheck`.'
+            )
+          }
+          return detected
+        })
+      : configuredCommand
   try {
     await execAsync(command, { timeout: rule.timeoutMs, cwd: projectPath, env: { ...process.env } })
   } catch (error) {
@@ -167,18 +169,10 @@ async function runScriptAction(
   if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
     throw new Error(`Script path escapes workflows dir: ${relativePath}`)
   }
-  let scriptPath = candidate
-  try {
-    scriptPath = await fs.realpath(candidate)
-  } catch {
+  const scriptPath = await fs.realpath(candidate).catch(() => {
     throw new Error(`Script not found: .prjct/workflows/${relativePath}`)
-  }
-  let resolvedRoot = workflowsRoot
-  try {
-    resolvedRoot = await fs.realpath(workflowsRoot)
-  } catch {
-    /* workflows dir missing — realpath of script already failed or will */
-  }
+  })
+  const resolvedRoot = await fs.realpath(workflowsRoot).catch(() => workflowsRoot)
   const relAfterReal = path.relative(resolvedRoot, scriptPath)
   if (relAfterReal.startsWith('..') || path.isAbsolute(relAfterReal)) {
     throw new Error(`Script path escapes workflows dir: ${relativePath}`)
@@ -599,8 +593,7 @@ export async function executeWorkflowRules(
   // 4. Steps — blocking, sequential. `status:<value>` steps drive the
   //    state machine instead of shelling out.
   const steps = rules.filter((r) => r.type === 'step')
-  let stepSeq = 0
-  for (const step of steps) {
+  for (const [stepSeq, step] of steps.entries()) {
     console.log(`\n${chalk.dim(`[step] ${command}: ${step.action}`)}`)
     try {
       const startTime = Date.now()
@@ -609,13 +602,13 @@ export async function executeWorkflowRules(
       const timeStr = elapsed > 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${elapsed}ms`
       console.log(`${chalk.green('✓')} ${chalk.dim(`step passed (${timeStr})`)}`)
       result.stepsRun.push(step.description || step.action)
-      recordRunStep(projectId, runId, step.id, stepSeq++, 'ok')
+      recordRunStep(projectId, runId, step.id, stepSeq, 'ok')
     } catch (error) {
       console.log(`${chalk.red('✗')} step failed: ${step.action}`)
       result.gatesFailed.push(step.description || step.action)
       result.success = false
       result.output += `Step failed: ${step.action}\n${getErrorMessage(error)}\n`
-      recordRunStep(projectId, runId, step.id, stepSeq++, 'failed', getErrorMessage(error))
+      recordRunStep(projectId, runId, step.id, stepSeq, 'failed', getErrorMessage(error))
       finishWorkflowRun(projectId, runId, 'failed')
       return result
     }

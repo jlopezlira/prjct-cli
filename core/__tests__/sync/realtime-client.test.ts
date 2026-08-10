@@ -94,7 +94,7 @@ describe('buildRealtimeUrl', () => {
 
 describe('backoffDelay', () => {
   it('never exceeds the ceiling and grows with attempt', () => {
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (const attempt of Array.from({ length: 6 }, (_, index) => index)) {
       const d = backoffDelay(attempt, 1000, 30_000)
       expect(d).toBeGreaterThanOrEqual(0)
       expect(d).toBeLessThanOrEqual(Math.min(30_000, 1000 * 2 ** attempt))

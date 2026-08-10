@@ -26,7 +26,6 @@ const KNOWN_AGENTS = new Set([
   'cursor',
   'opencode',
   'pi',
-  'windsurf',
   'antigravity',
   'unknown',
 ])

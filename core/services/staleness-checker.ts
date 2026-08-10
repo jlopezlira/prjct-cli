@@ -57,16 +57,14 @@ class StalenessChecker {
 
     try {
       // Read project doc from SQLite to get last sync info
-      let projectJson: Record<string, unknown> = {}
-      try {
-        const doc = prjctDb.getDoc<Record<string, unknown>>(projectId, 'project')
-        if (!doc) {
-          status.isStale = true
-          status.reason = 'No sync history found. Run `prjct sync` to initialize.'
-          return status
+      const projectJson = (() => {
+        try {
+          return prjctDb.getDoc<Record<string, unknown>>(projectId, 'project')
+        } catch {
+          return null
         }
-        projectJson = doc
-      } catch {
+      })()
+      if (!projectJson) {
         // No project doc = definitely stale
         status.isStale = true
         status.reason = 'No sync history found. Run `prjct sync` to initialize.'

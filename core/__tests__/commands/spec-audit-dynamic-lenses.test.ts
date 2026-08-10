@@ -18,43 +18,51 @@ import pathManager from '../../infrastructure/path-manager'
 import { specService } from '../../services/spec-service'
 import prjctDb from '../../storage/database'
 
-let projectPath: string
-let projectId: string
-let originalProjectsDir: string | undefined
-let cmd: SpecCommands
+const fixture: {
+  projectPath: string
+  projectId: string
+  originalProjectsDir: string | undefined
+  cmd: SpecCommands
+} = {
+  projectPath: '',
+  projectId: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  cmd: undefined as unknown as SpecCommands,
+}
 
 async function freshProject(): Promise<void> {
   const tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-audit-lens-pd-'))
-  originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+  fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
   process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
 
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-audit-lens-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `lens-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-audit-lens-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `lens-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+  await pathManager.ensureProjectStructure(fixture.projectId)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
 }
 
 beforeEach(async () => {
   prjctDb.close()
   await freshProject()
-  cmd = new SpecCommands()
+  fixture.cmd = new SpecCommands()
 })
 
 afterEach(async () => {
-  if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-  else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-  if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+  if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+  else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+  if (fixture.projectPath)
+    await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   // PRJCT_PROJECTS_DIR is not honored by pathManager (mem_1560), so project
   // data lands in ~/.prjct-cli/projects/<id>; clean it to avoid polluting the
   // real projects dir.
-  if (projectId)
+  if (fixture.projectId)
     await fs
-      .rm(path.join(os.homedir(), '.prjct-cli', 'projects', projectId), {
+      .rm(path.join(os.homedir(), '.prjct-cli', 'projects', fixture.projectId), {
         recursive: true,
         force: true,
       })
@@ -64,7 +72,7 @@ afterEach(async () => {
 
 describe('prjct spec audit — dynamic lenses', () => {
   test('persists a spec-shaped lens set, not the fixed trio', async () => {
-    const created = await specService.create(projectPath, {
+    const created = await specService.create(fixture.projectPath, {
       title: 'auth + migration',
       content: {
         goal: 'Add token auth and a DB schema migration for sessions',
@@ -73,11 +81,11 @@ describe('prjct spec audit — dynamic lenses', () => {
       autoContext: false,
     })
 
-    const res = await cmd.audit(created.id, projectPath, {})
+    const res = await fixture.cmd.audit(created.id, fixture.projectPath, {})
     expect(res.success).toBe(true)
 
     const lenses =
-      (await specService.get(projectPath, created.id))?.content.selected_reviewers ?? []
+      (await specService.get(fixture.projectPath, created.id))?.content.selected_reviewers ?? []
     expect(lenses).toContain('architecture')
     expect(lenses).toContain('security')
     expect(lenses).toContain('data')
@@ -85,80 +93,82 @@ describe('prjct spec audit — dynamic lenses', () => {
   })
 
   test('--lenses override persists exactly the given set', async () => {
-    const created = await specService.create(projectPath, {
+    const created = await specService.create(fixture.projectPath, {
       title: 'doc tweak',
       content: { goal: 'Clarify the README intro' },
       autoContext: false,
     })
 
-    await cmd.audit(created.id, projectPath, { lenses: 'architecture' })
-    expect((await specService.get(projectPath, created.id))?.content.selected_reviewers).toEqual([
-      'architecture',
-    ])
+    await fixture.cmd.audit(created.id, fixture.projectPath, { lenses: 'architecture' })
+    expect(
+      (await specService.get(fixture.projectPath, created.id))?.content.selected_reviewers
+    ).toEqual(['architecture'])
   })
 
   test('a single-lens spec auto-promotes after ONE passing review', async () => {
-    const created = await specService.create(projectPath, {
+    const created = await specService.create(fixture.projectPath, {
       title: 'trivial',
       content: { goal: 'Fix a typo in the README' },
       autoContext: false,
     })
 
-    await cmd.audit(created.id, projectPath, {}) // baseline → ['architecture']
-    expect((await specService.get(projectPath, created.id))?.status).toBe('draft')
+    await fixture.cmd.audit(created.id, fixture.projectPath, {}) // baseline → ['architecture']
+    expect((await specService.get(fixture.projectPath, created.id))?.status).toBe('draft')
 
-    const res = await cmd.recordReview(created.id, projectPath, {
+    const res = await fixture.cmd.recordReview(created.id, fixture.projectPath, {
       reviewer: 'architecture',
       verdict: 'pass',
       notes: 'feasible',
     })
     expect(res.success).toBe(true)
-    expect((await specService.get(projectPath, created.id))?.status).toBe('reviewed')
+    expect((await specService.get(fixture.projectPath, created.id))?.status).toBe('reviewed')
   })
 
   test('open-vocab lens (security) is accepted and counts toward the gate', async () => {
-    const created = await specService.create(projectPath, {
+    const created = await specService.create(fixture.projectPath, {
       title: 'auth change',
       content: { goal: 'Add token auth to the api', scope: ['core/auth/x.ts'] },
       autoContext: false,
     })
 
-    await cmd.audit(created.id, projectPath, { lenses: 'security' })
-    const res = await cmd.recordReview(created.id, projectPath, {
+    await fixture.cmd.audit(created.id, fixture.projectPath, { lenses: 'security' })
+    const res = await fixture.cmd.recordReview(created.id, fixture.projectPath, {
       reviewer: 'security',
       verdict: 'pass',
       notes: 'threat model ok',
     })
     expect(res.success).toBe(true)
-    expect((await specService.get(projectPath, created.id))?.status).toBe('reviewed')
+    expect((await specService.get(fixture.projectPath, created.id))?.status).toBe('reviewed')
   })
 
   test('does not promote until ALL selected lenses pass', async () => {
-    const created = await specService.create(projectPath, {
+    const created = await specService.create(fixture.projectPath, {
       title: 'multi lens',
       content: { goal: 'Add token auth and a DB migration', scope: ['core/auth/x.ts'] },
       autoContext: false,
     })
-    await cmd.audit(created.id, projectPath, { lenses: 'architecture,security,data' })
+    await fixture.cmd.audit(created.id, fixture.projectPath, {
+      lenses: 'architecture,security,data',
+    })
 
-    await cmd.recordReview(created.id, projectPath, {
+    await fixture.cmd.recordReview(created.id, fixture.projectPath, {
       reviewer: 'architecture',
       verdict: 'pass',
       notes: 'ok',
     })
-    await cmd.recordReview(created.id, projectPath, {
+    await fixture.cmd.recordReview(created.id, fixture.projectPath, {
       reviewer: 'security',
       verdict: 'pass',
       notes: 'ok',
     })
     // data not yet recorded → still draft
-    expect((await specService.get(projectPath, created.id))?.status).toBe('draft')
+    expect((await specService.get(fixture.projectPath, created.id))?.status).toBe('draft')
 
-    await cmd.recordReview(created.id, projectPath, {
+    await fixture.cmd.recordReview(created.id, fixture.projectPath, {
       reviewer: 'data',
       verdict: 'pass',
       notes: 'ok',
     })
-    expect((await specService.get(projectPath, created.id))?.status).toBe('reviewed')
+    expect((await specService.get(fixture.projectPath, created.id))?.status).toBe('reviewed')
   })
 })

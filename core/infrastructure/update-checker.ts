@@ -72,16 +72,16 @@ class UpdateChecker {
       }
 
       const req = https.request(options, (res) => {
-        let data = ''
+        const chunks: string[] = []
 
         res.on('data', (chunk) => {
-          data += chunk
+          chunks.push(String(chunk))
         })
 
         res.on('end', () => {
           try {
             if (res.statusCode === 200) {
-              const packageData = JSON.parse(data)
+              const packageData = JSON.parse(chunks.join(''))
               const version =
                 typeof packageData.version === 'string' ? packageData.version.trim() : ''
               if (!/^\d+\.\d+\.\d+/.test(version)) {
@@ -119,15 +119,11 @@ class UpdateChecker {
     const parts1 = v1.split('.').map(Number)
     const parts2 = v2.split('.').map(Number)
 
-    for (let i = 0; i < 3; i++) {
-      const part1 = parts1[i] || 0
-      const part2 = parts2[i] || 0
-
-      if (part1 > part2) return 1
-      if (part1 < part2) return -1
-    }
-
-    return 0
+    return (
+      [0, 1, 2]
+        .map((index) => Math.sign((parts1[index] || 0) - (parts2[index] || 0)))
+        .find((comparison) => comparison !== 0) ?? 0
+    )
   }
 
   /**
@@ -245,13 +241,11 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 function compareSemver(a: string, b: string): number {
   const pa = a.split('.').map(Number)
   const pb = b.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    const x = pa[i] || 0
-    const y = pb[i] || 0
-    if (x > y) return 1
-    if (x < y) return -1
-  }
-  return 0
+  return (
+    [0, 1, 2]
+      .map((index) => Math.sign((pa[index] || 0) - (pb[index] || 0)))
+      .find((comparison) => comparison !== 0) ?? 0
+  )
 }
 
 function readCacheSync(): { lastCheck: number; latestVersion: string } | null {

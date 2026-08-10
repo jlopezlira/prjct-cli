@@ -84,34 +84,33 @@ export class ContextDiscovery {
 }
 
 function parseSections(content: string): ContextSection[] {
-  const sections: ContextSection[] = []
-  let current: ContextSection | null = null
-  let buf: string[] = []
-
-  for (const line of content.split('\n')) {
-    const headerMatch = line.match(/^##\s+(.+)$/)
-    if (headerMatch) {
-      if (current) {
-        current.content = buf.join('\n').trim()
-        sections.push(current)
+  type ParseState = { sections: ContextSection[]; current: ContextSection | null; lines: string[] }
+  const parsed = content.split('\n').reduce<ParseState>(
+    (state, line) => {
+      const headerMatch = line.match(/^##\s+(.+)$/)
+      if (headerMatch) {
+        const sections = state.current
+          ? [...state.sections, { ...state.current, content: state.lines.join('\n').trim() }]
+          : state.sections
+        const name = headerMatch[1]
+        return {
+          sections,
+          current: {
+            name: name.replace(/@override|\(override\)/gi, '').trim(),
+            content: '',
+            override: name.includes('@override') || name.includes('(override)'),
+          },
+          lines: [],
+        }
       }
-      const name = headerMatch[1]
-      current = {
-        name: name.replace(/@override|\(override\)/gi, '').trim(),
-        content: '',
-        override: name.includes('@override') || name.includes('(override)'),
-      }
-      buf = []
-    } else if (current) {
-      buf.push(line)
-    }
-  }
-
-  if (current) {
-    current.content = buf.join('\n').trim()
-    sections.push(current)
-  }
-  return sections
+      if (state.current) state.lines.push(line)
+      return state
+    },
+    { sections: [], current: null, lines: [] }
+  )
+  return parsed.current
+    ? [...parsed.sections, { ...parsed.current, content: parsed.lines.join('\n').trim() }]
+    : parsed.sections
 }
 
 function mergeChain(chain: NestedContext[]): ResolvedContext {

@@ -71,18 +71,11 @@ class HooksService {
     const strategy = options.strategy || selectStrategy(detected)
 
     try {
-      let success = false
-      switch (strategy) {
-        case 'lefthook':
-          success = await installLefthook(projectPath, hooks)
-          break
-        case 'husky':
-          success = await installHusky(projectPath, hooks)
-          break
-        case 'direct':
-          success = await installDirect(projectPath, hooks)
-          break
-      }
+      const success = await (strategy === 'lefthook'
+        ? installLefthook(projectPath, hooks)
+        : strategy === 'husky'
+          ? installHusky(projectPath, hooks)
+          : installDirect(projectPath, hooks))
 
       if (success) {
         await this.saveHookConfig(projectPath, {
@@ -109,18 +102,11 @@ class HooksService {
       const config = await this.getHookConfig(projectPath)
       const strategy = config?.strategy || 'direct'
 
-      let success = false
-      switch (strategy) {
-        case 'lefthook':
-          success = await uninstallLefthook(projectPath)
-          break
-        case 'husky':
-          success = await uninstallHusky(projectPath)
-          break
-        case 'direct':
-          success = await uninstallDirect(projectPath)
-          break
-      }
+      const success = await (strategy === 'lefthook'
+        ? uninstallLefthook(projectPath)
+        : strategy === 'husky'
+          ? uninstallHusky(projectPath)
+          : uninstallDirect(projectPath))
 
       if (success) {
         await this.saveHookConfig(projectPath, { enabled: false, strategy, hooks: [] })

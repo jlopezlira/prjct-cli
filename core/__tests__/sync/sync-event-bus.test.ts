@@ -19,9 +19,15 @@ import { syncEventBus } from '../../events/sync-events'
 import prjctDb from '../../storage/database'
 import type { SyncEvent } from '../../types/events'
 
-let projectId: string
-let tempProjectsDir: string
-let originalProjectsDir: string | undefined
+const fixture: {
+  projectId: string
+  tempProjectsDir: string
+  originalProjectsDir: string | undefined
+} = {
+  projectId: '',
+  tempProjectsDir: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+}
 
 function makeEvent(type: string, overrides: Partial<SyncEvent> = {}): SyncEvent {
   return {
@@ -29,30 +35,30 @@ function makeEvent(type: string, overrides: Partial<SyncEvent> = {}): SyncEvent 
     path: ['queue'],
     data: {},
     timestamp: '2026-04-17T00:00:00Z',
-    projectId,
+    projectId: fixture.projectId,
     ...overrides,
   }
 }
 
 describe('SyncEventBus.publish', () => {
   beforeEach(async () => {
-    tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sync-event-bus-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
-    projectId = `sync-event-bus-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    fixture.tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sync-event-bus-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = fixture.tempProjectsDir
+    fixture.projectId = `sync-event-bus-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     // Trigger migrations
-    prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+    prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
   })
 
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-    await fs.rm(tempProjectsDir, { recursive: true, force: true })
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+    await fs.rm(fixture.tempProjectsDir, { recursive: true, force: true })
   })
 
   it('round-trips a published event through getPending', async () => {
     await syncEventBus.publish(makeEvent('queue.task_added'))
-    const pending = await syncEventBus.getPending(projectId)
+    const pending = await syncEventBus.getPending(fixture.projectId)
     expect(pending).toHaveLength(1)
     expect(pending[0].type).toBe('queue.task_added')
   })
@@ -60,10 +66,10 @@ describe('SyncEventBus.publish', () => {
   it('clearPending drains the queue', async () => {
     await syncEventBus.publish(makeEvent('queue.task_added'))
     await syncEventBus.publish(makeEvent('queue.task_removed'))
-    expect((await syncEventBus.getPending(projectId)).length).toBe(2)
+    expect((await syncEventBus.getPending(fixture.projectId)).length).toBe(2)
 
-    await syncEventBus.clearPending(projectId)
-    expect(await syncEventBus.getPending(projectId)).toEqual([])
+    await syncEventBus.clearPending(fixture.projectId)
+    expect(await syncEventBus.getPending(fixture.projectId)).toEqual([])
   })
 
   it('parallel publishes do not lose events', async () => {
@@ -79,7 +85,7 @@ describe('SyncEventBus.publish', () => {
         )
       )
     )
-    const pending = await syncEventBus.getPending(projectId)
+    const pending = await syncEventBus.getPending(fixture.projectId)
     expect(pending.length).toBe(N)
   })
 })

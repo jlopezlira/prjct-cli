@@ -15,7 +15,6 @@ function mockProvider(
   script: Array<(opts: LlmGenerateOptions) => ChatCompletionResult>,
   profile?: Partial<LlmProfile>
 ): LlmProvider {
-  let i = 0
   const p: LlmProfile = {
     name: 'mock',
     wire: 'openai-compatible',
@@ -24,11 +23,12 @@ function mockProvider(
     model: 'mock-model',
     ...profile,
   }
+  const calls: LlmGenerateOptions[] = []
   return {
     profile: p,
     async generate(opts: LlmGenerateOptions) {
-      const fn = script[i] ?? script[script.length - 1]
-      i++
+      const fn = script[calls.length] ?? script[script.length - 1]
+      calls.push(opts)
       return fn!(opts)
     },
   }

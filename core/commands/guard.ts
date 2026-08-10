@@ -58,12 +58,13 @@ export class GuardCommands extends PrjctCommandsBase {
     if (!guard.ok) return guard.result
 
     const limit = typeof options.limit === 'number' && options.limit > 0 ? options.limit : 3
-    let hits: MemoryEntry[]
-    try {
-      hits = projectMemory.recallForFile(guard.value, file, limit)
-    } catch {
-      hits = []
-    }
+    const hits: MemoryEntry[] = (() => {
+      try {
+        return projectMemory.recallForFile(guard.value, file, limit)
+      } catch {
+        return []
+      }
+    })()
 
     // Push-path ship attribution (see surface-attribution.ts): a guard
     // that surfaced a trap during a task that ships earned its keep.
@@ -76,17 +77,12 @@ export class GuardCommands extends PrjctCommandsBase {
     const base = file.split('/').pop() ?? file
 
     // World-model impact: related files via import/co-change (best-effort).
-    let impactBlock = ''
-    let impactLine = ''
-    try {
-      const { breakImpact, formatImpactMd } = await import('../services/world-model-impact')
-      const impact = breakImpact(guard.value, [file], 6)
-      impactBlock = formatImpactMd(impact)
-      impactLine = impact.line
-    } catch {
-      impactBlock = ''
-      impactLine = ''
-    }
+    const { impactBlock, impactLine } = await import('../services/world-model-impact')
+      .then(({ breakImpact, formatImpactMd }) => {
+        const impact = breakImpact(guard.value, [file], 6)
+        return { impactBlock: formatImpactMd(impact), impactLine: impact.line }
+      })
+      .catch(() => ({ impactBlock: '', impactLine: '' }))
 
     if (hits.length === 0) {
       const msg = `No preventive memory recorded against \`${base}\` — clear to edit.`
@@ -118,9 +114,9 @@ export class GuardCommands extends PrjctCommandsBase {
       out.info(
         `⚠ ${hits.length} preventive memory entr${hits.length === 1 ? 'y' : 'ies'} for ${base}:`
       )
-      for (const e of hits) {
+      for (const e2 of hits) {
         out.info(
-          `  • [${preventiveLabel(e)}] ${deriveTitle(e)} — ${flatDetail(e.content, 120)} (${e.id})`
+          `  • [${preventiveLabel(e2)}] ${deriveTitle(e2)} — ${flatDetail(e2.content, 120)} (${e2.id})`
         )
       }
       if (impactLine) out.info(impactLine)
@@ -142,20 +138,25 @@ export class GuardCommands extends PrjctCommandsBase {
     const guard = await requireProject(projectPath, options)
     if (!guard.ok) return guard.result
 
-    let files: string[] = []
-    try {
-      const { execFileAsync } = await import('../utils/exec')
-      const r = await execFileAsync('git', ['diff', '--name-only', range], {
-        cwd: projectPath,
-        timeout: 10000,
-      })
-      files = r.stdout.split('\n').filter(Boolean)
-    } catch (error) {
-      const msg = `Could not diff \`${range}\`: ${error instanceof Error ? error.message.split('\n')[0] : 'git error'}`
+    const diffResult = await (async () => {
+      try {
+        const { execFileAsync } = await import('../utils/exec')
+        const r = await execFileAsync('git', ['diff', '--name-only', range], {
+          cwd: projectPath,
+          timeout: 10000,
+        })
+        return { ok: true as const, files: r.stdout.split('\n').filter(Boolean) }
+      } catch (error) {
+        return { ok: false as const, error }
+      }
+    })()
+    if (!diffResult.ok) {
+      const msg = `Could not diff \`${range}\`: ${diffResult.error instanceof Error ? diffResult.error.message.split('\n')[0] : 'git error'}`
       if (options.md) console.log(`> ${msg}`)
       else out.fail(msg)
       return { success: false, error: 'git diff failed' }
     }
+    const { files } = diffResult
     if (files.length === 0) {
       const msg = `No files changed in \`${range}\` — nothing to guard.`
       if (options.md) console.log(`> ${msg}`)
@@ -167,14 +168,15 @@ export class GuardCommands extends PrjctCommandsBase {
     const findings: Array<{ file: string; entry: MemoryEntry }> = []
     const surfacedIds: string[] = []
     for (const file of files) {
-      let hits: MemoryEntry[] = []
-      try {
-        hits = projectMemory.recallForFile(guard.value, file, perFileLimit, {
-          preventiveOnly: true,
-        })
-      } catch {
-        hits = []
-      }
+      const hits: MemoryEntry[] = (() => {
+        try {
+          return projectMemory.recallForFile(guard.value, file, perFileLimit, {
+            preventiveOnly: true,
+          })
+        } catch {
+          return []
+        }
+      })()
       for (const entry of hits) {
         findings.push({ file, entry })
         surfacedIds.push(entry.id)
@@ -196,17 +198,17 @@ export class GuardCommands extends PrjctCommandsBase {
         `Preventive memory matched ${new Set(findings.map((f) => f.file)).size} of ${files.length} changed file(s):`,
         '',
       ]
-      for (const f of findings) {
+      for (const f2 of findings) {
         lines.push(
-          `- \`${f.file}\` — [${preventiveLabel(f.entry)}] ${deriveTitle(f.entry)} — ${flatDetail(f.entry.content, 140)} (\`${f.entry.id}\`)`
+          `- \`${f2.file}\` — [${preventiveLabel(f2.entry)}] ${deriveTitle(f2.entry)} — ${flatDetail(f2.entry.content, 140)} (\`${f2.entry.id}\`)`
         )
       }
       lines.push('', 'Resolve any id with `prjct search <id>`.')
       console.log(lines.join('\n'))
     } else {
       out.info(`⚠ ${findings.length} known trap(s) across ${files.length} changed file(s):`)
-      for (const f of findings) {
-        out.info(`  • ${f.file} — ${deriveTitle(f.entry)} (${f.entry.id})`)
+      for (const f3 of findings) {
+        out.info(`  • ${f3.file} — ${deriveTitle(f3.entry)} (${f3.entry.id})`)
       }
     }
 

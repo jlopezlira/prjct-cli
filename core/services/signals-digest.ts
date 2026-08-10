@@ -90,10 +90,10 @@ export function buildSignalsFile(
     // Newest entry per file leads; older churn entries for the same
     // file stay listed but compactly.
     const byFile = new Map<string, MemoryEntry[]>()
-    for (const e of hotFiles) {
-      const file = e.tags?.file ?? '(unknown file)'
+    for (const e2 of hotFiles) {
+      const file = e2.tags?.file ?? '(unknown file)'
       const bucket = byFile.get(file) ?? []
-      bucket.push(e)
+      bucket.push(e2)
       byFile.set(file, bucket)
     }
     const rows: string[] = []

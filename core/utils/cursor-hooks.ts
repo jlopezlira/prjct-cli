@@ -183,17 +183,17 @@ function handlerFor(map: CursorHookMap): CursorHookHandler {
 
 function pruneOrphans(hooks: Record<string, CursorHookHandler[]>): number {
   const valid = new Set(cursorHookMaps().map((m) => m.name))
-  let pruned = 0
+  const pruned: CursorHookHandler[] = []
   for (const event of Object.keys(hooks)) {
     hooks[event] = (hooks[event] ?? []).filter((h) => {
       if (!isPrjctHandler(h) && !isLegacyPrjctHandler(h)) return true
       if (h.name && valid.has(h.name)) return true
-      pruned++
+      pruned.push(h)
       return false
     })
     if (hooks[event].length === 0) delete hooks[event]
   }
-  return pruned
+  return pruned.length
 }
 
 /**
@@ -204,8 +204,8 @@ export async function installCursorHooks(
 ): Promise<CursorHooksInstallResult> {
   const file = await readHooksFile(hooksPath)
   const hooks: Record<string, CursorHookHandler[]> = { ...(file.hooks ?? {}) }
-  let hooksWritten = 0
-  let alreadyPresent = 0
+  const written: CursorHookMap[] = []
+  const present: CursorHookMap[] = []
 
   for (const map of cursorHookMaps()) {
     const list = hooks[map.cursorEvent] ?? []
@@ -228,14 +228,14 @@ export async function installCursorHooks(
         existing.matcher === desired.matcher &&
         existing.timeout === desired.timeout
       ) {
-        alreadyPresent++
+        present.push(map)
       } else {
         cleaned[idx] = { ...existing, ...desired }
-        hooksWritten++
+        written.push(map)
       }
     } else {
       cleaned.push(desired)
-      hooksWritten++
+      written.push(map)
     }
     hooks[map.cursorEvent] = cleaned
   }
@@ -244,7 +244,12 @@ export async function installCursorHooks(
   file.version = 1
   file.hooks = hooks
   await writeHooksFile(hooksPath, file)
-  return { hooksPath, hooksWritten, alreadyPresent, hooksPruned }
+  return {
+    hooksPath,
+    hooksWritten: written.length,
+    alreadyPresent: present.length,
+    hooksPruned,
+  }
 }
 
 export async function uninstallCursorHooks(
@@ -253,12 +258,12 @@ export async function uninstallCursorHooks(
   const file = await readHooksFile(hooksPath)
   if (!file.hooks) return { hooksPath, hooksRemoved: 0 }
 
-  let hooksRemoved = 0
+  const removed: CursorHookHandler[] = []
   for (const event of Object.keys(file.hooks)) {
     const before = file.hooks[event]?.length ?? 0
     file.hooks[event] = (file.hooks[event] ?? []).filter((h) => {
       if (isPrjctHandler(h) || isLegacyPrjctHandler(h)) {
-        hooksRemoved++
+        removed.push(h)
         return false
       }
       return true
@@ -268,7 +273,7 @@ export async function uninstallCursorHooks(
   }
   if (Object.keys(file.hooks).length === 0) delete file.hooks
   await writeHooksFile(hooksPath, file)
-  return { hooksPath, hooksRemoved }
+  return { hooksPath, hooksRemoved: removed.length }
 }
 
 export async function cursorHooksStatus(hooksPath = getCursorHooksJsonPath()): Promise<{
@@ -277,11 +282,8 @@ export async function cursorHooksStatus(hooksPath = getCursorHooksJsonPath()): P
   path: string
 }> {
   const file = await readHooksFile(hooksPath)
-  let installed = 0
-  for (const list of Object.values(file.hooks ?? {})) {
-    for (const h of list) {
-      if (isPrjctHandler(h) || isLegacyPrjctHandler(h)) installed++
-    }
-  }
+  const installed = Object.values(file.hooks ?? {})
+    .flat()
+    .filter((handler) => isPrjctHandler(handler) || isLegacyPrjctHandler(handler)).length
   return { installed, expected: cursorHookMaps().length, path: hooksPath }
 }

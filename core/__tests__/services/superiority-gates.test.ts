@@ -319,35 +319,40 @@ describe('drift refresh — not warn-forever', () => {
 })
 
 describe('retention living-loop — noisy vault shrinks on apply', () => {
-  let tmpRoot: string
-  let projectId: string
+  const fixture: {
+    tmpRoot: string
+    projectId: string
+  } = {
+    tmpRoot: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sup-ret-'))
-    projectId = `test-sup-ret-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    patchPathManager(tmpRoot)
-    prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sup-ret-'))
+    fixture.projectId = `test-sup-ret-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    patchPathManager(fixture.tmpRoot)
+    prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
   })
 
   afterEach(async () => {
     restorePathManager()
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
   })
 
   it('auto-source cap trims live noise and vaultHealth reports inventory', () => {
     const now = Date.now()
     // Seed many auto-source context rows (noise) — source lives in tags.
     // IDs must be mem_<digits> so projectMemory.forget can remove them.
-    for (let i = 0; i < 25; i++) {
+    for (const i of Array.from({ length: 25 }, (_, index) => index)) {
       const id = `mem_${9100 + i}`
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         `INSERT INTO memory_entries (
           id, project_id, type, title, content, provenance, content_hash,
           user_triggered, revision_count, created_at, updated_at, deleted_at
         ) VALUES (?, ?, 'context', ?, ?, 'extracted', ?, 0, 0, ?, ?, NULL)`,
         id,
-        projectId,
+        fixture.projectId,
         `auto noise ${i}`,
         `auto-generated noise content row ${i} for retention living-loop superiority fixture xx`,
         `hash_noise_${i}`,
@@ -355,7 +360,7 @@ describe('retention living-loop — noisy vault shrinks on apply', () => {
         now - i * 1000
       )
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         'INSERT INTO memory_entry_tags (entry_id, key, value, is_machine) VALUES (?, ?, ?, 0)',
         id,
         'source',
@@ -364,13 +369,13 @@ describe('retention living-loop — noisy vault shrinks on apply', () => {
     }
     // One declared decision must survive
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO memory_entries (
         id, project_id, type, title, content, provenance, content_hash,
         user_triggered, revision_count, created_at, updated_at, deleted_at
       ) VALUES (?, ?, 'decision', ?, ?, 'declared', ?, 1, 0, ?, ?, NULL)`,
       'mem_9199',
-      projectId,
+      fixture.projectId,
       'keep me',
       'important decision that retention must not delete under type floor',
       'hash_keep',
@@ -379,18 +384,18 @@ describe('retention living-loop — noisy vault shrinks on apply', () => {
     )
 
     expect(isAutoSource('pattern-detector-auto')).toBe(true)
-    const before = vaultHealth(projectId)
+    const before = vaultHealth(fixture.projectId)
     expect(before.live).toBeGreaterThanOrEqual(26)
 
-    const trimmed = trimAutoSourceCap(projectId, 20)
+    const trimmed = trimAutoSourceCap(fixture.projectId, 20)
     expect(trimmed).toBeGreaterThan(0)
 
-    const after = vaultHealth(projectId)
+    const after = vaultHealth(fixture.projectId)
     // Soft-delete reduces "live" count
     expect(after.live).toBeLessThan(before.live)
 
     // Full apply path still runs without throwing
-    const applied = applyRetention(projectId, {
+    const applied = applyRetention(fixture.projectId, {
       dryRun: false,
       maxArchive: 50,
       maxDelete: 20,
@@ -400,7 +405,7 @@ describe('retention living-loop — noisy vault shrinks on apply', () => {
     expect(typeof applied.archived).toBe('number')
 
     // vault health line (same shape sync --md prints from retention phase)
-    const health = vaultHealth(projectId)
+    const health = vaultHealth(fixture.projectId)
     // eslint-disable-next-line no-console
     console.log(
       `vault health live=${health.live} softDeleted=${health.softDeleted} archives=${health.archives} autoSourceLive=${health.autoSourceLive}`
@@ -436,7 +441,7 @@ describe('retention living-loop — noisy vault shrinks on apply', () => {
     expect(living.line).toMatch(/tip→user|SoT|BINDING/i)
 
     // Prompt topical cue SoT (UserPromptSubmit surface)
-    const cue = buildTopicalCue(projectId, 'important decision type floor retention')
+    const cue = buildTopicalCue(fixture.projectId, 'important decision type floor retention')
     // eslint-disable-next-line no-console
     console.log(`prompt cue: ${cue ?? '(null — may miss FTS if decision not indexed)'}`)
     // Decision may not be FTS-indexed if only SQL-inserted; living/work lines already prove tip→user.

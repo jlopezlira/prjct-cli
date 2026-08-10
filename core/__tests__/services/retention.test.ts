@@ -23,8 +23,13 @@ import { usefulnessService } from '../../services/usefulness'
 import prjctDb from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
 
 const NOW = Date.parse('2026-07-10T00:00:00.000Z')
 const DAY = 86_400_000
@@ -53,15 +58,15 @@ const inputs = (over: Partial<RetentionInputs>): RetentionInputs => ({
 })
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-retention-'))
-  projectId = `test-retention-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  patchPathManager(tmpRoot)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0') // force migrations
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-retention-'))
+  fixture.projectId = `test-retention-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  patchPathManager(fixture.tmpRoot)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0') // force migrations
 })
 
 afterEach(async () => {
   restorePathManager()
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('scoreEntry — verdicts', () => {
@@ -199,63 +204,63 @@ describe('shouldEmbedEntry', () => {
 
 describe('evaluateRetention — end to end over storage', () => {
   it('scores real entries and dry-run mutates nothing', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'we chose SQLite as the single source of truth',
-      projectId,
+      projectId: fixture.projectId,
     })
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'context',
       content: 'short blob',
-      projectId,
+      projectId: fixture.projectId,
     })
-    const before = projectMemory.allEntriesForIndex(projectId).length
+    const before = projectMemory.allEntriesForIndex(fixture.projectId).length
     expect(before).toBeGreaterThanOrEqual(2)
 
-    const report = evaluateRetention(projectId, NOW)
+    const report = evaluateRetention(fixture.projectId, NOW)
     expect(report.evaluated).toBe(before)
     expect(report.active + report.archive + report.delete).toBe(report.evaluated)
     expect(report.byId.size).toBe(before)
 
-    const dry = applyRetention(projectId, { dryRun: true, nowMs: NOW })
+    const dry = applyRetention(fixture.projectId, { dryRun: true, nowMs: NOW })
     expect(dry.dryRun).toBe(true)
     expect(dry.archived + dry.deleted).toBe(0)
-    expect(projectMemory.allEntriesForIndex(projectId)).toHaveLength(before)
+    expect(projectMemory.allEntriesForIndex(fixture.projectId)).toHaveLength(before)
   })
 
   it('apply soft-deletes delete-verdict noise, floors protected types', async () => {
     // Force old noise via raw insert so we control rememberedAt
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO memory_entries (
         id, project_id, type, title, content, provenance, content_hash,
         user_triggered, revision_count, created_at, updated_at, deleted_at
       ) VALUES (?, ?, 'improvement-signal', 'noise', ?, 'extracted', ?, 0, 0, ?, ?, NULL)`,
       'mem_999001',
-      projectId,
+      fixture.projectId,
       'generated detector noise that should be deletable after retention',
       'hash-noise-1',
       NOW - 200 * DAY,
       NOW - 200 * DAY
     )
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO memory_entries (
         id, project_id, type, title, content, provenance, content_hash,
         user_triggered, revision_count, created_at, updated_at, deleted_at
       ) VALUES (?, ?, 'decision', 'old dec', ?, 'declared', ?, 0, 0, ?, ?, NULL)`,
       'mem_999002',
-      projectId,
+      fixture.projectId,
       'an ancient unused decision that is still protected knowledge for the project',
       'hash-dec-1',
       NOW - 400 * DAY,
       NOW - 400 * DAY
     )
 
-    const applied = applyRetention(projectId, { nowMs: NOW, maxArchive: 50, maxDelete: 50 })
+    const applied = applyRetention(fixture.projectId, { nowMs: NOW, maxArchive: 50, maxDelete: 50 })
     expect(applied.dryRun).toBe(false)
     // Noise path should be gone or counted in deleted
-    const remaining = projectMemory.allEntriesForIndex(projectId)
+    const remaining = projectMemory.allEntriesForIndex(fixture.projectId)
     const noiseStill = remaining.find((e) => e.id === 'mem_999001')
     // delete soft-deletes → not in allEntriesForIndex
     expect(noiseStill).toBeUndefined()
@@ -272,7 +277,7 @@ describe('evaluateRetention — end to end over storage', () => {
   it('archives ship_* rows via forgetShippedFeature (live shipped_features delete)', async () => {
     const shipA = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO shipped_features (id, name, shipped_at, version, description, type, duration, data)
        VALUES (?, ?, ?, ?, NULL, 'feature', NULL, ?)`,
       shipA,
@@ -283,28 +288,28 @@ describe('evaluateRetention — end to end over storage', () => {
     )
 
     const liveBefore = projectMemory
-      .allEntriesForIndex(projectId)
+      .allEntriesForIndex(fixture.projectId)
       .filter((e) => e.id === `ship_${shipA}`)
     expect(liveBefore).toHaveLength(1)
 
     const { forgetShippedFeature } = await import('../../services/retention')
-    expect(forgetShippedFeature(projectId, `ship_${shipA}`)).toBe(true)
+    expect(forgetShippedFeature(fixture.projectId, `ship_${shipA}`)).toBe(true)
 
     const gone = prjctDb.get<{ id: string }>(
-      projectId,
+      fixture.projectId,
       'SELECT id FROM shipped_features WHERE id = ?',
       shipA
     )
     expect(gone).toBeNull()
     const liveAfter = projectMemory
-      .allEntriesForIndex(projectId)
+      .allEntriesForIndex(fixture.projectId)
       .filter((e) => e.id === `ship_${shipA}`)
     expect(liveAfter).toHaveLength(0)
 
     // applyRetention forget path must also succeed for ship_* ids
     const shipB = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO shipped_features (id, name, shipped_at, version, description, type, duration, data)
        VALUES (?, ?, ?, ?, NULL, 'feature', NULL, ?)`,
       shipB,
@@ -316,21 +321,21 @@ describe('evaluateRetention — end to end over storage', () => {
     // Soft-path: call forgetEntry indirectly by applying when ship scores archive.
     // Force archive by soft-deleting via apply with a ship that is exact-dup of itself
     // is hard — assert forget path through forgetShippedFeature is wired for apply:
-    expect(forgetShippedFeature(projectId, `ship_${shipB}`)).toBe(true)
+    expect(forgetShippedFeature(fixture.projectId, `ship_${shipB}`)).toBe(true)
   })
 
   it('capture-time dedup already collapses verbatim repeats', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'context',
       content: 'Session close: identical text captured twice by a retry',
-      projectId,
+      projectId: fixture.projectId,
     })
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'context',
       content: 'Session close: identical text captured twice by a retry',
-      projectId,
+      projectId: fixture.projectId,
     })
-    expect(projectMemory.allEntriesForIndex(projectId)).toHaveLength(1)
+    expect(projectMemory.allEntriesForIndex(fixture.projectId)).toHaveLength(1)
   })
 
   it('collectDuplicateIds flags the older copy only', () => {
@@ -348,34 +353,34 @@ describe('evaluateRetention — end to end over storage', () => {
   })
 
   it('usefulness credit from the ledger flows into the score', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'gotcha',
       content: 'daemon holds RW handles over prjct.db during sync',
-      projectId,
+      projectId: fixture.projectId,
     })
-    const [e] = projectMemory.allEntriesForIndex(projectId)
-    usefulnessService.recordFetch(projectId, e.id, new Date(NOW).toISOString())
+    const [e] = projectMemory.allEntriesForIndex(fixture.projectId)
+    usefulnessService.recordFetch(fixture.projectId, e.id, new Date(NOW).toISOString())
 
-    const withCredit = collectRetentionInputs(projectId, NOW)
+    const withCredit = collectRetentionInputs(fixture.projectId, NOW)
     expect(withCredit.usefulness.get(e.id) ?? 0).toBeGreaterThan(0)
   })
 
   it('triageInbox merges fingerprint duplicates of knowledge', async () => {
     const body = 'unique knowledge text for inbox merge test case xyz'
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: body,
-      projectId,
+      projectId: fixture.projectId,
     })
     // Insert inbox with same content (bypass capture dedup by different type path)
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO memory_entries (
         id, project_id, type, title, content, provenance, content_hash,
         user_triggered, revision_count, created_at, updated_at, deleted_at
       ) VALUES (?, ?, 'inbox', 'inbox', ?, 'declared', ?, 0, 0, ?, ?, NULL)`,
       'mem_888001',
-      projectId,
+      fixture.projectId,
       body,
       'hash-inbox-same', // different hash so both exist; triage uses content fingerprint
       NOW,
@@ -383,12 +388,16 @@ describe('evaluateRetention — end to end over storage', () => {
     )
     // Fix content_hash to match fingerprint path — triage uses memoryFingerprint(content)
     // so same content is enough regardless of hash column.
-    const before = projectMemory.allEntriesForIndex(projectId).filter((e) => e.type === 'inbox')
+    const before = projectMemory
+      .allEntriesForIndex(fixture.projectId)
+      .filter((e) => e.type === 'inbox')
     expect(before.length).toBeGreaterThanOrEqual(1)
-    const result = triageInbox(projectId, NOW)
+    const result = triageInbox(fixture.projectId, NOW)
     expect(result.merged + result.archived).toBeGreaterThanOrEqual(0)
     // If fingerprint matched non-inbox, inbox should be gone
-    const after = projectMemory.allEntriesForIndex(projectId).filter((e) => e.id === 'mem_888001')
+    const after = projectMemory
+      .allEntriesForIndex(fixture.projectId)
+      .filter((e) => e.id === 'mem_888001')
     if (result.merged > 0) expect(after).toHaveLength(0)
   })
 })

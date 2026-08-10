@@ -27,11 +27,10 @@ function hashContent(content: string): string {
     return `xxh64:${Bun.hash(content).toString(36)}`
   }
   // Fallback: simple FNV-1a 32-bit hash (still fast, no crypto overhead)
-  let h = 0x811c9dc5
-  for (let i = 0; i < content.length; i++) {
-    h ^= content.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
-  }
+  const h = [...content].reduce(
+    (hash, character) => Math.imul(hash ^ character.charCodeAt(0), 0x01000193),
+    0x811c9dc5
+  )
   return `fnv1a:${(h >>> 0).toString(36)}`
 }
 

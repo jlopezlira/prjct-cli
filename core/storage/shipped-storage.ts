@@ -40,14 +40,14 @@ interface ShippedFeatureRow {
 
 /** Reconstruct a full `ShippedFeature` from a typed row + its cold `data` JSON. */
 function rowToFeature(row: ShippedFeatureRow): ShippedFeature {
-  let extra: Partial<ShippedFeature> = {}
-  if (row.data) {
+  const extra = (() => {
+    if (!row.data) return {}
     try {
-      extra = JSON.parse(row.data) as Partial<ShippedFeature>
+      return JSON.parse(row.data) as Partial<ShippedFeature>
     } catch {
-      extra = {}
+      return {}
     }
-  }
+  })()
   const feature: ShippedFeature = {
     ...extra,
     id: row.id,
@@ -226,19 +226,12 @@ class ShippedStorage extends StorageManager<ShippedJson> {
     period: 'week' | 'month' | 'year' = 'month'
   ): Promise<{ count: number; period: string }> {
     const now = new Date()
-    let startDate: Date
-
-    switch (period) {
-      case 'week':
-        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-        break
-      case 'month':
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-        break
-      case 'year':
-        startDate = new Date(now.getFullYear(), 0, 1)
-        break
-    }
+    const startDate =
+      period === 'week'
+        ? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+        : period === 'month'
+          ? new Date(now.getFullYear(), now.getMonth(), 1)
+          : new Date(now.getFullYear(), 0, 1)
 
     const shipped = await this.getByDateRange(projectId, startDate, now)
     return { count: shipped.length, period }

@@ -14,7 +14,7 @@
  * not an exact hash dup.
  */
 
-import type { MemoryEntry, MemoryType } from '../../memory/entries'
+import type { MemoryType } from '../../memory/entries'
 import { classifyCapturePrecision } from '../../memory/precision-classifier'
 import { projectMemory } from '../../memory/project-memory'
 import { isJunkCaptureContent } from '../capture-junk'
@@ -96,12 +96,14 @@ export function captureGate(
     return { accept: true, reason: 'judgment type — always accept novel content' }
   }
 
-  let entries: MemoryEntry[]
-  try {
-    entries = projectMemory.allEntriesForIndex(projectId)
-  } catch {
-    return { accept: true, reason: 'gate skipped (read failure)' }
-  }
+  const entries = (() => {
+    try {
+      return projectMemory.allEntriesForIndex(projectId)
+    } catch {
+      return null
+    }
+  })()
+  if (!entries) return { accept: true, reason: 'gate skipped (read failure)' }
 
   if (entries.length === 0) {
     return { accept: true, reason: 'empty vault — seed accepted' }

@@ -1,30 +1,19 @@
-/**
- * prjct CLI entry point
- *
- * Auto-setup on first use (like Astro, Vite, etc.)
- * Supports both Bun and Node.js runtimes.
- *
- * PERFORMANCE: Daemon fast path uses only node:fs + node:net (no heavy imports).
- * All other modules are loaded dynamically only when needed.
- * Static imports are FORBIDDEN here — ESM hoists them before any code runs.
- */
-
-// Performance: capture process start time (nanosecond precision)
-// Exposed via globalThis so core/index.ts can read it for startup time metrics
 ;(globalThis as Record<string, unknown>).__perfStartNs = process.hrtime.bigint()
 
 // === DAEMON FAST PATH ===
 // Only uses node builtins + daemon protocol/client — zero heavy imports.
 // If daemon handles the command, process.exit() skips all remaining code.
-let _fastArgs = process.argv.slice(2)
-let _fastCommand = _fastArgs.find((a) => !a.startsWith('--') && !a.startsWith('-'))
+const _initialFastArgs = process.argv.slice(2)
+const _initialFastCommand = _initialFastArgs.find(
+  (argument) => !argument.startsWith('--') && !argument.startsWith('-')
+)
 
 // M5: internal hook — `prjct __internal-auto-update <currentVersion>`
 // is invoked by the SessionStart hook as a detached child to perform a
 // silent update. Handled here BEFORE the heavy imports so the rest of
 // the CLI plumbing never loads in this child.
-if (_fastCommand === '__internal-auto-update') {
-  const currentVersion = _fastArgs[1] ?? ''
+if (_initialFastCommand === '__internal-auto-update') {
+  const currentVersion = _initialFastArgs[1] ?? ''
   try {
     const { runBackgroundCheck } = await import('../core/services/auto-updater')
     await runBackgroundCheck(currentVersion)
@@ -41,7 +30,7 @@ if (_fastCommand === '__internal-auto-update') {
 // per-project cliVersion migration over the whole projects dir) OFF the
 // user's critical path: this work took ~30s on machines with large project
 // dirs and used to stall the user's FIRST command after every upgrade.
-if (_fastCommand === '__post-upgrade') {
+if (_initialFastCommand === '__post-upgrade') {
   try {
     const { run: runSetup } = await import('../core/infrastructure/setup')
     await runSetup()
@@ -59,19 +48,17 @@ if (_fastCommand === '__post-upgrade') {
 // daemon. Returns whatever arrived if stdin never closes.
 async function readAllStdin(timeoutMs: number): Promise<string> {
   if (process.stdin.isTTY) return ''
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = []
-    let done = false
-    const finish = () => {
-      if (done) return
-      done = true
-      resolve(Buffer.concat(chunks).toString('utf-8'))
-    }
-    process.stdin.on('data', (c: Buffer) => chunks.push(Buffer.from(c)))
-    process.stdin.on('end', finish)
-    process.stdin.on('error', finish)
-    setTimeout(finish, timeoutMs)
+  const chunks: Buffer[] = []
+  const streamFinished = new Promise<void>((resolve) => {
+    process.stdin.once('end', resolve)
+    process.stdin.once('error', resolve)
   })
+  process.stdin.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
+  await Promise.race([
+    streamFinished,
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ])
+  return Buffer.concat(chunks).toString('utf-8')
 }
 
 // === HOOK FAST PATH (daemon-served) ===
@@ -85,12 +72,12 @@ async function readAllStdin(timeoutMs: number): Promise<string> {
 // skip it; PRJCT_NO_DAEMON=1 also skips this and falls through to main().
 // Runs BEFORE the verb-registry import and the update/self-heal blocks —
 // hooks are the hottest path and need none of them.
-if (_fastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
+if (_initialFastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
   const fs = await import('node:fs')
   const { DAEMON_PATHS, isDaemonNamedPipe } = await import('../core/daemon/protocol')
   const socketPath = DAEMON_PATHS.socket()
   if (isDaemonNamedPipe(socketPath) || fs.existsSync(socketPath)) {
-    const subcommand = _fastArgs[1]
+    const subcommand = _initialFastArgs[1]
     const stdinPayload = await readAllStdin(1000)
     try {
       const { sendRequest } = await import('../core/daemon/client')
@@ -130,12 +117,13 @@ if (_fastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
         process.stdout.write('{}\n')
         process.exit(0)
       }
-      let input: unknown = {}
-      try {
-        input = stdinPayload ? JSON.parse(stdinPayload) : {}
-      } catch {
-        input = {}
-      }
+      const input: unknown = (() => {
+        try {
+          return stdinPayload ? JSON.parse(stdinPayload) : {}
+        } catch {
+          return {}
+        }
+      })()
       const pending: Array<() => Promise<void>> = []
       await runner(process.cwd(), {
         input,
@@ -172,7 +160,7 @@ if (_fastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
             for (const fn of pending) await fn().catch(() => undefined)
           }
         } else {
-          for (const fn of pending) await fn().catch(() => undefined)
+          for (const fn2 of pending) await fn2().catch(() => undefined)
         }
       }
       process.exit(0)
@@ -201,15 +189,19 @@ const _binCommands = BIN_COMMANDS_SET
 // bogus inbox item. Explicit verbs still win. Capture remains zero-ceremony
 // for multi-word notes; tasks still use `prjct task "..."` explicitly. Must
 // run BEFORE the daemon fast path so rewritten `capture` routes there.
-if (
-  _fastCommand &&
-  !_binCommands.has(_fastCommand) &&
-  !REGISTERED_VERBS_SET.has(_fastCommand) &&
-  !isRemovedVerb(_fastCommand)
-) {
-  const positionals = _fastArgs.filter((a) => !a.startsWith('-'))
+const { command: _fastCommand, args: _fastArgs } = (() => {
+  if (
+    !_initialFastCommand ||
+    _binCommands.has(_initialFastCommand) ||
+    REGISTERED_VERBS_SET.has(_initialFastCommand) ||
+    isRemovedVerb(_initialFastCommand)
+  ) {
+    return { command: _initialFastCommand, args: _initialFastArgs }
+  }
+
+  const positionals = _initialFastArgs.filter((argument) => !argument.startsWith('-'))
   const description = positionals.join(' ')
-  const flags = _fastArgs.filter((a) => a.startsWith('-'))
+  const flags = _initialFastArgs.filter((argument) => argument.startsWith('-'))
   // A single command-shaped token (e.g. `prjct upgrade`) is almost never a
   // GTD note — it is a MISROUTED command: a typo, a stale parallel install, or
   // a long-lived daemon that predates the verb. Do not write it to memory.
@@ -225,9 +217,8 @@ if (
     )
     process.exit(1)
   }
-  _fastCommand = 'capture'
-  _fastArgs = ['capture', description, ...flags]
-}
+  return { command: 'capture', args: ['capture', description, ...flags] }
+})()
 
 // Update notice — print at process exit so the banner appears AFTER the
 // command's own output. Uses a sync read of the cached latest version;
@@ -262,17 +253,18 @@ if (
   // handler (which can't await) has it ready.
   const _fs = await import('node:fs')
   const _path = await import('node:path')
-  let _currentVersion = ''
-  try {
-    const pkgPath = _path.resolve(
-      _path.dirname(new URL(import.meta.url).pathname),
-      '..',
-      'package.json'
-    )
-    _currentVersion = JSON.parse(_fs.readFileSync(pkgPath, 'utf-8')).version ?? ''
-  } catch {
-    /* no version, no banner */
-  }
+  const _currentVersion = (() => {
+    try {
+      const pkgPath = _path.resolve(
+        _path.dirname(new URL(import.meta.url).pathname),
+        '..',
+        'package.json'
+      )
+      return JSON.parse(_fs.readFileSync(pkgPath, 'utf-8')).version ?? ''
+    } catch {
+      return ''
+    }
+  })()
   try {
     triggerBackgroundRefreshIfStale()
   } catch {
@@ -300,26 +292,43 @@ if (_fastCommand && !_binCommands.has(_fastCommand) && process.env.PRJCT_NO_DAEM
     const crypto = await import('node:crypto')
 
     // Parse args for daemon
-    const commandArgs: string[] = []
-    const commandOptions: Record<string, string | boolean> = {}
-    for (let i = 0; i < _fastArgs.length; i++) {
-      const a = _fastArgs[i]
-      if (a.startsWith('--')) {
-        const raw = a.slice(2)
+    const parseFastArgs = (
+      index = 0,
+      commandArgs: string[] = [],
+      commandOptions: Record<string, string | boolean> = {}
+    ): { commandArgs: string[]; commandOptions: Record<string, string | boolean> } => {
+      if (index >= _fastArgs.length) return { commandArgs, commandOptions }
+      const argument = _fastArgs[index]
+      if (argument.startsWith('--')) {
+        const raw = argument.slice(2)
         if (raw.includes('=')) {
           const eqIdx = raw.indexOf('=')
-          commandOptions[raw.slice(0, eqIdx)] = raw.slice(eqIdx + 1)
-        } else if (i + 1 < _fastArgs.length && !_fastArgs[i + 1].startsWith('--')) {
-          commandOptions[raw] = _fastArgs[++i]
-        } else {
-          commandOptions[raw] = true
+          return parseFastArgs(index + 1, commandArgs, {
+            ...commandOptions,
+            [raw.slice(0, eqIdx)]: raw.slice(eqIdx + 1),
+          })
         }
-      } else if (a.startsWith('-') && a.length === 2) {
-        commandOptions[a.slice(1)] = true
-      } else if (i > 0) {
-        commandArgs.push(a)
+        if (index + 1 < _fastArgs.length && !_fastArgs[index + 1].startsWith('--')) {
+          return parseFastArgs(index + 2, commandArgs, {
+            ...commandOptions,
+            [raw]: _fastArgs[index + 1],
+          })
+        }
+        return parseFastArgs(index + 1, commandArgs, { ...commandOptions, [raw]: true })
       }
+      if (argument.startsWith('-') && argument.length === 2) {
+        return parseFastArgs(index + 1, commandArgs, {
+          ...commandOptions,
+          [argument.slice(1)]: true,
+        })
+      }
+      return parseFastArgs(
+        index + 1,
+        index > 0 ? [...commandArgs, argument] : commandArgs,
+        commandOptions
+      )
     }
+    const { commandArgs, commandOptions } = parseFastArgs()
 
     try {
       const { commandRequestTimeoutMs } = await import('../core/daemon/protocol')
@@ -577,11 +586,11 @@ ${chalk.cyan.bold('  Welcome to prjct!')}
           const cmp = (a: string, b: string) => {
             const pa = parts(a)
             const pb = parts(b)
-            for (let i = 0; i < 3; i++) {
-              if ((pa[i] ?? 0) > (pb[i] ?? 0)) return 1
-              if ((pa[i] ?? 0) < (pb[i] ?? 0)) return -1
-            }
-            return 0
+            return (
+              [0, 1, 2]
+                .map((index) => Math.sign((pa[index] ?? 0) - (pb[index] ?? 0)))
+                .find((difference) => difference !== 0) ?? 0
+            )
           }
           const isUpgrade = cmp(VERSION, lastVersion) > 0
 

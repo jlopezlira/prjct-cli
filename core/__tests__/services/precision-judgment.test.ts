@@ -41,7 +41,6 @@ import {
   refutePanelSize,
   resolveRefuteVotes,
   routeIntensity,
-  textShowsBindingReassignment,
   upsertFinding,
 } from '../../services/precision-judgment'
 
@@ -113,22 +112,14 @@ describe('evidence tax', () => {
   })
 })
 
-describe('mechanical prefer-const hallucination refute', () => {
+describe('const-only evidence tax', () => {
   it('detects prefer-const claims including Spanish "por que let"', () => {
     expect(isPreferConstClaim('prefer const for currentStreak')).toBe(true)
     expect(isPreferConstClaim('por que let?')).toBe(true)
     expect(isPreferConstClaim('null deref in auth')).toBe(false)
   })
 
-  it('detects mutation operators (not plain declaration =)', () => {
-    expect(textShowsBindingReassignment('currentStreak++')).toBe(true)
-    expect(textShowsBindingReassignment('n += 1')).toBe(true)
-    expect(textShowsBindingReassignment('const x = 1')).toBe(false) // declaration only
-    expect(textShowsBindingReassignment('let x = 0; return x')).toBe(false)
-    expect(textShowsBindingReassignment('no mutation here')).toBe(false)
-  })
-
-  it('auto-refutes prefer-const when evidence shows ++ (screenshot class)', () => {
+  it('keeps a fully evidenced const-only finding actionable when reassignment exists', () => {
     const f = applyMechanicalStyleRefute(
       finding({
         id: 'fp1',
@@ -139,8 +130,8 @@ describe('mechanical prefer-const hallucination refute', () => {
         evidence: 'let currentStreak = 0; … currentStreak++ on each active day',
       })
     )
-    expect(f.status).toBe('refuted')
-    expect(f.evidence).toMatch(/MECHANICAL REFUTE/i)
+    expect(f.status).toBe('candidate')
+    expect(f.evidence).not.toMatch(/MECHANICAL REFUTE/i)
   })
 
   it('taxes prefer-const without file:line+snippet to info', () => {
@@ -381,41 +372,47 @@ describe('batch refutation', () => {
 describe('convergence budget', () => {
   it('caps at MAX_FIX_ROUNDS=2', () => {
     expect(MAX_FIX_ROUNDS).toBe(2)
-    let ledger = createLedger({ target: 't', intensity: 'full', now: 't0' })
-    ledger.findings = [
-      finding({
-        id: 'a',
-        severity: 'blocker',
-        title: 'x',
-        status: 'stands',
-        file: 'a.ts',
-        line: 1,
-        evidence: 'repro steps here',
-      }),
-    ]
-    expect(canStartFixRound(ledger).ok).toBe(true)
-    ledger = advanceFixRound(ledger, 't1')
-    expect(ledger.fixRound).toBe(1)
-    ledger = advanceFixRound(ledger, 't2')
-    expect(ledger.fixRound).toBe(2)
-    expect(canStartFixRound(ledger).ok).toBe(false)
+    const initial = {
+      ...createLedger({ target: 't', intensity: 'full', now: 't0' }),
+      findings: [
+        finding({
+          id: 'a',
+          severity: 'blocker',
+          title: 'x',
+          status: 'stands',
+          file: 'a.ts',
+          line: 1,
+          evidence: 'repro steps here',
+        }),
+      ],
+    }
+    expect(canStartFixRound(initial).ok).toBe(true)
+    const firstRound = advanceFixRound(initial, 't1')
+    expect(firstRound.fixRound).toBe(1)
+    const finalRound = advanceFixRound(firstRound, 't2')
+    expect(finalRound.fixRound).toBe(2)
+    expect(canStartFixRound(finalRound).ok).toBe(false)
   })
 
   it('markLeftoversOpen demotes stands → open', () => {
-    let ledger = createLedger({ target: 't', intensity: 'standard', now: 't0' })
-    ledger.findings = [
-      finding({
-        id: 'a',
-        severity: 'blocker',
-        title: 'x',
-        status: 'stands',
-        file: 'a.ts',
-        line: 1,
-        evidence: 'repro steps here',
-      }),
-    ]
-    ledger.fixRound = 2
-    ledger = markLeftoversOpen(ledger, 't1')
+    const ledger = markLeftoversOpen(
+      {
+        ...createLedger({ target: 't', intensity: 'standard', now: 't0' }),
+        fixRound: 2,
+        findings: [
+          finding({
+            id: 'a',
+            severity: 'blocker',
+            title: 'x',
+            status: 'stands',
+            file: 'a.ts',
+            line: 1,
+            evidence: 'repro steps here',
+          }),
+        ],
+      },
+      't1'
+    )
     expect(ledger.findings[0]!.status).toBe('open')
     expect(computeVerdict(ledger)).toBe('blocked')
   })
@@ -657,27 +654,29 @@ describe('scope freeze (gentle-ai v1.49)', () => {
   })
 
   it('markFindings refuses fixed on out-of-scope findings', () => {
-    let ledger = createLedger({
-      target: 't',
-      intensity: 'standard',
-      now: 't0',
-      scopePaths: ['core/a.ts'],
-    })
-    ledger.findings = [
-      finding({
-        id: 'out',
-        severity: 'blocker',
-        title: 'x',
-        status: 'stands',
-        file: 'scripts/b.ts',
-        line: 1,
-        evidence: 'repro steps here',
+    const ledger = {
+      ...createLedger({
+        target: 't',
+        intensity: 'standard',
+        now: 't0',
+        scopePaths: ['core/a.ts'],
       }),
-    ]
+      findings: [
+        finding({
+          id: 'out',
+          severity: 'blocker',
+          title: 'x',
+          status: 'stands',
+          file: 'scripts/b.ts',
+          line: 1,
+          evidence: 'repro steps here',
+        }),
+      ],
+    }
     // Force stands despite freeze (simulates pre-freeze legacy row)
     expect(markFindingsSkippedByScope(ledger, ['out'], 'fixed')).toEqual(['out'])
-    ledger = markFindings(ledger, ['out'], 'fixed', 't1')
-    expect(ledger.findings[0]!.status).toBe('stands')
+    const marked = markFindings(ledger, ['out'], 'fixed', 't1')
+    expect(marked.findings[0]!.status).toBe('stands')
   })
 
   it('applyScopeFreezeAll batch demotes', () => {

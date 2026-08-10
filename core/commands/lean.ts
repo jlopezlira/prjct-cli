@@ -323,20 +323,20 @@ async function safeGit(projectPath: string, args: string[]): Promise<string | nu
 }
 
 async function resolveBase(projectPath: string): Promise<string | null> {
-  let defaultRef = ''
   const originHead = (
     await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
   )?.trim()
-  if (originHead && originHead !== 'origin/HEAD') {
-    defaultRef = originHead
-  } else {
-    for (const c of ['main', 'master']) {
-      if ((await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', c])) !== null) {
-        defaultRef = c
-        break
-      }
-    }
+  const findLocalDefault = async (candidates: string[]): Promise<string> => {
+    const [candidate, ...rest] = candidates
+    if (!candidate) return ''
+    return (await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', candidate])) !== null
+      ? candidate
+      : findLocalDefault(rest)
   }
+  const defaultRef =
+    originHead && originHead !== 'origin/HEAD'
+      ? originHead
+      : await findLocalDefault(['main', 'master'])
   if (!defaultRef) return null
   const base = (await safeGit(projectPath, ['merge-base', defaultRef, 'HEAD']))?.trim()
   return base || null
@@ -401,17 +401,17 @@ function scanDiffSmells(diff: string, nameStatus: string): DiffSmells {
     if (/^A\s/.test(line)) smells.addedFiles += 1
   }
 
-  let inPackageJson = false
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++ ')) {
-      inPackageJson = /\/package\.json$|^\+\+\+ b\/package\.json$/.test(line)
+  const diffState = { inPackageJson: false }
+  for (const line2 of diff.split('\n')) {
+    if (line2.startsWith('+++ ')) {
+      diffState.inPackageJson = /\/package\.json$|^\+\+\+ b\/package\.json$/.test(line2)
       continue
     }
-    if (line.startsWith('+++') || line.startsWith('---')) continue
-    if (line.startsWith('+') || line.startsWith('-')) smells.loc += 1
-    if (line.startsWith('+')) {
-      if (inPackageJson && NEW_DEP_RE.test(line)) smells.newDeps += 1
-      if (new RegExp(`\\b${LEAN_MARKER}`, 'i').test(line)) smells.leanMarkers += 1
+    if (line2.startsWith('+++') || line2.startsWith('---')) continue
+    if (line2.startsWith('+') || line2.startsWith('-')) smells.loc += 1
+    if (line2.startsWith('+')) {
+      if (diffState.inPackageJson && NEW_DEP_RE.test(line2)) smells.newDeps += 1
+      if (new RegExp(`\\b${LEAN_MARKER}`, 'i').test(line2)) smells.leanMarkers += 1
     }
   }
   return smells

@@ -253,10 +253,6 @@ class PathManager {
     return path.join(this.globalBaseDir, '.running')
   }
 
-  getDocsPath(): string {
-    return path.join(this.globalBaseDir, 'docs')
-  }
-
   /** Global cache dir (~/.prjct-cli/cache by default; honors PRJCT_CLI_HOME). */
   getCachePath(): string {
     return path.join(this.globalBaseDir, 'cache')

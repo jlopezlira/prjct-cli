@@ -85,9 +85,9 @@ export async function completeTaskInWorkspace(
   // Capture the FRESH task inside the CAS updater (a concurrent update may
   // have mutated it since the outer read), then persist the history entry to
   // the typed `tasks` table (Schema v2 C4) — the blob no longer carries it.
-  let fresh: WorkspaceTask = task
+  const freshSnapshots: WorkspaceTask[] = []
   await backend.update(projectId, (s) => {
-    fresh = (s.activeTasks || []).find((t) => t.workspaceId === workspaceId) ?? task
+    freshSnapshots.push((s.activeTasks || []).find((t) => t.workspaceId === workspaceId) ?? task)
     return {
       ...s,
       activeTasks: (s.activeTasks || []).filter((t) => t.workspaceId !== workspaceId),
@@ -96,7 +96,7 @@ export async function completeTaskInWorkspace(
   })
   backend.persistHistoryEntry(
     projectId,
-    backend.createTaskHistoryEntry(fresh, completedAt, feedback)
+    backend.createTaskHistoryEntry(freshSnapshots.at(-1) ?? task, completedAt, feedback)
   )
 
   await backend.publish(projectId, 'task.completed', {
@@ -149,18 +149,19 @@ export async function updateWorkspaceTask(
     return next as WorkspaceTask
   }
 
-  let merged: WorkspaceTask = existing
+  const mergedSnapshots: WorkspaceTask[] = []
   await backend.update(projectId, (s) => ({
     ...s,
     activeTasks: (s.activeTasks || []).map((t) => {
       if (t.workspaceId !== workspaceId) return t
-      merged = merge(t)
+      const merged = merge(t)
+      mergedSnapshots.push(merged)
       return merged
     }),
     lastUpdated: getTimestamp(),
   }))
 
-  return merged
+  return mergedSnapshots.at(-1) ?? existing
 }
 
 export async function addTokens(
@@ -182,29 +183,29 @@ export async function addTokens(
   // This avoids the silent no-op where a child-worktree task has no currentTask.
   if (workspaceId) {
     if (!(state.activeTasks || []).some((t) => t.workspaceId === workspaceId)) return null
-    let result: { tokensIn: number; tokensOut: number } | null = null
+    const committedTotals: { tokensIn: number; tokensOut: number }[] = []
     await backend.update(projectId, (s) => ({
       ...s,
       activeTasks: (s.activeTasks || []).map((t) => {
         if (t.workspaceId !== workspaceId) return t
         const newIn = (t.tokensIn || 0) + tokensIn
         const newOut = (t.tokensOut || 0) + tokensOut
-        result = { tokensIn: newIn, tokensOut: newOut }
+        committedTotals.push({ tokensIn: newIn, tokensOut: newOut })
         return { ...t, tokensIn: newIn, tokensOut: newOut }
       }),
       lastUpdated: getTimestamp(),
     }))
-    return result
+    return committedTotals.at(-1) ?? null
   }
 
   if (!state.currentTask) return null
 
-  let result: { tokensIn: number; tokensOut: number } | null = null
+  const committedTotals: { tokensIn: number; tokensOut: number }[] = []
   await backend.update(projectId, (s) => {
     if (!s.currentTask) return s
     const newIn = (s.currentTask.tokensIn || 0) + tokensIn
     const newOut = (s.currentTask.tokensOut || 0) + tokensOut
-    result = { tokensIn: newIn, tokensOut: newOut }
+    committedTotals.push({ tokensIn: newIn, tokensOut: newOut })
     return {
       ...s,
       currentTask: { ...s.currentTask, tokensIn: newIn, tokensOut: newOut },
@@ -212,5 +213,5 @@ export async function addTokens(
     }
   })
 
-  return result
+  return committedTotals.at(-1) ?? null
 }

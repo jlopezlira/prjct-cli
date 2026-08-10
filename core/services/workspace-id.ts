@@ -121,15 +121,11 @@ async function computeWorkspace(cwd: string): Promise<WorkspaceContext> {
     }
   }
 
-  let toplevel = ''
-  let gitDir = ''
-  let commonDir = ''
-  let branch: string | undefined
   const [tl = '', gd = '', cd = '', br = ''] = result.stdout.trim().split('\n')
-  toplevel = tl.trim()
-  gitDir = gd.trim()
-  commonDir = cd.trim()
-  branch = br.trim() && br.trim() !== 'HEAD' ? br.trim() : undefined
+  const toplevel = tl.trim()
+  const gitDir = gd.trim()
+  const commonDir = cd.trim()
+  const branch = br.trim() && br.trim() !== 'HEAD' ? br.trim() : undefined
 
   // A child worktree has a per-worktree git-dir distinct from the shared
   // common-dir; in the main worktree they resolve to the same directory.

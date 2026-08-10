@@ -12,28 +12,34 @@ import { prjctDb } from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
 describe('dynasty-outcomes', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture: {
+    projectPath: string
+    projectId: string
+  } = {
+    projectPath: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-dynasty-'))
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-    projectId = `dynasty-${Math.random().toString(36).slice(2, 10)}`
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(projectPath, '.prjct-data'),
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-dynasty-'))
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+    fixture.projectId = `dynasty-${Math.random().toString(36).slice(2, 10)}`
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
     })
-    patchPathManager(projectPath)
-    prjctDb.get(projectId, 'SELECT 1')
+    patchPathManager(fixture.projectPath)
+    prjctDb.get(fixture.projectId, 'SELECT 1')
   })
 
   afterEach(async () => {
     restorePathManager()
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+    if (fixture.projectPath)
+      await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   })
 
   it('builds scannable outcomes on a fresh project', () => {
-    const o = buildDynastyOutcomes(projectId)
+    const o = buildDynastyOutcomes(fixture.projectId)
     expect(o.closedLoop.receipts7d).toBeGreaterThanOrEqual(0)
     expect(o.vault.live).toBeGreaterThanOrEqual(0)
     expect(o.tokensSavedTotal).toBeGreaterThanOrEqual(0)
@@ -42,7 +48,7 @@ describe('dynasty-outcomes', () => {
   })
 
   it('renders markdown table for harness score', () => {
-    const md = renderDynastyOutcomesMd(buildDynastyOutcomes(projectId))
+    const md = renderDynastyOutcomesMd(buildDynastyOutcomes(fixture.projectId))
     expect(md).toContain('Dynasty outcomes')
     expect(md).toContain('Judgment receipts')
     expect(md).toContain('Vault live')

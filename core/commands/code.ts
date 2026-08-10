@@ -193,8 +193,8 @@ export class CodeCommands extends PrjctCommandsBase {
       if (effective.length === 0) out.info('No symbols matched.')
       else {
         out.info(`${effective.length} symbol(s)${q ? ` matching "${q}"` : ''}:`)
-        for (const s of effective) {
-          out.info(`  ${s.kind.padEnd(9)} ${s.name}  ${s.file}:${s.startLine}`)
+        for (const s2 of effective) {
+          out.info(`  ${s2.kind.padEnd(9)} ${s2.name}  ${s2.file}:${s2.startLine}`)
         }
       }
     }
@@ -268,8 +268,8 @@ export class CodeCommands extends PrjctCommandsBase {
         out.info(`    d${h.depth} ${h.symbol.name} ← ${h.symbol.file}`)
       }
       out.info(`  outbound (${result.outbound.length}):`)
-      for (const h of result.outbound.slice(0, 20)) {
-        out.info(`    d${h.depth} ${h.symbol.name} → ${h.symbol.file}`)
+      for (const h2 of result.outbound.slice(0, 20)) {
+        out.info(`    d${h2.depth} ${h2.symbol.name} → ${h2.symbol.file}`)
       }
     }
     return {
@@ -376,15 +376,17 @@ export class CodeCommands extends PrjctCommandsBase {
     const parts = rest.trim().split(/\s+/).filter(Boolean)
     if (parts[0] === 'cli' && parts[1]) {
       const tool = parts[1]!
-      let args: Record<string, unknown> = {}
       const jsonArg = parts.slice(2).join(' ')
-      if (jsonArg) {
-        try {
-          args = JSON.parse(jsonArg) as Record<string, unknown>
-        } catch {
-          return failWith('cbm cli args must be JSON object', options)
-        }
-      }
+      const args = jsonArg
+        ? (() => {
+            try {
+              return JSON.parse(jsonArg) as Record<string, unknown>
+            } catch {
+              return null
+            }
+          })()
+        : {}
+      if (!args) return failWith('cbm cli args must be JSON object', options)
       const r = await cbmCli(tool, args)
       if (!r.ok) {
         return failWith(r.error ?? r.stderr ?? 'CBM cli failed', options)

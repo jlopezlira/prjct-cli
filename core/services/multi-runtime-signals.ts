@@ -63,11 +63,11 @@ export function multiRuntimeInstallParityReport(): {
   const geminiSubs = new Set(geminiHookMaps().map((m) => m.subcommand))
   const codexSubs = new Set(codexHookSpecs().map((m) => m.subcommand))
 
-  for (const sub of ['prompt', 'session-start', 'pre-package'] as const) {
-    if (!cursorSubs.has(sub)) missing.push(`cursor map missing ${sub}`)
-    if (!geminiSubs.has(sub)) missing.push(`gemini map missing ${sub}`)
+  for (const sub2 of ['prompt', 'session-start', 'pre-package'] as const) {
+    if (!cursorSubs.has(sub2)) missing.push(`cursor map missing ${sub2}`)
+    if (!geminiSubs.has(sub2)) missing.push(`gemini map missing ${sub2}`)
     // Codex may skip some events; pre-package maps if PreToolUse Bash is supported
-    if (sub === 'pre-package' && !codexSubs.has(sub) && !codexSubs.has('pre-secrets')) {
+    if (sub2 === 'pre-package' && !codexSubs.has(sub2) && !codexSubs.has('pre-secrets')) {
       // codexHookSpecs filters by CODEX_HOOK_EVENTS — PreToolUse should include bash hooks
       if (!codexHookSpecs().some((s) => s.subcommand === 'pre-package')) {
         // Only fail if Claude has it but codex filter dropped all bash prettools

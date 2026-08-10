@@ -184,11 +184,15 @@ describe('FileScorer', () => {
 })
 
 describe('IndexStorage', () => {
-  let testProjectId: string
+  const fixture: {
+    testProjectId: string
+  } = {
+    testProjectId: '',
+  }
 
   beforeEach(async () => {
     // Generate unique project ID for each test to ensure isolation
-    testProjectId = `test-project-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    fixture.testProjectId = `test-project-${Date.now()}-${Math.random().toString(36).slice(2)}`
     // Set up test directory
     const testDir = path.join(os.tmpdir(), `prjct-test-${Date.now()}`)
     pathManager.setGlobalBaseDir(testDir)
@@ -200,7 +204,7 @@ describe('IndexStorage', () => {
 
   describe('readIndex/writeIndex', () => {
     it('should return null for non-existent index', async () => {
-      const index = await indexStorage.readIndex(testProjectId)
+      const index = await indexStorage.readIndex(fixture.testProjectId)
       expect(index).toBeNull()
     })
 
@@ -209,8 +213,8 @@ describe('IndexStorage', () => {
       testIndex.lastFullScan = new Date().toISOString()
       testIndex.totalFiles = 100
 
-      await indexStorage.writeIndex(testProjectId, testIndex)
-      const retrieved = await indexStorage.readIndex(testProjectId)
+      await indexStorage.writeIndex(fixture.testProjectId, testIndex)
+      const retrieved = await indexStorage.readIndex(fixture.testProjectId)
 
       expect(retrieved).not.toBeNull()
       expect(retrieved!.totalFiles).toBe(100)
@@ -220,7 +224,7 @@ describe('IndexStorage', () => {
 
   describe('hasValidIndex', () => {
     it('should return false for non-existent index', async () => {
-      const valid = await indexStorage.hasValidIndex(testProjectId)
+      const valid = await indexStorage.hasValidIndex(fixture.testProjectId)
       expect(valid).toBe(false)
     })
 
@@ -228,8 +232,8 @@ describe('IndexStorage', () => {
       const testIndex = getDefaultIndex('/test/project')
       testIndex.lastFullScan = new Date().toISOString()
 
-      await indexStorage.writeIndex(testProjectId, testIndex)
-      const valid = await indexStorage.hasValidIndex(testProjectId)
+      await indexStorage.writeIndex(fixture.testProjectId, testIndex)
+      const valid = await indexStorage.hasValidIndex(fixture.testProjectId)
 
       expect(valid).toBe(true)
     })
@@ -238,25 +242,29 @@ describe('IndexStorage', () => {
 
 describe('ProjectIndexer', () => {
   const testProjectId = `test-indexer-${Date.now()}`
-  let testProjectPath: string
+  const fixture: {
+    testProjectPath: string
+  } = {
+    testProjectPath: '',
+  }
 
   beforeEach(async () => {
     // Create a temp project directory
-    testProjectPath = path.join(os.tmpdir(), `prjct-indexer-test-${Date.now()}`)
-    await fs.mkdir(testProjectPath, { recursive: true })
+    fixture.testProjectPath = path.join(os.tmpdir(), `prjct-indexer-test-${Date.now()}`)
+    await fs.mkdir(fixture.testProjectPath, { recursive: true })
 
     // Create some test files
-    await fs.mkdir(path.join(testProjectPath, 'src'), { recursive: true })
+    await fs.mkdir(path.join(fixture.testProjectPath, 'src'), { recursive: true })
     await fs.writeFile(
-      path.join(testProjectPath, 'src', 'index.ts'),
+      path.join(fixture.testProjectPath, 'src', 'index.ts'),
       'export const main = () => {}'
     )
     await fs.writeFile(
-      path.join(testProjectPath, 'src', 'utils.ts'),
+      path.join(fixture.testProjectPath, 'src', 'utils.ts'),
       'export const helper = () => {}'
     )
     await fs.writeFile(
-      path.join(testProjectPath, 'package.json'),
+      path.join(fixture.testProjectPath, 'package.json'),
       JSON.stringify(
         {
           name: 'test-project',
@@ -277,7 +285,7 @@ describe('ProjectIndexer', () => {
   afterEach(async () => {
     // Cleanup
     try {
-      await fs.rm(testProjectPath, { recursive: true })
+      await fs.rm(fixture.testProjectPath, { recursive: true })
     } catch {
       // Ignore cleanup errors
     }
@@ -285,7 +293,7 @@ describe('ProjectIndexer', () => {
 
   describe('fullScan', () => {
     it('should scan project and create index', async () => {
-      const indexer = createProjectIndexer(testProjectPath, testProjectId)
+      const indexer = createProjectIndexer(fixture.testProjectPath, testProjectId)
       const result = await indexer.fullScan()
 
       expect(result.fromCache).toBe(false)
@@ -296,20 +304,20 @@ describe('ProjectIndexer', () => {
     it('should detect TypeScript from config files', async () => {
       // Add tsconfig.json
       await fs.writeFile(
-        path.join(testProjectPath, 'tsconfig.json'),
+        path.join(fixture.testProjectPath, 'tsconfig.json'),
         JSON.stringify({
           compilerOptions: { target: 'ES2020' },
         })
       )
 
-      const indexer = createProjectIndexer(testProjectPath, testProjectId)
+      const indexer = createProjectIndexer(fixture.testProjectPath, testProjectId)
       const result = await indexer.fullScan()
 
       expect(result.index.configFiles.some((cf) => cf.type === 'tsconfig.json')).toBe(true)
     })
 
     it('should detect Express backend', async () => {
-      const indexer = createProjectIndexer(testProjectPath, testProjectId)
+      const indexer = createProjectIndexer(fixture.testProjectPath, testProjectId)
       const result = await indexer.fullScan()
 
       expect(result.index.detectedStack.frameworks).toContain('Express')
@@ -318,7 +326,7 @@ describe('ProjectIndexer', () => {
 
   describe('loadOrScan', () => {
     it('should use cached index if valid', async () => {
-      const indexer = createProjectIndexer(testProjectPath, testProjectId)
+      const indexer = createProjectIndexer(fixture.testProjectPath, testProjectId)
 
       // First scan
       const firstResult = await indexer.fullScan()
@@ -330,7 +338,7 @@ describe('ProjectIndexer', () => {
     })
 
     it('should rescan if forceFullScan is true', async () => {
-      const indexer = createProjectIndexer(testProjectPath, testProjectId)
+      const indexer = createProjectIndexer(fixture.testProjectPath, testProjectId)
 
       // First scan
       await indexer.fullScan()
@@ -343,7 +351,7 @@ describe('ProjectIndexer', () => {
 
   describe('getRelevantContext', () => {
     it('should return files within token limit', async () => {
-      const indexer = createProjectIndexer(testProjectPath, testProjectId)
+      const indexer = createProjectIndexer(fixture.testProjectPath, testProjectId)
       await indexer.fullScan()
 
       const context = await indexer.getRelevantContext(10000)

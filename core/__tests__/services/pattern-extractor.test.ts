@@ -6,33 +6,39 @@ import pathManager from '../../infrastructure/path-manager'
 import patternExtractor from '../../services/pattern-extractor'
 import { prjctDb } from '../../storage/database'
 
-let tmpRoot: string | null = null
-let projectPath: string
+const fixture: {
+  tmpRoot: string | null
+  projectPath: string
+} = {
+  tmpRoot: null,
+  projectPath: '',
+}
+
 const projectId = 'pattern-extractor-test'
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('patternExtractor', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-patterns-'))
-    projectPath = path.join(tmpRoot, 'repo')
-    await fs.mkdir(projectPath, { recursive: true })
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-patterns-'))
+    fixture.projectPath = path.join(fixture.tmpRoot, 'repo')
+    await fs.mkdir(fixture.projectPath, { recursive: true })
 
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot!, id)
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot!, id)
   })
 
   afterEach(async () => {
     prjctDb.close(projectId)
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
-      tmpRoot = null
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+      fixture.tmpRoot = null
     }
   })
 
   it('extracts context7 + feedback patterns and stores rules', async () => {
     const result = await patternExtractor.extract({
       projectId,
-      projectPath,
+      projectPath: fixture.projectPath,
       languages: ['TypeScript'],
       frameworks: ['Next.js'],
       context7Verified: true,
@@ -58,7 +64,7 @@ describe('patternExtractor', () => {
   it('returns empty patterns when no feedback or context7', async () => {
     const result = await patternExtractor.extract({
       projectId,
-      projectPath,
+      projectPath: fixture.projectPath,
       languages: ['TypeScript'],
       frameworks: ['Next.js'],
       context7Verified: false,

@@ -63,23 +63,16 @@ export async function resolveWorkIntensity(
   projectPath: string,
   signals: IntensitySignals = {}
 ): Promise<{ intensity: ReviewIntensity; files: number; loc: number }> {
-  let files = 0
-  let loc = 0
-  try {
-    const wt = await computeWorkingTreeChangeset(projectPath)
-    if (wt && (wt.files > 0 || wt.loc > 0)) {
-      files = wt.files
-      loc = wt.loc
-    } else {
-      const cs = await computeCommittedChangeset(projectPath)
-      if (cs) {
-        files = cs.files
-        loc = cs.loc
-      }
+  const { files, loc } = await (async () => {
+    try {
+      const wt = await computeWorkingTreeChangeset(projectPath)
+      if (wt && (wt.files > 0 || wt.loc > 0)) return { files: wt.files, loc: wt.loc }
+      const committed = await computeCommittedChangeset(projectPath)
+      return { files: committed?.files ?? 0, loc: committed?.loc ?? 0 }
+    } catch {
+      return { files: 0, loc: 0 }
     }
-  } catch {
-    /* no git / git infra failure — intensity from signals only (advisory) */
-  }
+  })()
   const { intensity } = intensityFromChangeset({ files, loc }, signals)
   return { intensity, files, loc }
 }
@@ -117,33 +110,31 @@ export async function ensureJudgmentLedger(input: {
     (await defaultBranchTarget(input.projectPath)) ||
     `work-${getTimestamp().slice(0, 10)}`
 
-  let deliveryTier: 'trivial' | 'normal' | 'large' | undefined
-  try {
-    const { tierOf } = await import('./delivery-geometry')
-    deliveryTier = tierOf({ files: resolved.files, loc: resolved.loc })
-  } catch {
-    deliveryTier = undefined
-  }
+  const deliveryTier: 'trivial' | 'normal' | 'large' | undefined = await import(
+    './delivery-geometry'
+  )
+    .then(({ tierOf }) => tierOf({ files: resolved.files, loc: resolved.loc }))
+    .catch(() => undefined)
 
-  let scopePaths: string[] | undefined
-  try {
-    const { computeCommittedChangeset } = await import('./delivery-geometry')
-    const cs = await computeCommittedChangeset(input.projectPath)
-    const { execFileAsync } = await import('../utils/exec')
-    if (cs?.base) {
-      const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${cs.base}..HEAD`], {
-        cwd: input.projectPath,
-      })
-      scopePaths = stdout
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    } else if (cs?.dirs?.length) {
-      scopePaths = [...cs.dirs]
+  const scopePaths = await (async () => {
+    try {
+      const { computeCommittedChangeset } = await import('./delivery-geometry')
+      const cs = await computeCommittedChangeset(input.projectPath)
+      if (cs?.base) {
+        const { execFileAsync } = await import('../utils/exec')
+        const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${cs.base}..HEAD`], {
+          cwd: input.projectPath,
+        })
+        return stdout
+          .split('\n')
+          .map((path) => path.trim())
+          .filter(Boolean)
+      }
+      return cs?.dirs?.length ? [...cs.dirs] : undefined
+    } catch {
+      return undefined
     }
-  } catch {
-    scopePaths = undefined
-  }
+  })()
 
   const ledger = createLedger({
     target,

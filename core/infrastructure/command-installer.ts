@@ -19,10 +19,7 @@ import type {
 } from '../types/infrastructure'
 import { fileExists } from '../utils/file-helper'
 import { getActiveProvider } from './ai-provider'
-import {
-  installDocs as installDocsImpl,
-  installGlobalConfig as installGlobalConfigImpl,
-} from './command-installer/global-config'
+import { installGlobalConfig as installGlobalConfigImpl } from './command-installer/global-config'
 import { resolveUserHome, resolveUserPath } from './user-home'
 
 // Re-export the installGlobalConfig used by external callers (e.g. update.ts).
@@ -157,21 +154,17 @@ export class CommandInstaller {
    */
   async cleanupRouter(): Promise<boolean> {
     await this.ensureInit()
-    let cleaned = false
-
-    for (const routerFile of ['p.md', 'p.toml']) {
-      const routerPath = path.join(this.commandsPath, routerFile)
-      try {
-        await fs.unlink(routerPath)
-        cleaned = true
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          // Log but don't fail
+    const removals = await Promise.all(
+      ['p.md', 'p.toml'].map(async (routerFile) => {
+        try {
+          await fs.unlink(path.join(this.commandsPath, routerFile))
+          return true
+        } catch {
+          return false
         }
-      }
-    }
-
-    return cleaned
+      })
+    )
+    return removals.some(Boolean)
   }
 
   /**
@@ -239,20 +232,16 @@ export class CommandInstaller {
 
     const brewLegacy = [path.join(home, '.prjct-cli', 'config', 'homebrew-migrated')]
 
-    for (const filePath of brewLegacy) {
+    for (const filePath2 of brewLegacy) {
       try {
-        await fs.unlink(filePath)
-        cleaned.push(filePath)
+        await fs.unlink(filePath2)
+        cleaned.push(filePath2)
       } catch {
         // Already gone
       }
     }
 
     return { cleaned }
-  }
-
-  async installDocs(): Promise<{ success: boolean; error?: string }> {
-    return installDocsImpl()
   }
 }
 

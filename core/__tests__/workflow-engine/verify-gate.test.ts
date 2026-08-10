@@ -65,39 +65,49 @@ describe('verify: deterministic Stop-Slop gate', () => {
 })
 
 describe('verify:auto — detects the project verification command', () => {
-  let dir: string
+  const fixture: {
+    dir: string
+  } = {
+    dir: '',
+  }
 
   async function makeDir(): Promise<string> {
     return fs.mkdtemp(path.join(os.tmpdir(), 'prjct-verify-auto-'))
   }
 
   it('resolves to the package-manager test command when scripts.test exists', async () => {
-    dir = await makeDir()
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'x' } }))
-    await fs.writeFile(path.join(dir, 'bun.lockb'), '')
-    expect(await detectVerifyCommand(dir)).toBe('bun test')
-    await fs.rm(dir, { recursive: true, force: true })
+    fixture.dir = await makeDir()
+    await fs.writeFile(
+      path.join(fixture.dir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'x' } })
+    )
+    await fs.writeFile(path.join(fixture.dir, 'bun.lockb'), '')
+    expect(await detectVerifyCommand(fixture.dir)).toBe('bun test')
+    await fs.rm(fixture.dir, { recursive: true, force: true })
   })
 
   it('defaults to npm when no lockfile pins the manager', async () => {
-    dir = await makeDir()
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'x' } }))
-    expect(await detectVerifyCommand(dir)).toBe('npm test')
-    await fs.rm(dir, { recursive: true, force: true })
+    fixture.dir = await makeDir()
+    await fs.writeFile(
+      path.join(fixture.dir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'x' } })
+    )
+    expect(await detectVerifyCommand(fixture.dir)).toBe('npm test')
+    await fs.rm(fixture.dir, { recursive: true, force: true })
   })
 
   it('returns null (no convention) when there is no test script', async () => {
-    dir = await makeDir()
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x' }))
-    expect(await detectVerifyCommand(dir)).toBeNull()
-    await fs.rm(dir, { recursive: true, force: true })
+    fixture.dir = await makeDir()
+    await fs.writeFile(path.join(fixture.dir, 'package.json'), JSON.stringify({ name: 'x' }))
+    expect(await detectVerifyCommand(fixture.dir)).toBeNull()
+    await fs.rm(fixture.dir, { recursive: true, force: true })
   })
 
   it('verify:auto throws actionable guidance when nothing is detected', async () => {
-    dir = await makeDir()
-    await expect(runVerifyAction(rule(`${VERIFY_ACTION_PREFIX}auto`), dir)).rejects.toThrow(
+    fixture.dir = await makeDir()
+    await expect(runVerifyAction(rule(`${VERIFY_ACTION_PREFIX}auto`), fixture.dir)).rejects.toThrow(
       'verify:auto found no test script'
     )
-    await fs.rm(dir, { recursive: true, force: true })
+    await fs.rm(fixture.dir, { recursive: true, force: true })
   })
 })

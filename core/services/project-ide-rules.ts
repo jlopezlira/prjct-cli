@@ -1,9 +1,9 @@
 /**
  * Project-level IDE rules for agents without global CLI config.
  *
- * Cursor and Windsurf read project files under `.cursor/rules/` and
- * `.windsurf/rules/`. These are the project-level counterparts to
- * `CLAUDE.md` and `AGENTS.md`.
+ * IDEs can read project-specific rule targets declared by the runtime
+ * registry. These are the project-level counterparts to `CLAUDE.md` and
+ * `AGENTS.md`.
  */
 
 import fs from 'node:fs/promises'

@@ -48,29 +48,23 @@ const DEFAULT_STUCK = 15
 export function buildAlignmentCard(input: AlignmentCardInput): AlignmentCard {
   const cues: string[] = []
   const blocks: string[] = []
-  let hard = false
-  let warn = false
 
   if (input.loop?.stopped && input.loop.message) {
-    hard = true
     cues.push('loop-hard-stop')
     blocks.push(input.loop.message)
   }
 
   if (input.pressure?.level === 'critical' && input.pressure.cue) {
-    hard = true
     cues.push('context-pressure-critical')
     // cue already has header; keep body lines
     blocks.push(input.pressure.cue)
   } else if (input.pressure?.level === 'warn' && input.pressure.cue) {
     // Warn is still mid-cycle hard-steer: compact path is mandatory at ≥60%.
-    hard = true
     cues.push('context-pressure-warn')
     blocks.push(input.pressure.cue)
   }
 
   if (input.qualityInject?.trim()) {
-    warn = true
     cues.push('quality-ledger')
     blocks.push(input.qualityInject.trim())
   }
@@ -78,7 +72,6 @@ export function buildAlignmentCard(input: AlignmentCardInput): AlignmentCard {
   const turns = input.turns ?? 0
   const stuck = input.stuckThreshold ?? DEFAULT_STUCK
   if (!input.loop?.stopped && turns >= stuck) {
-    warn = true
     cues.push('stuck-cycle')
     blocks.push(
       `⚠ ${turns} turns on this cycle and it is still open. If you are not nearly done, STOP looping: split it, ship the slice that works, or check in with the user — then \`prjct status done\`. A re-plan beats another grinding turn.`
@@ -88,6 +81,10 @@ export function buildAlignmentCard(input: AlignmentCardInput): AlignmentCard {
   if (blocks.length === 0) {
     return { level: 'ok', markdown: null, cues: [] }
   }
+  const hard = cues.some((cue) =>
+    ['loop-hard-stop', 'context-pressure-critical', 'context-pressure-warn'].includes(cue)
+  )
+  const warn = cues.some((cue) => ['quality-ledger', 'stuck-cycle'].includes(cue))
 
   const level: AlignmentLevel = hard ? 'hard' : warn ? 'warn' : 'ok'
   const header =

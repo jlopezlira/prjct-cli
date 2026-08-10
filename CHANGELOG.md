@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [3.82.0] - 2026-08-10
+
+### Added
+- Enforce const-only JavaScript and TypeScript across every tracked JS/TS source
+
+## [3.81.0] - 2026-08-10
+
+### Added
+- const only modern js
+
 ## [3.80.1] - 2026-08-03
 
 ### Fixed

@@ -3,52 +3,48 @@ import { type PostIndexTelemetry, startPostIndexWork } from '../../services/sync
 
 describe('sync post-index overlap', () => {
   test('later work proceeds while settlement waits for delayed post-index work', async () => {
-    let release!: () => void
+    const releaseCallbacks: Array<() => void> = []
     const delayed = new Promise<void>((resolve) => {
-      release = resolve
+      releaseCallbacks.push(resolve)
     })
-    let now = 100
-    let started = false
-    let telemetry: PostIndexTelemetry | undefined
+    const clock = [100, 500]
+    const started: true[] = []
+    const telemetry: PostIndexTelemetry[] = []
 
     const postIndex = startPostIndexWork(
       async () => {
-        started = true
+        started.push(true)
         await delayed
       },
       {
-        now: () => now,
+        now: () => clock.shift() ?? 500,
         onComplete: (value) => {
-          telemetry = value
+          telemetry.push(value)
         },
       }
     )
 
-    expect(started).toBe(true)
-    let laterWorkFinished = false
-    await Promise.resolve().then(() => {
-      laterWorkFinished = true
-    })
+    expect(started).toHaveLength(1)
+    const laterWorkFinished = await Promise.resolve(true)
     expect(laterWorkFinished).toBe(true)
 
-    let syncStyleSettlementFinished = false
+    const settlements: true[] = []
     const settlement = postIndex.settle().then(() => {
-      syncStyleSettlementFinished = true
+      settlements.push(true)
     })
     await Promise.resolve()
-    expect(syncStyleSettlementFinished).toBe(false)
+    expect(settlements).toHaveLength(0)
 
-    now = 500
-    release()
+    releaseCallbacks[0]?.()
     await settlement
 
-    expect(syncStyleSettlementFinished).toBe(true)
-    expect(telemetry).toEqual({ totalMs: 400 })
+    expect(settlements).toHaveLength(1)
+    expect(telemetry[0]).toEqual({ totalMs: 400 })
   })
 
   test('settlement absorbs both work and telemetry callback failures', async () => {
     const workError = new Error('upload failed')
-    let telemetry: PostIndexTelemetry | undefined
+    const telemetry: PostIndexTelemetry[] = []
     const postIndex = startPostIndexWork(
       async () => {
         throw workError
@@ -56,13 +52,13 @@ describe('sync post-index overlap', () => {
       {
         now: () => 100,
         onComplete: (value) => {
-          telemetry = value
+          telemetry.push(value)
           throw new Error('telemetry sink failed')
         },
       }
     )
 
     await expect(postIndex.settle()).resolves.toBeUndefined()
-    expect(telemetry).toEqual({ totalMs: 0, error: workError })
+    expect(telemetry[0]).toEqual({ totalMs: 0, error: workError })
   })
 })

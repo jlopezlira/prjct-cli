@@ -24,23 +24,30 @@ async function freshProject(): Promise<string> {
 }
 
 describe('capture verb', () => {
-  let projectPath: string
-  let cmd: CaptureCommands
+  const fixture: {
+    projectPath: string
+    cmd: CaptureCommands
+  } = {
+    projectPath: '',
+    cmd: undefined as unknown as CaptureCommands,
+  }
 
   beforeEach(async () => {
-    projectPath = await freshProject()
-    cmd = new CaptureCommands()
+    fixture.projectPath = await freshProject()
+    fixture.cmd = new CaptureCommands()
   })
 
   afterEach(async () => {
-    await fs.rm(projectPath, { recursive: true, force: true })
+    await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('writes memory with type=inbox', async () => {
-    const result = await cmd.capture('call Ana re pricing', projectPath, { md: true })
+    const result = await fixture.cmd.capture('call Ana re pricing', fixture.projectPath, {
+      md: true,
+    })
     expect(result.success).toBe(true)
 
-    const config = await configManager.readConfig(projectPath)
+    const config = await configManager.readConfig(fixture.projectPath)
     const entries = projectMemory.recall(config!.projectId, { limit: 10 })
     const inbox = entries.filter((e) => e.type === 'inbox')
     expect(inbox.length).toBe(1)
@@ -48,36 +55,36 @@ describe('capture verb', () => {
   })
 
   test('parses --tags k:v,k:v into memory tags', async () => {
-    await cmd.capture('review board deck', projectPath, {
+    await fixture.cmd.capture('review board deck', fixture.projectPath, {
       md: true,
       tags: 'audience:board,priority:high',
     })
 
-    const config = await configManager.readConfig(projectPath)
+    const config = await configManager.readConfig(fixture.projectPath)
     const entries = projectMemory.recall(config!.projectId, { limit: 10 })
     expect(entries[0].tags).toEqual({ audience: 'board', priority: 'high' })
   })
 
   test('refuses empty content', async () => {
-    const result = await cmd.capture('   ', projectPath, { md: true })
+    const result = await fixture.cmd.capture('   ', fixture.projectPath, { md: true })
     expect(result.success).toBe(false)
   })
 
   test('refuses secret-like content unless --force', async () => {
     const secret = 'note: aws key AKIAIOSFODNN7EXAMPLE rotate'
-    const blocked = await cmd.capture(secret, projectPath, { md: true })
+    const blocked = await fixture.cmd.capture(secret, fixture.projectPath, { md: true })
     expect(blocked.success).toBe(false)
 
-    const forced = await cmd.capture(secret, projectPath, { md: true, force: true })
+    const forced = await fixture.cmd.capture(secret, fixture.projectPath, { md: true, force: true })
     expect(forced.success).toBe(true)
   })
 
   test('persists without an active task', async () => {
     // No stateStorage.setCurrentTask — capture must still work.
-    const result = await cmd.capture('random thought', projectPath, { md: true })
+    const result = await fixture.cmd.capture('random thought', fixture.projectPath, { md: true })
     expect(result.success).toBe(true)
 
-    const config = await configManager.readConfig(projectPath)
+    const config = await configManager.readConfig(fixture.projectPath)
     const entries = projectMemory.recall(config!.projectId, { limit: 10 })
     expect(entries.length).toBeGreaterThan(0)
   })

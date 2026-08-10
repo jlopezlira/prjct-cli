@@ -67,18 +67,15 @@ export function findDeadCode(projectId: string, opts: { limit?: number } = {}): 
   const symbols = listAllSymbols(projectId)
   const hasCaller = loadCallersOf(projectId)
   const dead: DeadCodeHit[] = []
-  let skippedEntries = 0
+  const skippedEntries = symbols.filter(isEntryPoint).length
 
-  for (const s of symbols) {
-    if (isEntryPoint(s)) {
-      skippedEntries++
-      continue
-    }
-    if (s.kind !== 'function' && s.kind !== 'method' && s.kind !== 'class') continue
-    if (hasCaller.has(s.id)) continue
+  for (const s2 of symbols) {
+    if (isEntryPoint(s2)) continue
+    if (s2.kind !== 'function' && s2.kind !== 'method' && s2.kind !== 'class') continue
+    if (hasCaller.has(s2.id)) continue
     dead.push({
-      symbol: s,
-      reason: s.exported ? 'exported but no inbound CALLS in graph' : 'no inbound CALLS in graph',
+      symbol: s2,
+      reason: s2.exported ? 'exported but no inbound CALLS in graph' : 'no inbound CALLS in graph',
     })
     if (dead.length >= limit) break
   }

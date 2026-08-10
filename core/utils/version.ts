@@ -19,40 +19,36 @@ interface PackageJson {
   [key: string]: unknown
 }
 
-let cachedVersion: string | null = null
-let cachedPackageRoot: string | null = null
+const versionCache: { version: string | null; packageRoot: string | null } = {
+  version: null,
+  packageRoot: null,
+}
 
 /**
  * Find the package root by searching up from __dirname for package.json
  * Works whether running from source (core/utils/) or compiled (dist/core/utils/)
  */
 export function getPackageRoot(): string {
-  if (cachedPackageRoot) {
-    return cachedPackageRoot
+  if (versionCache.packageRoot) {
+    return versionCache.packageRoot
   }
-
-  let currentDir = __dirname
-
-  // Search up to 5 levels up for package.json with name "prjct-cli"
-  for (let i = 0; i < 5; i++) {
+  const findPackageRoot = (currentDir: string, depth: number): string | null => {
+    if (depth >= 5) return null
     const packageJsonPath = path.join(currentDir, 'package.json')
     if (fs.existsSync(packageJsonPath)) {
       try {
         const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'))
         if (pkg.name === 'prjct-cli') {
-          cachedPackageRoot = currentDir
           return currentDir
         }
       } catch (_error) {
         // Continue searching
       }
     }
-    currentDir = path.dirname(currentDir)
+    return findPackageRoot(path.dirname(currentDir), depth + 1)
   }
-
-  // Fallback: assume 3 levels up from __dirname (works for dist/core/utils/)
-  cachedPackageRoot = path.join(__dirname, '..', '..', '..')
-  return cachedPackageRoot
+  versionCache.packageRoot = findPackageRoot(__dirname, 0) ?? path.join(__dirname, '..', '..', '..')
+  return versionCache.packageRoot
 }
 
 /**
@@ -68,21 +64,21 @@ export function getPackageRoot(): string {
  *   3. `'0.0.0'` — last-resort fallback so the binary still functions.
  */
 export function getVersion(): string {
-  if (cachedVersion) {
-    return cachedVersion
+  if (versionCache.version) {
+    return versionCache.version
   }
 
   const baked = process.env.PRJCT_VERSION
   if (baked && /^\d+\.\d+\.\d+/.test(baked)) {
-    cachedVersion = baked
-    return cachedVersion
+    versionCache.version = baked
+    return versionCache.version
   }
 
   try {
     const packageJsonPath = path.join(getPackageRoot(), 'package.json')
     const packageJson: PackageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'))
-    cachedVersion = packageJson.version
-    return cachedVersion
+    versionCache.version = packageJson.version
+    return versionCache.version
   } catch (error) {
     // Stay silent in standalone binaries — the env-var fallback above
     // covered the expected path. Logging here would surface the
@@ -100,8 +96,8 @@ export function getVersion(): string {
  * from source/old paths to the newly installed package.
  */
 export function resetPackageRoot(newRoot: string): void {
-  cachedPackageRoot = newRoot
-  cachedVersion = null
+  versionCache.packageRoot = newRoot
+  versionCache.version = null
 }
 
 export const VERSION = getVersion()

@@ -171,7 +171,6 @@ export async function verifyCodexPRouterReady(
     return result.success
   }
 
-  let skillContent = ''
   if (!(await fileExists(skillPath))) {
     if (!(await maybeRepair())) {
       return {
@@ -185,12 +184,16 @@ export async function verifyCodexPRouterReady(
     }
   }
 
-  skillContent = await fs.readFile(skillPath, 'utf-8').catch(() => '')
-  let metadata = parseCodexSkillMetadata(skillContent)
-  const metadataMatches =
-    metadata?.version === VERSION && metadata?.templateHash === expected.templateHash
+  const readVerification = async () => {
+    const content = await fs.readFile(skillPath, 'utf-8').catch(() => '')
+    const metadata = parseCodexSkillMetadata(content)
+    return {
+      matches: metadata?.version === VERSION && metadata?.templateHash === expected.templateHash,
+    }
+  }
+  const initialVerification = await readVerification()
 
-  if (!metadataMatches) {
+  if (!initialVerification.matches) {
     if (!(await maybeRepair())) {
       return {
         installed: true,
@@ -202,11 +205,8 @@ export async function verifyCodexPRouterReady(
       }
     }
 
-    skillContent = await fs.readFile(skillPath, 'utf-8').catch(() => '')
-    metadata = parseCodexSkillMetadata(skillContent)
-    const repaired =
-      metadata?.version === VERSION && metadata?.templateHash === expected.templateHash
-    if (!repaired) {
+    const repairedVerification = await readVerification()
+    if (!repairedVerification.matches) {
       return {
         installed: true,
         verified: false,

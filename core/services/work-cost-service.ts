@@ -313,16 +313,17 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
     'SELECT COUNT(*) AS value FROM agent_sessions WHERE started_at >= ?',
     since
   )
-  let cliSessions = 0
-  try {
-    cliSessions = count(
-      projectId,
-      'SELECT COUNT(*) AS value FROM cli_sessions WHERE created_at >= ?',
-      since
-    )
-  } catch {
-    /* older schemas */
-  }
+  const cliSessions = (() => {
+    try {
+      return count(
+        projectId,
+        'SELECT COUNT(*) AS value FROM cli_sessions WHERE created_at >= ?',
+        since
+      )
+    } catch {
+      return 0
+    }
+  })()
   const measuredSessions = agentSessions + cliSessions
   // Distinct memories (not raw surface rows) — row spam should not tank reuse.
   const surfacedContext = count(
@@ -341,20 +342,21 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
     since
   )
   // Finished cycles with a linked agent session (task_id) — better than sessions/cycles.
-  let cyclesWithSession = 0
-  try {
-    cyclesWithSession = count(
-      projectId,
-      `SELECT COUNT(DISTINCT t.id) AS value
-       FROM tasks t
-       INNER JOIN agent_sessions a ON a.task_id = t.id
-       WHERE (t.completed_at IS NOT NULL OR t.shipped_at IS NOT NULL)
-         AND COALESCE(t.completed_at, t.shipped_at, t.started_at) >= ?`,
-      since
-    )
-  } catch {
-    cyclesWithSession = 0
-  }
+  const cyclesWithSession = (() => {
+    try {
+      return count(
+        projectId,
+        `SELECT COUNT(DISTINCT t.id) AS value
+         FROM tasks t
+         INNER JOIN agent_sessions a ON a.task_id = t.id
+         WHERE (t.completed_at IS NOT NULL OR t.shipped_at IS NOT NULL)
+           AND COALESCE(t.completed_at, t.shipped_at, t.started_at) >= ?`,
+        since
+      )
+    } catch {
+      return 0
+    }
+  })()
   const contextZoneEvents = count(
     projectId,
     'SELECT COUNT(*) AS value FROM context_zone_events WHERE timestamp >= ?',
@@ -376,22 +378,23 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
   const inferredWorkCycles = Math.max(taskRows.length, eventWorkStarts, eventShips)
   const finishedTaskRows = taskRows.filter((r) => r.completed_at || r.shipped_at)
   const tokenUsageIds = new Set(measuredCyclesFromTokenUsage(projectId, since).keys())
-  let sessionTaskIds = new Set<string>()
-  try {
-    sessionTaskIds = new Set(
-      prjctDb
-        .query<{ task_id: string }>(
-          projectId,
-          `SELECT DISTINCT task_id AS task_id FROM agent_sessions
-           WHERE task_id IS NOT NULL AND started_at >= ?`,
-          since
-        )
-        .map((r) => r.task_id)
-        .filter(Boolean)
-    )
-  } catch {
-    sessionTaskIds = new Set()
-  }
+  const sessionTaskIds = (() => {
+    try {
+      return new Set(
+        prjctDb
+          .query<{ task_id: string }>(
+            projectId,
+            `SELECT DISTINCT task_id AS task_id FROM agent_sessions
+             WHERE task_id IS NOT NULL AND started_at >= ?`,
+            since
+          )
+          .map((r) => r.task_id)
+          .filter(Boolean)
+      )
+    } catch {
+      return new Set<string>()
+    }
+  })()
   const finishedWithTokens = finishedTaskRows.filter((r) => {
     const tin = Number(r.tokens_in ?? 0)
     const tout = Number(r.tokens_out ?? 0)
@@ -439,23 +442,24 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
 
   // Per-model spend: the claude-transcript:<model> rows written per turn.
   // model_id IS NOT NULL keeps the un-attributed totals row out of the split.
-  let byModel: WorkCostSnapshot['byModel'] = []
-  try {
-    byModel = prjctDb
-      .query<{ model: string; t_in: number; t_out: number }>(
-        projectId,
-        `SELECT COALESCE(model_id, 'unknown') AS model,
-              SUM(input_tokens) AS t_in, SUM(output_tokens) AS t_out
-       FROM token_usage
-       WHERE model_id IS NOT NULL AND measured_at >= ?
-       GROUP BY COALESCE(model_id, 'unknown')
-       ORDER BY t_in + t_out DESC`,
-        Date.parse(since)
-      )
-      .map((r) => ({ model: r.model, tokensIn: r.t_in, tokensOut: r.t_out }))
-  } catch {
-    /* additive telemetry — absent on older schemas */
-  }
+  const byModel: WorkCostSnapshot['byModel'] = (() => {
+    try {
+      return prjctDb
+        .query<{ model: string; t_in: number; t_out: number }>(
+          projectId,
+          `SELECT COALESCE(model_id, 'unknown') AS model,
+                SUM(input_tokens) AS t_in, SUM(output_tokens) AS t_out
+         FROM token_usage
+         WHERE model_id IS NOT NULL AND measured_at >= ?
+         GROUP BY COALESCE(model_id, 'unknown')
+         ORDER BY t_in + t_out DESC`,
+          Date.parse(since)
+        )
+        .map((r) => ({ model: r.model, tokensIn: r.t_in, tokensOut: r.t_out }))
+    } catch {
+      return []
+    }
+  })()
 
   return {
     id: `work-cost-${days}d`,
@@ -591,13 +595,15 @@ function declaredTokenMentions(projectId: string, since: string): DeclaredTokenM
   )
   const mentions: DeclaredTokenMention[] = []
   for (const row of rows) {
-    let content = ''
-    try {
-      const parsed = JSON.parse(row.data) as { content?: unknown }
-      if (typeof parsed.content === 'string') content = parsed.content
-    } catch {
-      continue
-    }
+    const content = (() => {
+      try {
+        const parsed = JSON.parse(row.data) as { content?: unknown }
+        return typeof parsed.content === 'string' ? parsed.content : ''
+      } catch {
+        return ''
+      }
+    })()
+    if (!content) continue
     const tokens = extractTokenCounts(content)
     for (const tokenCount of tokens) {
       mentions.push({
@@ -614,8 +620,7 @@ function declaredTokenMentions(projectId: string, since: string): DeclaredTokenM
 function extractTokenCounts(content: string): number[] {
   const counts: number[] = []
   const re = /\b(\d+(?:\.\d+)?)\s*([kKmM])?\s*(?:tokens?|tok)\b/g
-  let match: RegExpExecArray | null
-  while ((match = re.exec(content)) !== null) {
+  for (const match of content.matchAll(re)) {
     const value = Number.parseFloat(match[1] ?? '0')
     const suffix = match[2]?.toLowerCase()
     if (!Number.isFinite(value) || value <= 0) continue

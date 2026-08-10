@@ -28,21 +28,25 @@ import { getUpdateNotificationSync } from '../../infrastructure/update-checker'
 setDefaultTimeout(60_000)
 
 describe('WS5 — new-version banner is one-command', () => {
-  let tmp: string
+  const fixture: {
+    tmp: string
+  } = {
+    tmp: '',
+  }
   const origBase = pathManager.getGlobalBasePath()
 
   beforeEach(async () => {
-    tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-banner-'))
-    pathManager.setGlobalBaseDir(tmp)
-    await fs.mkdir(path.join(tmp, 'config'), { recursive: true })
+    fixture.tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-banner-'))
+    pathManager.setGlobalBaseDir(fixture.tmp)
+    await fs.mkdir(path.join(fixture.tmp, 'config'), { recursive: true })
     await fs.writeFile(
-      path.join(tmp, 'config', 'update-cache.json'),
+      path.join(fixture.tmp, 'config', 'update-cache.json'),
       JSON.stringify({ lastCheck: Date.now(), latestVersion: '99.0.0' })
     )
   })
   afterEach(async () => {
     pathManager.setGlobalBaseDir(origBase)
-    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.tmp, { recursive: true, force: true }).catch(() => {})
   })
 
   it('recommends `prjct upgrade`, never `npm install -g`', () => {

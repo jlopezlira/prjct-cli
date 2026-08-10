@@ -14,18 +14,23 @@ import pathManager from '../../infrastructure/path-manager'
 import { projectMemory } from '../../memory/project-memory'
 import { _internal, detectFriction } from '../../services/friction-detector'
 
-let projectPath = ''
-let projectId = ''
+const fixture: {
+  projectPath: string
+  projectId: string
+} = {
+  projectPath: '',
+  projectId: '',
+}
 
 async function freshProject(): Promise<void> {
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-friction-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `fric-${Math.random().toString(36).slice(2, 10)}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-friction-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `fric-${Math.random().toString(36).slice(2, 10)}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
+  await pathManager.ensureProjectStructure(fixture.projectId)
 }
 
 describe('friction-detector classify', () => {
@@ -147,9 +152,9 @@ describe('friction-detector parseJsonl + extractSignals', () => {
 describe('friction-detector promote recurring pushback to feedback', () => {
   beforeEach(freshProject)
   afterEach(async () => {
-    if (projectPath) {
-      await fs.rm(projectPath, { recursive: true, force: true })
-      projectPath = ''
+    if (fixture.projectPath) {
+      await fs.rm(fixture.projectPath, { recursive: true, force: true })
+      fixture.projectPath = ''
     }
   })
 
@@ -158,17 +163,17 @@ describe('friction-detector promote recurring pushback to feedback', () => {
       JSON.stringify({ role: 'assistant', content: "I'll ship now." }),
       JSON.stringify({ role: 'user', content: 'no, run the tests first' }),
     ].join('\n')
-    const file = path.join(projectPath, 't.jsonl')
+    const file = path.join(fixture.projectPath, 't.jsonl')
     await fs.writeFile(file, transcript)
 
-    const first = await detectFriction(projectPath, file, 'sess-1')
+    const first = await detectFriction(fixture.projectPath, file, 'sess-1')
     expect(first.signalsRecorded).toBe(1)
 
-    const second = await detectFriction(projectPath, file, 'sess-2')
+    const second = await detectFriction(fixture.projectPath, file, 'sess-2')
     expect(second.signalsRecorded).toBe(0)
     expect(second.signalsSkipped).toBeGreaterThanOrEqual(1)
 
-    const prefs = projectMemory.recall(projectId, {
+    const prefs = projectMemory.recall(fixture.projectId, {
       types: ['feedback'],
       tags: { source: _internal.PROMOTE_SOURCE },
       limit: 5,

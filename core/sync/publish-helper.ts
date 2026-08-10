@@ -25,7 +25,6 @@
 import crypto from 'node:crypto'
 import { syncEventBus } from '../events/sync-events'
 import type { SyncEvent } from '../types/events'
-
 export type CrudEventType = 'upsert' | 'delete'
 
 export interface PublishCrudArgs {
@@ -80,16 +79,16 @@ function sortKeys(obj: Record<string, unknown>): Record<string, unknown> {
  * machine), returns a stable sentinel so events still flow into the
  * pending queue and get re-tagged at first auth.
  */
-let cachedDeviceId: string | null = null
+const deviceIdCache: { value: string | null } = { value: null }
 async function resolveDeviceId(): Promise<string> {
-  if (cachedDeviceId) return cachedDeviceId
+  if (deviceIdCache.value) return deviceIdCache.value
   try {
     const { default: authConfig } = await import('./auth-config')
     type WithDeviceId = { getDeviceId?: () => Promise<string> }
     const ac = authConfig as unknown as WithDeviceId
     if (typeof ac.getDeviceId === 'function') {
       const id = await ac.getDeviceId()
-      cachedDeviceId = id
+      deviceIdCache.value = id
       return id
     }
     return 'unknown-device'

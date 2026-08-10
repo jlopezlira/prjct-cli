@@ -109,13 +109,12 @@ export class SetupCommands extends PrjctCommandsBase {
     const apiUrl = process.env.PRJCT_API_URL || DEFAULT_API_URL
     // Verifier/state only in this process for the lifetime of one login.
     const pkce = generatePkceMaterial()
-    let settled = false
-    let listenPort = 0
+    const loginState = { settled: false, listenPort: 0 }
 
     return new Promise<CommandResult>((resolve) => {
       const finish = (result: CommandResult) => {
-        if (settled) return
-        settled = true
+        if (loginState.settled) return
+        loginState.settled = true
         resolve(result)
       }
 
@@ -144,48 +143,56 @@ export class SetupCommands extends PrjctCommandsBase {
             return
           }
 
-          let verified = false
-          let failureMessage = 'Authorization exchange failed'
-          let email = ''
-
-          try {
-            const body = buildExchangeBody({
-              code: parsed.code,
-              state: parsed.state,
-              codeVerifier: pkce.codeVerifier,
-              deviceId: await authConfig.getDeviceId(),
-              port: listenPort,
-            })
-            const exchangeRes = await fetch(`${apiUrl}/auth/cli/exchange`, {
-              method: 'POST',
-              headers: {
-                'content-type': 'application/json',
-                accept: 'application/json',
-              },
-              body: JSON.stringify(body),
-            })
-            if (!exchangeRes.ok) {
-              failureMessage = `Exchange failed (${exchangeRes.status})`
-            } else {
-              const minted = parseMintedKeyResponse(await exchangeRes.json())
-              if (!minted) {
-                failureMessage = 'Malformed exchange response'
-              } else {
-                email = minted.email
-                await authConfig.saveAuth(minted.apiKey, minted.userId, minted.email)
-                await authConfig.write({ apiUrl })
-                verified = await syncClient.testConnection()
-                if (!verified) {
-                  failureMessage = 'Could not verify credentials with prjct Cloud'
-                  await authConfig.clearAuth()
+          const { verified, failureMessage, email } = await (async () => {
+            try {
+              const body = buildExchangeBody({
+                code: parsed.code,
+                state: parsed.state,
+                codeVerifier: pkce.codeVerifier,
+                deviceId: await authConfig.getDeviceId(),
+                port: loginState.listenPort,
+              })
+              const exchangeRes = await fetch(`${apiUrl}/auth/cli/exchange`, {
+                method: 'POST',
+                headers: {
+                  'content-type': 'application/json',
+                  accept: 'application/json',
+                },
+                body: JSON.stringify(body),
+              })
+              if (!exchangeRes.ok) {
+                return {
+                  verified: false,
+                  failureMessage: `Exchange failed (${exchangeRes.status})`,
+                  email: '',
                 }
               }
+              const minted = parseMintedKeyResponse(await exchangeRes.json())
+              if (!minted) {
+                return { verified: false, failureMessage: 'Malformed exchange response', email: '' }
+              }
+              await authConfig.saveAuth(minted.apiKey, minted.userId, minted.email)
+              await authConfig.write({ apiUrl })
+              const connected = await syncClient.testConnection()
+              if (!connected) {
+                await authConfig.clearAuth()
+                return {
+                  verified: false,
+                  failureMessage: 'Could not verify credentials with prjct Cloud',
+                  email: minted.email,
+                }
+              }
+              return { verified: true, failureMessage: '', email: minted.email }
+            } catch (error) {
+              await authConfig.clearAuth()
+              return {
+                verified: false,
+                failureMessage:
+                  error instanceof Error ? error.message : 'Could not store credentials securely',
+                email: '',
+              }
             }
-          } catch (error) {
-            failureMessage =
-              error instanceof Error ? error.message : 'Could not store credentials securely'
-            await authConfig.clearAuth()
-          }
+          })()
 
           if (verified) {
             res.writeHead(200, noStore)
@@ -244,18 +251,18 @@ export class SetupCommands extends PrjctCommandsBase {
           return
         }
 
-        listenPort = addr.port
+        loginState.listenPort = addr.port
         const deviceId = await authConfig.getDeviceId()
         const hostname = await authConfig.getHostname()
         const loginParams = buildCliLoginSearchParams({
-          port: listenPort,
+          port: loginState.listenPort,
           deviceId,
           hostname,
           state: pkce.state,
           codeChallenge: pkce.codeChallenge,
         })
         // Sanitized display: never print state/challenge (identifying params).
-        const displayUrl = `${webUrl}/auth/cli?flow=pkce-v1&port=${listenPort}`
+        const displayUrl = `${webUrl}/auth/cli?flow=pkce-v1&port=${loginState.listenPort}`
         const loginUrl = `${webUrl}/auth/cli?${loginParams.toString()}`
 
         out.step(1, 3, 'Opening browser...')
@@ -288,7 +295,7 @@ export class SetupCommands extends PrjctCommandsBase {
       // Timeout after 5 minutes
       setTimeout(
         () => {
-          if (settled) return
+          if (loginState.settled) return
           server.close()
           out.stop()
           if (!options.md) {
@@ -774,14 +781,11 @@ echo "⚡ prjct"
 `
       await fs.writeFile(statusLinePath, scriptContent, { mode: 0o755 })
 
-      let settings: Record<string, unknown> = {}
-      if (await fileExists(settingsPath)) {
-        try {
-          settings = (await readJson<Record<string, unknown>>(settingsPath)) ?? {}
-        } catch (_error) {
-          // Invalid JSON, start fresh
-        }
-      }
+      const settings: Record<string, unknown> = (await fileExists(settingsPath))
+        ? await readJson<Record<string, unknown>>(settingsPath)
+            .catch(() => null)
+            .then((v) => v ?? {})
+        : {}
 
       settings.statusLine = {
         type: 'command',

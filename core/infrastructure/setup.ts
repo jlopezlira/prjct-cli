@@ -196,9 +196,6 @@ export async function run(): Promise<SetupResults> {
           }
         }
 
-        // Install documentation files
-        await installer.installDocs()
-
         // Install status line (Claude only)
         await installStatusLine()
 
@@ -344,25 +341,19 @@ async function installGeminiGlobalConfig(): Promise<{ success: boolean; action: 
       return { success: false, action: null }
     }
 
-    let existingContent = ''
-    let configExists = false
-
-    try {
-      existingContent = await fs.readFile(globalConfigPath, 'utf-8')
-      configExists = true
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        configExists = false
-      } else {
+    const existingFile = await fs
+      .readFile(globalConfigPath, 'utf-8')
+      .then((content) => ({ content, exists: true }))
+      .catch((error) => {
+        if (isNotFoundError(error)) return { content: '', exists: false }
         throw error
-      }
-    }
+      })
 
     const startMarker = '<!-- prjct:start - DO NOT REMOVE THIS MARKER -->'
     const endMarker = '<!-- prjct:end - DO NOT REMOVE THIS MARKER -->'
 
     const merged = mergeWithMarkers(
-      configExists ? existingContent : '',
+      existingFile.exists ? existingFile.content : '',
       templateContent,
       startMarker,
       endMarker
@@ -441,7 +432,7 @@ async function migrateProjectsCliVersion(): Promise<void> {
       .filter((dirent) => dirent.isDirectory())
       .map((dirent) => dirent.name)
 
-    let migrated = 0
+    const migratedProjectIds: string[] = []
 
     for (const projectId of projectDirs) {
       try {
@@ -455,7 +446,7 @@ async function migrateProjectsCliVersion(): Promise<void> {
         if (project && project.cliVersion !== VERSION) {
           project.cliVersion = VERSION
           prjctDb.setDoc(projectId, 'project', project)
-          migrated++
+          migratedProjectIds.push(projectId)
         }
 
         // Mark even doc-less dirs (test artifacts) so the next upgrade
@@ -466,8 +457,10 @@ async function migrateProjectsCliVersion(): Promise<void> {
       }
     }
 
-    if (migrated > 0) {
-      console.log(`   ${chalk.green('✓')} Updated ${migrated} project(s) to v${VERSION}`)
+    if (migratedProjectIds.length > 0) {
+      console.log(
+        `   ${chalk.green('✓')} Updated ${migratedProjectIds.length} project(s) to v${VERSION}`
+      )
     }
   } catch (error) {
     // Silently fail if projects directory doesn't exist

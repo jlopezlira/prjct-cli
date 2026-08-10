@@ -93,7 +93,7 @@ describe('isValidModelForProvider', () => {
   it('should accept any model for multi-model IDEs (empty supportedModels)', () => {
     expect(isValidModelForProvider('cursor', 'gpt-4')).toBe(true)
     expect(isValidModelForProvider('cursor', 'anything')).toBe(true)
-    expect(isValidModelForProvider('windsurf', 'claude-sonnet')).toBe(true)
+    expect(isValidModelForProvider('antigravity', 'claude-sonnet')).toBe(true)
   })
 
   it('should accept any model for unknown providers', () => {

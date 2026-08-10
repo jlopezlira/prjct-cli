@@ -91,11 +91,9 @@ export function findingDna(input: { title: string; file?: string; line?: number 
 
 /** Tiny non-crypto 32-bit hash — good enough for local DNA, zero deps. */
 function hash32(s: string): string {
-  let h = 2166136261
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
+  const h = s
+    .split('')
+    .reduce((hash, character) => Math.imul(hash ^ character.charCodeAt(0), 16777619), 2166136261)
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
@@ -123,22 +121,19 @@ export function evidenceScore(
 export function applyEvidenceTax(finding: JudgmentFinding): JudgmentFinding {
   const score = evidenceScore(finding)
   const original = finding.severity
-  let severity = original
-  let status = finding.status
-
   // Use ORIGINAL severity so a taxed blocker→critical is not double-taxed to warning.
-  if (original === 'blocker' && score < 2) {
-    // Tax: no file:line → cannot freeze ship as blocker (stays critical even if score 0)
-    severity = 'critical'
-  } else if (original === 'critical' && score === 0) {
-    // Title-only criticals are noise — drop to warning → info via severity floor
-    severity = 'warning'
-  }
-  if (severity === 'warning' || severity === 'suggestion') {
-    status = 'info'
-  } else if (status === 'info' && (severity === 'blocker' || severity === 'critical')) {
-    status = 'candidate'
-  }
+  const severity =
+    original === 'blocker' && score < 2
+      ? 'critical'
+      : original === 'critical' && score === 0
+        ? 'warning'
+        : original
+  const status =
+    severity === 'warning' || severity === 'suggestion'
+      ? 'info'
+      : finding.status === 'info'
+        ? 'candidate'
+        : finding.status
 
   return {
     ...finding,
@@ -150,59 +145,31 @@ export function applyEvidenceTax(finding: JudgmentFinding): JudgmentFinding {
   }
 }
 
-// ── Mechanical style-hallucination refute ───────────────────────────────────
-// Classic agent FP: "why let? use const" when the binding is mutated (++ / += / =).
-// Code-enforced — not prompt hope. Evidence tax alone cannot catch this class.
+// ── Const-only evidence tax ──────────────────────────────────────────────────
+// Const-only is a repository invariant. Review findings still need a concrete
+// file, line, and snippet so an agent proposes the correct functional rewrite.
 
-/** Prefer-const / let→const claims (ESLint prefer-const hallucination class). */
+/** Const-only review claims. */
 export const PREFER_CONST_CLAIM_RE =
   /\b(prefer[- ]const|use const|should be const|can be const|const instead|instead of let|never reassigned|not reassigned|let\s*→\s*const|change let to const|let is unnecessary|why let|por qu[eé] let)\b/i
-
-/**
- * Mutation ops that prove `let` is required.
- * Intentionally excludes plain `=` so `let x = 0` declarations in evidence
- * do not false-positive a legitimate prefer-const claim.
- */
-export const BINDING_REASSIGN_RE = /(\+\+|--|\+=|-=|\*=|\/=|%=|\|\|=|&&=|\?\?=)/
 
 export function isPreferConstClaim(text: string): boolean {
   return PREFER_CONST_CLAIM_RE.test(text)
 }
 
-export function textShowsBindingReassignment(text: string): boolean {
-  return BINDING_REASSIGN_RE.test(text)
-}
-
 /**
- * Kill prefer-const hallucinations mechanically.
- *
- * 1. Claim + reassignment in title/evidence → status=refuted (never enters fix loops)
- * 2. Prefer-const without file:line+snippet (evidenceScore < 3) → suggestion/info
- *    (must prove the binding is write-once by quoting the scope)
+ * Require const-only findings to include file:line+snippet. Reassignment is
+ * evidence for a functional refactor, never a reason to auto-refute the claim.
+ * The historical function name remains as a compatibility surface.
  */
 export function applyMechanicalStyleRefute(finding: JudgmentFinding): JudgmentFinding {
   const blob = `${finding.title}\n${finding.evidence ?? ''}`
   if (!isPreferConstClaim(blob)) return finding
 
-  if (textShowsBindingReassignment(blob)) {
-    const note =
-      '[MECHANICAL REFUTE: prefer-const claim but reassignment (++/+=/=) appears in the claim/evidence — agent hallucination; `let` is required]'
-    return {
-      ...finding,
-      status: 'refuted',
-      severity: 'suggestion',
-      evidence: finding.evidence ? `${finding.evidence}\n${note}` : note,
-      evidenceScore: evidenceScore(finding),
-      dna: finding.dna ?? findingDna(finding),
-      blast: 0,
-    }
-  }
-
-  // No reassignment shown — still demand full locus (file+line+snippet) or drop to info.
   const score = evidenceScore(finding)
   if (score < 3) {
     const note =
-      '[STYLE TAX: prefer-const requires file:line + snippet proving the binding is never reassigned; title-only nits are noise]'
+      '[CONST-ONLY TAX: include file:line + snippet and propose an immutable rewrite; title-only findings are noise]'
     return applyEvidenceTax({
       ...finding,
       severity: 'suggestion',
@@ -230,12 +197,13 @@ const SEV_WEIGHT: Record<FindingSeverity, number> = {
 export function blastRank(
   f: Pick<JudgmentFinding, 'severity' | 'file' | 'evidenceScore' | 'status'>
 ): number {
-  let n = SEV_WEIGHT[f.severity] ?? 0
-  n += (f.evidenceScore ?? 0) * 5
-  if (f.file && isHotPath([f.file])) n += 25
-  if (f.status === 'stands') n += 10
-  if (f.status === 'open') n += 15
-  return n
+  return (
+    (SEV_WEIGHT[f.severity] ?? 0) +
+    (f.evidenceScore ?? 0) * 5 +
+    (f.file && isHotPath([f.file]) ? 25 : 0) +
+    (f.status === 'stands' ? 10 : 0) +
+    (f.status === 'open' ? 15 : 0)
+  )
 }
 
 export function rankFindingsForFix(
@@ -289,33 +257,21 @@ export function markGhost(
   const dna = finding.dna
   if (!dna) return book
   const existing = book.ghosts.find((g) => g.dna === dna)
-  let ghosts: JudgmentGhost[]
-  if (existing) {
-    ghosts = book.ghosts.map((g) =>
-      g.dna === dna
-        ? {
-            ...g,
-            times: g.times + 1,
-            lastSeenAt: now,
-            lastReason: reason ?? g.lastReason,
-            title: finding.title || g.title,
-          }
-        : g
-    )
-  } else {
-    ghosts = [
-      ...book.ghosts,
-      {
-        dna,
-        title: finding.title,
-        times: 1,
-        lastSeenAt: now,
-        lastReason: reason,
-      },
-    ]
-  }
+  const updatedGhosts: JudgmentGhost[] = existing
+    ? book.ghosts.map((ghost) =>
+        ghost.dna === dna
+          ? {
+              ...ghost,
+              times: ghost.times + 1,
+              lastSeenAt: now,
+              lastReason: reason ?? ghost.lastReason,
+              title: finding.title || ghost.title,
+            }
+          : ghost
+      )
+    : [...book.ghosts, { dna, title: finding.title, times: 1, lastSeenAt: now, lastReason: reason }]
   // Cap book size — keep hottest ghosts
-  ghosts = ghosts.sort((a, b) => b.times - a.times).slice(0, 200)
+  const ghosts = updatedGhosts.sort((a, b) => b.times - a.times).slice(0, 200)
   return { ghosts, updatedAt: now }
 }
 
@@ -324,13 +280,13 @@ export function recordRefutedAsGhosts(
   findings: JudgmentFinding[],
   now: string
 ): JudgmentGhostBook {
-  let next = book
-  for (const f of findings) {
-    if (f.status === 'refuted' && f.dna) {
-      next = markGhost(next, f, now, 'refuted by panel')
-    }
-  }
-  return next
+  return findings.reduce(
+    (next, finding) =>
+      finding.status === 'refuted' && finding.dna
+        ? markGhost(next, finding, now, 'refuted by panel')
+        : next,
+    book
+  )
 }
 
 /**
@@ -413,13 +369,7 @@ export function mergeDualJudges(
   ingest({ ...red, role: 'red' })
   ingest({ ...blue, role: 'blue' })
 
-  const findings: JudgmentFinding[] = []
-  let agreed = 0
-  let onlyRed = 0
-  let onlyBlue = 0
-  let contradicted = 0
-
-  for (const [dna, sides] of bucket) {
+  const merged = [...bucket].map(([dna, sides]) => {
     const roles = new Set(sides.map((s) => s.role))
     const hasRed = roles.has('red')
     const hasBlue = roles.has('blue')
@@ -435,19 +385,16 @@ export function mergeDualJudges(
     const best = ranked[0]!.raw
     const agreedBy = [...roles]
 
-    if (hasRed && hasBlue) {
-      const redAct = reds.some((s) => isActionableSeverity(s.raw.severity))
-      const blueAct = blues.some((s) => isActionableSeverity(s.raw.severity))
-      if (redAct !== blueAct) {
-        contradicted++
-      } else {
-        agreed++
-      }
-    } else if (hasRed) {
-      onlyRed++
-    } else {
-      onlyBlue++
-    }
+    const redActionable = reds.some((side) => isActionableSeverity(side.raw.severity))
+    const blueActionable = blues.some((side) => isActionableSeverity(side.raw.severity))
+    const outcome =
+      hasRed && hasBlue
+        ? redActionable !== blueActionable
+          ? 'contradicted'
+          : 'agreed'
+        : hasRed
+          ? 'onlyRed'
+          : 'onlyBlue'
 
     const base: JudgmentFinding = applySeverityFloor({
       id: idFactory(),
@@ -462,8 +409,14 @@ export function mergeDualJudges(
       dna,
       agreedBy,
     })
-    findings.push(base)
-  }
+    return { finding: base, outcome }
+  })
+
+  const findings = merged.map(({ finding }) => finding)
+  const agreed = merged.filter(({ outcome }) => outcome === 'agreed').length
+  const onlyRed = merged.filter(({ outcome }) => outcome === 'onlyRed').length
+  const onlyBlue = merged.filter(({ outcome }) => outcome === 'onlyBlue').length
+  const contradicted = merged.filter(({ outcome }) => outcome === 'contradicted').length
 
   const shouldEscalate = contradicted > 0
   return {
@@ -759,9 +712,9 @@ export interface NextActionCard {
 }
 
 const RED_CHARTER =
-  'RED (attack): assume the change is hostile. Hunt production killers — races, auth holes, data loss, silent fail. Prefer over-calling; blue + refuters will kill FPs. Output severity + file:line + 1-line repro. NEVER flag let→const without reading the full binding scope — if ++/+=/= mutates it, that finding is a HALLUCINATION (do not report).'
+  'RED (attack): assume the change is hostile. Hunt production killers — races, auth holes, data loss, silent fail. Prefer over-calling; blue + refuters will kill FPs. Output severity + file:line + 1-line repro. Enforce const-only bindings with a concrete immutable rewrite when reassignment exists.'
 const BLUE_CHARTER =
-  'BLUE (defense): assume the author is competent. Only report defects you can reproduce from the code. Challenge red overclaims. Same schema: severity + file:line + evidence. Kill style nits that ignore mutations (let+currentStreak++ is correct; prefer-const is false).'
+  'BLUE (defense): assume the author is competent. Only report defects you can reproduce from the code. Challenge red overclaims. Same schema: severity + file:line + evidence. For const-only findings, require a viable immutable rewrite rather than a keyword-only suggestion.'
 
 export function buildNextAction(
   ledger: JudgmentLedger | null,

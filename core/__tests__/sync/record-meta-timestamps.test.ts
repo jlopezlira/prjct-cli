@@ -21,33 +21,40 @@ import prjctDb from '../../storage/database'
 import { getRecordMeta } from '../../sync/sync-applied-hashes'
 import { _resetWarnDedupeForTest, syncManager } from '../../sync/sync-manager'
 
-let projectId: string
-let originalProjectsDir: string | undefined
-let warnCalls: string[]
-let originalWarn: typeof console.warn
+const fixture: {
+  projectId: string
+  originalProjectsDir: string | undefined
+  warnCalls: string[]
+  originalWarn: typeof console.warn
+} = {
+  projectId: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  warnCalls: undefined as unknown as string[],
+  originalWarn: undefined as unknown as typeof console.warn,
+}
 
 beforeEach(async () => {
   prjctDb.close()
   const tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-record-meta-'))
-  originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+  fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
   process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
-  projectId = `meta-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  await pathManager.ensureProjectStructure(projectId)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+  fixture.projectId = `meta-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await pathManager.ensureProjectStructure(fixture.projectId)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
 
-  warnCalls = []
-  originalWarn = console.warn
+  fixture.warnCalls = []
+  fixture.originalWarn = console.warn
   console.warn = (...args: unknown[]) => {
-    warnCalls.push(args.map((a) => String(a)).join(' '))
+    fixture.warnCalls.push(args.map((a) => String(a)).join(' '))
   }
   _resetWarnDedupeForTest()
 })
 
 afterEach(() => {
-  console.warn = originalWarn
+  console.warn = fixture.originalWarn
   _resetWarnDedupeForTest()
-  if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-  else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
+  if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+  else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
   prjctDb.close()
 })
 
@@ -56,7 +63,7 @@ async function applyEvent(event: Record<string, unknown>): Promise<void> {
     syncManager as unknown as {
       applyEvent: (pid: string, ev: Record<string, unknown>) => Promise<void>
     }
-  ).applyEvent(projectId, event)
+  ).applyEvent(fixture.projectId, event)
 }
 
 describe('per-record origin vs ingestion timestamps', () => {
@@ -69,7 +76,7 @@ describe('per-record origin vs ingestion timestamps', () => {
       data: { id: 'task-1', description: 'from machine A', created_at: origin },
     })
 
-    const meta = getRecordMeta(projectId, 'tasks', 'task-1')
+    const meta = getRecordMeta(fixture.projectId, 'tasks', 'task-1')
     expect(meta).not.toBeNull()
     // Origin time survives the round trip verbatim — not overwritten.
     expect(meta?.createdAt).toBe(origin)
@@ -87,7 +94,7 @@ describe('per-record origin vs ingestion timestamps', () => {
       data: { id: 'task-2', description: 'camel', createdAt: origin },
     })
 
-    expect(getRecordMeta(projectId, 'tasks', 'task-2')?.createdAt).toBe(origin)
+    expect(getRecordMeta(fixture.projectId, 'tasks', 'task-2')?.createdAt).toBe(origin)
   })
 
   test('warns once per entity_type when the producer omits created_at', async () => {
@@ -104,10 +111,10 @@ describe('per-record origin vs ingestion timestamps', () => {
       data: { id: 'task-4', description: 'still no origin' },
     })
 
-    const missing = warnCalls.filter((w) => w.includes('missing_origin_created_at'))
+    const missing = fixture.warnCalls.filter((w) => w.includes('missing_origin_created_at'))
     expect(missing.length).toBe(1)
     // No origin recorded — created_at stays null rather than a faked local now().
-    expect(getRecordMeta(projectId, 'tasks', 'task-3')?.createdAt).toBeNull()
+    expect(getRecordMeta(fixture.projectId, 'tasks', 'task-3')?.createdAt).toBeNull()
   })
 
   test('a later origin-less update does not blank an already-recorded created_at', async () => {
@@ -126,6 +133,6 @@ describe('per-record origin vs ingestion timestamps', () => {
       data: { id: 'task-5', description: 'v2 edited elsewhere' },
     })
 
-    expect(getRecordMeta(projectId, 'tasks', 'task-5')?.createdAt).toBe(origin)
+    expect(getRecordMeta(fixture.projectId, 'tasks', 'task-5')?.createdAt).toBe(origin)
   })
 })

@@ -40,13 +40,14 @@ const opts = {
 }
 
 const req = https.request(opts, (res) => {
-  let data = ''
+  const chunks = []
   res.on('data', (chunk) => {
-    data += chunk
+    chunks.push(chunk)
   })
   res.on('end', () => {
     try {
       if (res.statusCode === 200) {
+        const data = Buffer.concat(chunks).toString('utf8')
         const version = JSON.parse(data).version
         if (typeof version === 'string') {
           fs.mkdirSync(path.dirname(resolved), { recursive: true })

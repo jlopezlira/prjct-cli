@@ -3,7 +3,7 @@
  * Tests for exponential backoff, error classification, and circuit breaker
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { describe, expect, it } from 'bun:test'
 import {
   defaultAgentRetryPolicy,
   defaultToolRetryPolicy,
@@ -12,25 +12,17 @@ import {
   RetryPolicy,
 } from '../../utils/retry'
 
+function createPolicy(): RetryPolicy {
+  return new RetryPolicy({
+    maxAttempts: 3,
+    baseDelayMs: 100,
+    maxDelayMs: 400,
+    circuitBreakerThreshold: 5,
+    circuitBreakerTimeoutMs: 1000,
+  })
+}
+
 describe('RetryPolicy', () => {
-  let policy: RetryPolicy
-
-  beforeEach(() => {
-    policy = new RetryPolicy({
-      maxAttempts: 3,
-      baseDelayMs: 100, // Shorter delays for tests
-      maxDelayMs: 400,
-      circuitBreakerThreshold: 5,
-      circuitBreakerTimeoutMs: 1000,
-    })
-    // Reset all circuits before each test
-    policy.resetAllCircuits()
-  })
-
-  afterEach(() => {
-    policy.resetAllCircuits()
-  })
-
   describe('Error Classification', () => {
     it('should identify transient errors correctly', () => {
       const transientErrors = [
@@ -79,23 +71,25 @@ describe('RetryPolicy', () => {
 
   describe('Successful Operations', () => {
     it('should execute successful operation without retry', async () => {
-      let attempts = 0
+      const policy = createPolicy()
+      const attempts: number[] = []
       const operation = async () => {
-        attempts++
+        attempts.push(Date.now())
         return 'success'
       }
 
       const result = await policy.execute(operation, 'test-op')
 
       expect(result).toBe('success')
-      expect(attempts).toBe(1)
+      expect(attempts).toHaveLength(1)
     })
 
     it('should reset circuit breaker after success', async () => {
+      const policy = createPolicy()
       // Force some failures to increment circuit state
-      let failCount = 0
+      const failures: number[] = []
       const failOperation = async () => {
-        failCount++
+        failures.push(Date.now())
         throw { code: 'EBUSY' }
       }
 
@@ -105,7 +99,7 @@ describe('RetryPolicy', () => {
         // Expected to fail
       }
 
-      expect(failCount).toBe(3) // maxAttempts
+      expect(failures).toHaveLength(3) // maxAttempts
 
       // Now succeed - should reset circuit
       const successOperation = async () => 'success'
@@ -118,10 +112,11 @@ describe('RetryPolicy', () => {
 
   describe('Transient Error Retry', () => {
     it('should retry transient errors and succeed', async () => {
-      let attempts = 0
+      const policy = createPolicy()
+      const attempts: number[] = []
       const operation = async () => {
-        attempts++
-        if (attempts < 3) {
+        attempts.push(Date.now())
+        if (attempts.length < 3) {
           throw { code: 'EBUSY' } // Transient error
         }
         return 'success'
@@ -130,17 +125,16 @@ describe('RetryPolicy', () => {
       const result = await policy.execute(operation, 'test-op')
 
       expect(result).toBe('success')
-      expect(attempts).toBe(3)
+      expect(attempts).toHaveLength(3)
     })
 
     it('should apply exponential backoff between retries', async () => {
+      const policy = createPolicy()
       const timestamps: number[] = []
-      let attempts = 0
 
       const operation = async () => {
         timestamps.push(Date.now())
-        attempts++
-        if (attempts < 3) {
+        if (timestamps.length < 3) {
           throw { code: 'ETIMEDOUT' }
         }
         return 'success'
@@ -170,12 +164,10 @@ describe('RetryPolicy', () => {
       })
 
       const timestamps: number[] = []
-      let attempts = 0
 
       const operation = async () => {
         timestamps.push(Date.now())
-        attempts++
-        if (attempts < 5) {
+        if (timestamps.length < 5) {
           throw { code: 'EBUSY' }
         }
         return 'success'
@@ -194,9 +186,10 @@ describe('RetryPolicy', () => {
     })
 
     it('should throw if all retry attempts fail with transient error', async () => {
-      let attempts = 0
+      const policy = createPolicy()
+      const attempts: number[] = []
       const operation = async () => {
-        attempts++
+        attempts.push(Date.now())
         throw { code: 'EAGAIN' }
       }
 
@@ -204,15 +197,16 @@ describe('RetryPolicy', () => {
         code: 'EAGAIN',
       })
 
-      expect(attempts).toBe(3) // maxAttempts
+      expect(attempts).toHaveLength(3) // maxAttempts
     })
   })
 
   describe('Permanent Error Handling', () => {
     it('should fail fast on permanent errors without retry', async () => {
-      let attempts = 0
+      const policy = createPolicy()
+      const attempts: number[] = []
       const operation = async () => {
-        attempts++
+        attempts.push(Date.now())
         throw { code: 'ENOENT' } // Permanent error
       }
 
@@ -220,13 +214,14 @@ describe('RetryPolicy', () => {
         code: 'ENOENT',
       })
 
-      expect(attempts).toBe(1) // No retry
+      expect(attempts).toHaveLength(1) // No retry
     })
 
     it('should fail fast on permission denied', async () => {
-      let attempts = 0
+      const policy = createPolicy()
+      const attempts: number[] = []
       const operation = async () => {
-        attempts++
+        attempts.push(Date.now())
         throw { code: 'EPERM' }
       }
 
@@ -234,10 +229,11 @@ describe('RetryPolicy', () => {
         code: 'EPERM',
       })
 
-      expect(attempts).toBe(1)
+      expect(attempts).toHaveLength(1)
     })
 
     it('should record failure for permanent errors', async () => {
+      const policy = createPolicy()
       const operation = async () => {
         throw { code: 'ENOENT' }
       }
@@ -255,12 +251,13 @@ describe('RetryPolicy', () => {
 
   describe('Circuit Breaker', () => {
     it('should open circuit after threshold failures', async () => {
+      const policy = createPolicy()
       const operation = async () => {
         throw { code: 'EBUSY' }
       }
 
       // Execute 5 times to reach threshold (each attempt counts as 1 failure)
-      for (let i = 0; i < 5; i++) {
+      for (const _ of Array.from({ length: 5 })) {
         try {
           await policy.execute(operation, 'circuit-op')
         } catch {
@@ -291,7 +288,7 @@ describe('RetryPolicy', () => {
       }
 
       // Trigger circuit breaker
-      for (let i = 0; i < 3; i++) {
+      for (const _ of Array.from({ length: 3 })) {
         try {
           await policy.execute(operation, 'timeout-op')
         } catch {
@@ -309,12 +306,13 @@ describe('RetryPolicy', () => {
     })
 
     it('should track failures per operation independently', async () => {
+      const policy = createPolicy()
       const operation = async () => {
         throw { code: 'EAGAIN' }
       }
 
       // Fail operation A multiple times
-      for (let i = 0; i < 3; i++) {
+      for (const _ of Array.from({ length: 3 })) {
         try {
           await policy.execute(operation, 'op-a')
         } catch {
@@ -342,22 +340,23 @@ describe('RetryPolicy', () => {
     })
 
     it('should retry agent operations 3 times', async () => {
-      let attempts = 0
+      const attempts: number[] = []
       const operation = async () => {
-        attempts++
-        if (attempts < 3) {
+        attempts.push(Date.now())
+        if (attempts.length < 3) {
           throw { code: 'EBUSY' }
         }
         return 'success'
       }
 
       await defaultAgentRetryPolicy.execute(operation, 'agent-test')
-      expect(attempts).toBe(3)
+      expect(attempts).toHaveLength(3)
     })
   })
 
   describe('Edge Cases', () => {
     it('should handle non-Error objects', async () => {
+      const policy = createPolicy()
       const operation = async () => {
         throw 'string error'
       }
@@ -366,6 +365,7 @@ describe('RetryPolicy', () => {
     })
 
     it('should handle null/undefined errors', async () => {
+      const policy = createPolicy()
       const operation = async () => {
         throw null
       }
@@ -374,6 +374,7 @@ describe('RetryPolicy', () => {
     })
 
     it('should handle errors without code property', async () => {
+      const policy = createPolicy()
       const operation = async () => {
         throw new Error('Generic error')
       }

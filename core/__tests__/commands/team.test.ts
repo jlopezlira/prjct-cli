@@ -20,7 +20,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { TeamCommands } from '../../commands/team'
 
-let testDir = ''
+const fixture: {
+  testDir: string
+} = {
+  testDir: '',
+}
 
 async function setupTempRepo(): Promise<string> {
   const dir = path.join(
@@ -35,24 +39,24 @@ async function setupTempRepo(): Promise<string> {
 }
 
 beforeEach(async () => {
-  testDir = await setupTempRepo()
+  fixture.testDir = await setupTempRepo()
 })
 
 afterEach(async () => {
-  if (testDir) {
-    await fs.rm(testDir, { recursive: true, force: true }).catch(() => undefined)
-    testDir = ''
+  if (fixture.testDir) {
+    await fs.rm(fixture.testDir, { recursive: true, force: true }).catch(() => undefined)
+    fixture.testDir = ''
   }
 })
 
 describe('prjct team — base behavior', () => {
   test('writes .prjct/team.json with default config', async () => {
     const team = new TeamCommands()
-    const result = await team.team(null, testDir, {})
+    const result = await team.team(null, fixture.testDir, {})
 
     expect(result.success).toBe(true)
 
-    const teamPath = path.join(testDir, '.prjct', 'team.json')
+    const teamPath = path.join(fixture.testDir, '.prjct', 'team.json')
     const raw = await fs.readFile(teamPath, 'utf-8')
     const parsed = JSON.parse(raw)
     expect(parsed.required).toBe(false)
@@ -62,37 +66,41 @@ describe('prjct team — base behavior', () => {
 
   test('--required flag flips the team.json field', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, { required: true })
+    await team.team(null, fixture.testDir, { required: true })
 
-    const parsed = JSON.parse(await fs.readFile(path.join(testDir, '.prjct', 'team.json'), 'utf-8'))
+    const parsed = JSON.parse(
+      await fs.readFile(path.join(fixture.testDir, '.prjct', 'team.json'), 'utf-8')
+    )
     expect(parsed.required).toBe(true)
   })
 
   test('--min-version overrides the auto-detected version', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, { minVersion: '3.0.0' })
+    await team.team(null, fixture.testDir, { minVersion: '3.0.0' })
 
-    const parsed = JSON.parse(await fs.readFile(path.join(testDir, '.prjct', 'team.json'), 'utf-8'))
+    const parsed = JSON.parse(
+      await fs.readFile(path.join(fixture.testDir, '.prjct', 'team.json'), 'utf-8')
+    )
     expect(parsed.minVersion).toBe('3.0.0')
   })
 
   test('upserts .claude/CLAUDE.md between markers', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, {})
+    await team.team(null, fixture.testDir, {})
 
-    const claudeMd = await fs.readFile(path.join(testDir, '.claude', 'CLAUDE.md'), 'utf-8')
+    const claudeMd = await fs.readFile(path.join(fixture.testDir, '.claude', 'CLAUDE.md'), 'utf-8')
     expect(claudeMd).toContain('<!-- prjct-team:start')
     expect(claudeMd).toContain('<!-- prjct-team:end')
     expect(claudeMd).toContain('# prjct (team mode)')
   })
 
   test('preserves user content outside markers when CLAUDE.md exists', async () => {
-    const claudeMdPath = path.join(testDir, '.claude', 'CLAUDE.md')
+    const claudeMdPath = path.join(fixture.testDir, '.claude', 'CLAUDE.md')
     await fs.mkdir(path.dirname(claudeMdPath), { recursive: true })
     await fs.writeFile(claudeMdPath, '# My existing rules\n\nDo not break things.\n')
 
     const team = new TeamCommands()
-    await team.team(null, testDir, {})
+    await team.team(null, fixture.testDir, {})
 
     const after = await fs.readFile(claudeMdPath, 'utf-8')
     expect(after).toContain('# My existing rules')
@@ -102,10 +110,10 @@ describe('prjct team — base behavior', () => {
 
   test('re-running is idempotent (no duplicate marker blocks)', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, {})
-    await team.team(null, testDir, {})
+    await team.team(null, fixture.testDir, {})
+    await team.team(null, fixture.testDir, {})
 
-    const claudeMd = await fs.readFile(path.join(testDir, '.claude', 'CLAUDE.md'), 'utf-8')
+    const claudeMd = await fs.readFile(path.join(fixture.testDir, '.claude', 'CLAUDE.md'), 'utf-8')
     const startCount = (claudeMd.match(/<!-- prjct-team:start/g) ?? []).length
     const endCount = (claudeMd.match(/<!-- prjct-team:end/g) ?? []).length
     expect(startCount).toBe(1)
@@ -114,9 +122,9 @@ describe('prjct team — base behavior', () => {
 
   test('stages files in a git repo', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, {})
+    await team.team(null, fixture.testDir, {})
 
-    const staged = execSync('git diff --staged --name-only', { cwd: testDir })
+    const staged = execSync('git diff --staged --name-only', { cwd: fixture.testDir })
       .toString()
       .trim()
       .split('\n')
@@ -129,9 +137,9 @@ describe('prjct team — base behavior', () => {
 describe('prjct team --enforce', () => {
   test('writes .githooks/pre-commit and makes it executable', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, { required: true, enforce: true })
+    await team.team(null, fixture.testDir, { required: true, enforce: true })
 
-    const hookPath = path.join(testDir, '.githooks', 'pre-commit')
+    const hookPath = path.join(fixture.testDir, '.githooks', 'pre-commit')
     const stat = await fs.stat(hookPath)
     expect(stat.isFile()).toBe(true)
     // Owner exec bit
@@ -145,17 +153,17 @@ describe('prjct team --enforce', () => {
 
   test('sets git config core.hooksPath to .githooks', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, { required: true, enforce: true })
+    await team.team(null, fixture.testDir, { required: true, enforce: true })
 
-    const value = execSync('git config core.hooksPath', { cwd: testDir }).toString().trim()
+    const value = execSync('git config core.hooksPath', { cwd: fixture.testDir }).toString().trim()
     expect(value).toBe('.githooks')
   })
 
   test('stages the hook alongside team files', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, { required: true, enforce: true })
+    await team.team(null, fixture.testDir, { required: true, enforce: true })
 
-    const staged = execSync('git diff --staged --name-only', { cwd: testDir })
+    const staged = execSync('git diff --staged --name-only', { cwd: fixture.testDir })
       .toString()
       .trim()
       .split('\n')
@@ -167,36 +175,36 @@ describe('prjct team --enforce', () => {
 
   test('hook script blocks when required:true and prjct missing from PATH (smoke)', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, { required: true, enforce: true })
+    await team.team(null, fixture.testDir, { required: true, enforce: true })
 
     // Run the hook with an empty PATH that doesn't include prjct.
     // Expect non-zero exit + stderr mentioning install.
-    let stderr = ''
-    let exitCode = 0
+    const hookResult: { stderr: string; exitCode: number } = { stderr: '', exitCode: 0 }
+
     try {
       execSync('sh .githooks/pre-commit', {
-        cwd: testDir,
+        cwd: fixture.testDir,
         env: { ...process.env, PATH: '/usr/bin:/bin' },
         stdio: ['ignore', 'ignore', 'pipe'],
       })
     } catch (err) {
       const e = err as { status?: number; stderr?: Buffer }
-      exitCode = e.status ?? -1
-      stderr = e.stderr?.toString() ?? ''
+      hookResult.exitCode = e.status ?? -1
+      hookResult.stderr = e.stderr?.toString() ?? ''
     }
-    expect(exitCode).toBe(1)
-    expect(stderr.toLowerCase()).toContain('prjct is required')
+    expect(hookResult.exitCode).toBe(1)
+    expect(hookResult.stderr.toLowerCase()).toContain('prjct is required')
   })
 
   test('hook script no-ops when required:false (POSIX sh smoke)', async () => {
     const team = new TeamCommands()
-    await team.team(null, testDir, { required: false, enforce: true })
+    await team.team(null, fixture.testDir, { required: false, enforce: true })
 
     // required:false → hook should exit 0 even with no prjct on PATH
     const exitCode = (() => {
       try {
         execSync('sh .githooks/pre-commit', {
-          cwd: testDir,
+          cwd: fixture.testDir,
           env: { ...process.env, PATH: '/usr/bin:/bin' },
           stdio: 'ignore',
         })
@@ -210,7 +218,7 @@ describe('prjct team --enforce', () => {
 
   test('hook script no-ops when team.json missing', async () => {
     // Manually create just the hook (no team.json) and verify it exits 0
-    const hookPath = path.join(testDir, '.githooks', 'pre-commit')
+    const hookPath = path.join(fixture.testDir, '.githooks', 'pre-commit')
     await fs.mkdir(path.dirname(hookPath), { recursive: true })
     await fs.writeFile(
       hookPath,
@@ -227,7 +235,7 @@ exit 1
 
     const exitCode = (() => {
       try {
-        execSync('sh .githooks/pre-commit', { cwd: testDir, stdio: 'ignore' })
+        execSync('sh .githooks/pre-commit', { cwd: fixture.testDir, stdio: 'ignore' })
         return 0
       } catch (err) {
         return (err as { status?: number }).status ?? -1

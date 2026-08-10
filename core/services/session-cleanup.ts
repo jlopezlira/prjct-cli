@@ -70,7 +70,7 @@ async function archiveAgedInbox(projectId: string, inboxDays: number): Promise<n
   // returning it. archive-storage stores the full payload so a future
   // `prjct restore` (not yet implemented as a top-level CLI) can lift
   // it back if the user changes their mind.
-  let moved = 0
+  const movedEntryIds: string[] = []
   for (const entry of aged) {
     try {
       archiveStorage.archive(projectId, {
@@ -103,13 +103,13 @@ async function archiveAgedInbox(projectId: string, inboxDays: number): Promise<n
         Date.now(),
         entry.id
       )
-      moved++
+      movedEntryIds.push(entry.id)
     } catch {
       // Per-entry failures are silent — keeping the loop moving is
       // more useful than failing the whole cleanup.
     }
   }
-  return moved
+  return movedEntryIds.length
 }
 
 /**
@@ -121,14 +121,10 @@ async function archiveAgedInbox(projectId: string, inboxDays: number): Promise<n
 async function pruneOldCheckpoints(projectId: string, daysOld: number | null): Promise<number> {
   if (daysOld === null) return 0
   const dir = path.join(pathManager.getGlobalProjectPath(projectId), 'checkpoints')
-  let entries: string[] = []
-  try {
-    entries = await fs.readdir(dir)
-  } catch {
-    return 0
-  }
+  const entries = await fs.readdir(dir).catch(() => null)
+  if (!entries) return 0
   const cutoff = Date.now() - daysOld * 24 * 60 * 60 * 1000
-  let removed = 0
+  const removedFiles: string[] = []
   for (const name of entries) {
     if (!name.endsWith('.json')) continue
     const full = path.join(dir, name)
@@ -136,13 +132,13 @@ async function pruneOldCheckpoints(projectId: string, daysOld: number | null): P
       const stat = await fs.stat(full)
       if (stat.mtimeMs < cutoff) {
         await fs.unlink(full)
-        removed++
+        removedFiles.push(full)
       }
     } catch {
       /* skip */
     }
   }
-  return removed
+  return removedFiles.length
 }
 
 /**

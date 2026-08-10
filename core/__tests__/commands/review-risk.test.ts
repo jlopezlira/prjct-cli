@@ -30,31 +30,35 @@ describe('review-risk — tier + geometry (pure)', () => {
 })
 
 describe('review-risk — integration (git)', () => {
-  let dir: string
+  const fixture: {
+    dir: string
+  } = {
+    dir: '',
+  }
   const cmd = new ReviewRiskCommands()
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-reviewrisk-'))
-    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: dir })
-    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir })
-    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir })
-    await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir })
-    await fs.mkdir(path.join(dir, '.prjct'), { recursive: true })
+    fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-reviewrisk-'))
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.dir })
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: fixture.dir })
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: fixture.dir })
+    await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: fixture.dir })
+    await fs.mkdir(path.join(fixture.dir, '.prjct'), { recursive: true })
     await fs.writeFile(
-      path.join(dir, '.prjct/prjct.config.json'),
+      path.join(fixture.dir, '.prjct/prjct.config.json'),
       JSON.stringify({ projectId: `rr-${Date.now()}` })
     )
   })
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
   })
 
   it('graceful no-signal when nothing is ahead of the base', async () => {
-    await fs.writeFile(path.join(dir, 'a.txt'), 'x')
-    await execFileAsync('git', ['add', '.'], { cwd: dir })
-    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: dir })
-    const r = await cmd.reviewRisk(null, dir, { md: true })
+    await fs.writeFile(path.join(fixture.dir, 'a.txt'), 'x')
+    await execFileAsync('git', ['add', '.'], { cwd: fixture.dir })
+    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.dir })
+    const r = await cmd.reviewRisk(null, fixture.dir, { md: true })
     expect(r.success).toBe(true)
     expect(r.files).toBe(0)
     expect(r.tier).toBe('trivial')
@@ -66,16 +70,19 @@ describe('review-risk — integration (git)', () => {
   }, 15_000)
 
   it('flags a large changeset on a feature branch and suggests split', async () => {
-    await fs.writeFile(path.join(dir, 'seed.txt'), 'x')
-    await execFileAsync('git', ['add', '.'], { cwd: dir })
-    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: dir })
-    await execFileAsync('git', ['checkout', '-q', '-b', 'feat/big'], { cwd: dir })
-    for (let i = 0; i < 12; i++) {
-      await fs.writeFile(path.join(dir, `f${i}.ts`), `export const v${i} = ${i}\n`.repeat(40))
+    await fs.writeFile(path.join(fixture.dir, 'seed.txt'), 'x')
+    await execFileAsync('git', ['add', '.'], { cwd: fixture.dir })
+    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.dir })
+    await execFileAsync('git', ['checkout', '-q', '-b', 'feat/big'], { cwd: fixture.dir })
+    for (const i of Array.from({ length: 12 }, (_, index) => index)) {
+      await fs.writeFile(
+        path.join(fixture.dir, `f${i}.ts`),
+        `export const v${i} = ${i}\n`.repeat(40)
+      )
     }
-    await execFileAsync('git', ['add', '.'], { cwd: dir })
-    await execFileAsync('git', ['commit', '-q', '-m', 'big'], { cwd: dir })
-    const r = await cmd.reviewRisk(null, dir, { md: true })
+    await execFileAsync('git', ['add', '.'], { cwd: fixture.dir })
+    await execFileAsync('git', ['commit', '-q', '-m', 'big'], { cwd: fixture.dir })
+    const r = await cmd.reviewRisk(null, fixture.dir, { md: true })
     expect(r.success).toBe(true)
     expect(r.tier).toBe('large')
     expect(r.geometry).toBe('split')

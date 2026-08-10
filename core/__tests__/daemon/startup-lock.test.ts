@@ -41,12 +41,16 @@ describe('decideListenFailure', () => {
 })
 
 describe('tryAcquireSpawnLock', () => {
-  let tmp: string
+  const fixture: {
+    tmp: string
+  } = {
+    tmp: '',
+  }
 
   afterEach(() => {
-    if (tmp && fs.existsSync(tmp)) {
+    if (fixture.tmp && fs.existsSync(fixture.tmp)) {
       try {
-        fs.rmSync(tmp, { recursive: true, force: true })
+        fs.rmSync(fixture.tmp, { recursive: true, force: true })
       } catch {
         /* ignore */
       }
@@ -54,29 +58,29 @@ describe('tryAcquireSpawnLock', () => {
   })
 
   test('first acquirer wins; second yields while holder is live', () => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-spawn-lock-'))
-    const a = tryAcquireSpawnLock(tmp, process.pid)
+    fixture.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-spawn-lock-'))
+    const a = tryAcquireSpawnLock(fixture.tmp, process.pid)
     expect(a).not.toBeNull()
-    expect(fs.existsSync(spawnLockPath(tmp))).toBe(true)
+    expect(fs.existsSync(spawnLockPath(fixture.tmp))).toBe(true)
 
-    const b = tryAcquireSpawnLock(tmp, process.pid + 99999)
+    const b = tryAcquireSpawnLock(fixture.tmp, process.pid + 99999)
     expect(b).toBeNull()
 
     releaseSpawnLock(a)
-    const c = tryAcquireSpawnLock(tmp, process.pid)
+    const c = tryAcquireSpawnLock(fixture.tmp, process.pid)
     expect(c).not.toBeNull()
     releaseSpawnLock(c)
   })
 
   test('stale lock from dead pid is reclaimed', () => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-spawn-lock-'))
-    const lockPath = spawnLockPath(tmp)
-    fs.mkdirSync(tmp, { recursive: true })
+    fixture.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-spawn-lock-'))
+    const lockPath = spawnLockPath(fixture.tmp)
+    fs.mkdirSync(fixture.tmp, { recursive: true })
     // PID 1 on macOS is launchd and is always "running" — use an absurd pid.
     const deadPid = 2_147_483_646
     fs.writeFileSync(lockPath, `${deadPid}\n`)
 
-    const handle = tryAcquireSpawnLock(tmp, process.pid)
+    const handle = tryAcquireSpawnLock(fixture.tmp, process.pid)
     expect(handle).not.toBeNull()
     releaseSpawnLock(handle)
   })

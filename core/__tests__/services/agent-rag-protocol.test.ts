@@ -9,7 +9,7 @@ import {
 } from '../../services/skill-generator/editor-surfaces'
 
 // GLOBAL agent-config surfaces — the pull layer where the protocol LIVES.
-// Per-repo IDE pointers (CURSOR.mdc / WINDSURF.md) are deliberately excluded:
+// Per-repo IDE pointers (CURSOR.mdc) are deliberately excluded:
 // under the clean-repo doctrine they are minimal pointers, not protocol
 // carriers (see the minimal-pointer test below).
 const STATIC_AGENT_SURFACES = [

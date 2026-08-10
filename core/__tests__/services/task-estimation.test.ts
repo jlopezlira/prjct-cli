@@ -5,20 +5,24 @@ import path from 'node:path'
 import pathManager from '../../infrastructure/path-manager'
 import { estimateTaskForStart } from '../../services/task-estimation'
 
-let tmpRoot: string | null = null
+const fixture: {
+  tmpRoot: string | null
+} = {
+  tmpRoot: null,
+}
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('estimateTaskForStart', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-estimate-'))
-    pathManager.getGlobalProjectPath = (projectId: string) => path.join(tmpRoot!, projectId)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-estimate-'))
+    pathManager.getGlobalProjectPath = (projectId: string) => path.join(fixture.tmpRoot!, projectId)
   })
 
   afterEach(async () => {
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
-      tmpRoot = null
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+      fixture.tmpRoot = null
     }
   })
 

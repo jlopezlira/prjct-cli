@@ -177,30 +177,33 @@ export function flatDetail(content: string, max = 220): string {
  * `mem_3247` keys. Pure + stable: same entry → same title.
  */
 export function deriveTitle(entry: Pick<MemoryEntry, 'content' | 'type' | 'id' | 'tags'>): string {
-  let raw = (entry.content ?? '').trim()
   // Pipeline labels are storage contract, not human titles.
-  raw = raw.replace(/^Context synthesis:\s*/i, '')
-  raw = raw.replace(/^(?:[-*•]\s+|\s+)+/, '')
-  raw = raw.replace(/^(?:\[\[[^\]]*\]\]|mem[_-]\d+)[\s:,-]*/i, '').trim()
-  let cut = raw.length
-  for (const b of [/\n/, /\.\s/, /:\s/, /;\s/, /\s—\s/, /\s\(/]) {
-    const m = raw.match(b)
-    if (m && m.index !== undefined && m.index > 4 && m.index < cut) cut = m.index
-  }
-  let title = raw.slice(0, cut).replace(/\s+/g, ' ').trim()
-  title = title
+  const raw = (entry.content ?? '')
+    .trim()
+    .replace(/^Context synthesis:\s*/i, '')
+    .replace(/^(?:[-*•]\s+|\s+)+/, '')
+    .replace(/^(?:\[\[[^\]]*\]\]|mem[_-]\d+)[\s:,-]*/i, '')
+    .trim()
+  const cut = [/\n/, /\.\s/, /:\s/, /;\s/, /\s—\s/, /\s\(/]
+    .map((boundary) => raw.match(boundary)?.index)
+    .filter((index): index is number => index !== undefined && index > 4)
+    .reduce((earliest, index) => Math.min(earliest, index), raw.length)
+  const cleanedTitle = raw
+    .slice(0, cut)
+    .replace(/\s+/g, ' ')
+    .trim()
     .replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, '$1')
     .replace(/\[\[([^\]]*)\]\]/g, '$1')
     .trim()
-  if (title.length > TITLE_MAX) {
-    const slice = title.slice(0, TITLE_MAX)
+  const shortenedTitle = (() => {
+    if (cleanedTitle.length <= TITLE_MAX) return cleanedTitle
+    const slice = cleanedTitle.slice(0, TITLE_MAX)
     const sp = slice.lastIndexOf(' ')
-    title = `${(sp > 40 ? slice.slice(0, sp) : slice).trim()}…`
-  }
-  if (title.length < 6) title = `${entry.type} ${entry.id}`
+    return `${(sp > 40 ? slice.slice(0, sp) : slice).trim()}…`
+  })()
+  const title = shortenedTitle.length < 6 ? `${entry.type} ${entry.id}` : shortenedTitle
   const pr = entry.tags?.pr
-  if (pr && !new RegExp(`\\b#?${pr}\\b`).test(title)) title = `${title} (PR #${pr})`
-  return title
+  return pr && !new RegExp(`\\b#?${pr}\\b`).test(title) ? `${title} (PR #${pr})` : title
 }
 
 /**
@@ -251,15 +254,11 @@ export function formatMemoryMd(entries: MemoryEntry[], opts?: FormatMemoryMdOpti
   // Compact brief defaults to cluster; full format opt-in only (audit/by-id).
   const doCluster = opts?.cluster === true || (compact && opts?.cluster !== false)
 
-  let collapsedCount = 0
-  let multiLangSurvivors = 0
-  let surfaceEntries = entries
-  if (doCluster && entries.length > 1) {
-    const collapsed = collapseEntriesForSurface(entries)
-    surfaceEntries = collapsed.entries
-    collapsedCount = collapsed.collapsedCount
-    multiLangSurvivors = collapsed.multiLangSurvivors
-  }
+  const collapsed =
+    doCluster && entries.length > 1
+      ? collapseEntriesForSurface(entries)
+      : { entries, collapsedCount: 0, multiLangSurvivors: 0 }
+  const { entries: surfaceEntries, collapsedCount, multiLangSurvivors } = collapsed
 
   const groups = new Map<MemoryType, MemoryEntry[]>()
   for (const e of surfaceEntries) {
@@ -357,8 +356,9 @@ export function formatMemoryMd(entries: MemoryEntry[], opts?: FormatMemoryMdOpti
       // Obsidian).
       // Human surface: strip internal pipeline labels (Context synthesis:).
       // Storage keeps the structured body; presentation does not leak SoT labels.
-      let body = e.content.replace(/^Context synthesis:\s*/i, '')
-      body = body.replace(/(\s*[·|]\s*)Context synthesis:\s*/gi, '$1')
+      const body = e.content
+        .replace(/^Context synthesis:\s*/i, '')
+        .replace(/(\s*[·|]\s*)Context synthesis:\s*/gi, '$1')
       const content = opts?.vault ? linkifyMemRefs(body, opts) : body
       const tagSuffix = tags ? `  _(${opts?.vault ? linkifyMemRefs(tags, opts) : tags})_` : ''
       const rowid = e.id.replace(/^mem[_-]/, '')

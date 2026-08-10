@@ -98,7 +98,9 @@ class SkillGenerator {
 
         result.generated.push({ name: def.name, path: skillPath })
       } catch (error) {
-        log.debug(`Failed to generate skill ${def.name}`, { error: getErrorMessage(error) })
+        log.debug(`Failed to generate skill ${def.name}`, {
+          error: getErrorMessage(error),
+        })
         result.skipped.push({ name: def.name, reason: getErrorMessage(error) })
       }
     }

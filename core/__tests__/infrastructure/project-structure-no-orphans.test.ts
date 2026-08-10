@@ -19,21 +19,27 @@ const exists = async (p: string): Promise<boolean> =>
     .catch(() => false)
 
 describe('ensureProjectStructure — no orphaned plan files outside prjct', () => {
-  let tmpRoot: string
-  let prevBaseDir: string
+  const fixture: {
+    tmpRoot: string
+    prevBaseDir: string
+  } = {
+    tmpRoot: '',
+    prevBaseDir: '',
+  }
+
   const projectId = 'proj-orphan-test'
 
   beforeAll(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-structure-test-'))
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-structure-test-'))
     // path-manager is a singleton; snapshot + restore so we don't leak.
-    prevBaseDir = pathManager.globalBaseDir
-    pathManager.setGlobalBaseDir(tmpRoot)
+    fixture.prevBaseDir = pathManager.globalBaseDir
+    pathManager.setGlobalBaseDir(fixture.tmpRoot)
     await pathManager.ensureProjectStructure(projectId)
   })
 
   afterAll(async () => {
-    pathManager.setGlobalBaseDir(prevBaseDir)
-    await fs.rm(tmpRoot, { recursive: true, force: true })
+    pathManager.setGlobalBaseDir(fixture.prevBaseDir)
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('does NOT create the legacy plan dirs', async () => {

@@ -86,7 +86,7 @@ export class PrimitiveCommands extends PrjctCommandsBase {
             console.log('\n## Harness warnings')
             for (const warning of warnings) console.log(`- ${warning}`)
           } else {
-            for (const warning of warnings) out.warn(`Harness: ${warning}`)
+            for (const warning2 of warnings) out.warn(`Harness: ${warning2}`)
           }
         }
         // On `done`, ask the agent to capture the task's context (second brain).
@@ -262,8 +262,8 @@ export class PrimitiveCommands extends PrjctCommandsBase {
       // A `context` entry is the per-task unit of the project's RAG: auto-anchor
       // it to git (commit / author / files) so later recall answers "who touched
       // this, what changed" without reading all of git blame. No-op off-repo.
-      let finalTags = tags
-      if (type === 'context') {
+      const finalTags = await (async () => {
+        if (type !== 'context') return tags
         try {
           const { deriveGitContext } = await import('../services/git-context')
           const { livingContextTagsFromContent } = await import(
@@ -271,7 +271,7 @@ export class PrimitiveCommands extends PrjctCommandsBase {
           )
           const gc = await deriveGitContext(projectPath)
           const structuredTags = livingContextTagsFromContent(content)
-          finalTags = {
+          return {
             ...structuredTags,
             ...tags,
             ...(gc.commit ? { commit: gc.commit } : {}),
@@ -280,9 +280,9 @@ export class PrimitiveCommands extends PrjctCommandsBase {
             ...(active?.id ? { taskId: active.id } : {}),
           }
         } catch {
-          /* best-effort — capture still succeeds without the git anchors */
+          return tags
         }
-      }
+      })()
 
       await projectMemory.remember(projectPath, {
         type,
@@ -450,13 +450,12 @@ function parseRememberArgs(args: string): ParsedRemember {
   }
   const type = typeStr as MemoryType
 
-  let content = trimmed.slice(firstSpace + 1).trim()
-  if (
-    (content.startsWith('"') && content.endsWith('"')) ||
-    (content.startsWith("'") && content.endsWith("'"))
-  ) {
-    content = content.slice(1, -1)
-  }
+  const rawContent = trimmed.slice(firstSpace + 1).trim()
+  const content =
+    (rawContent.startsWith('"') && rawContent.endsWith('"')) ||
+    (rawContent.startsWith("'") && rawContent.endsWith("'"))
+      ? rawContent.slice(1, -1)
+      : rawContent
   if (!content) return { ok: false, error: 'content is required' }
   return { ok: true, type, content }
 }

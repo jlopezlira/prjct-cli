@@ -1,6 +1,5 @@
 /**
- * Install / update the global AI agent configuration (CLAUDE.md / GEMINI.md)
- * and the bundled documentation files in ~/.prjct-cli/docs/.
+ * Install / update the global AI agent configuration (CLAUDE.md / GEMINI.md).
  *
  * Extracted from command-installer.ts to keep that facade focused on
  * commands. The CLAUDE.md content is inlined here (post-template
@@ -9,11 +8,10 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { getTemplateContent, listTemplates } from '../../agentic/template-loader'
+import { getTemplateContent } from '../../agentic/template-loader'
 import { getErrorMessage, isNotFoundError } from '../../types/fs'
 import type { GlobalConfigResult } from '../../types/infrastructure'
 import { mergeWithMarkers } from '../ide-project-installer'
-import pathManager from '../path-manager'
 
 const GLOBAL_CLAUDE_MD_CONTENT = `<!-- prjct:start - DO NOT REMOVE THIS MARKER -->
 # p/ — Project knowledge layer
@@ -51,46 +49,6 @@ When you complete substantive work — analysis, decision, learning, gotcha — 
 <!-- prjct:end - DO NOT REMOVE THIS MARKER -->
 `
 
-export async function installDocs(): Promise<{ success: boolean; error?: string }> {
-  try {
-    const docsDir = pathManager.getDocsPath()
-    await fs.mkdir(docsDir, { recursive: true })
-
-    // Try bundled templates first
-    const docKeys = listTemplates('global/docs/')
-    if (docKeys.length > 0) {
-      for (const key of docKeys) {
-        if (key.endsWith('.md')) {
-          const content = getTemplateContent(key)
-          if (content) {
-            await fs.writeFile(path.join(docsDir, path.basename(key)), content, 'utf-8')
-          }
-        }
-      }
-      return { success: true }
-    }
-
-    // Fall back to filesystem
-    const { PACKAGE_ROOT } = require('../../utils/version')
-    const templateDocsDir = path.join(PACKAGE_ROOT, 'templates/global/docs')
-    try {
-      const docFiles = await fs.readdir(templateDocsDir)
-      for (const file of docFiles) {
-        if (file.endsWith('.md')) {
-          const content = await fs.readFile(path.join(templateDocsDir, file), 'utf-8')
-          await fs.writeFile(path.join(docsDir, file), content, 'utf-8')
-        }
-      }
-    } catch {
-      // No docs directory — that's fine
-    }
-
-    return { success: true }
-  } catch (error) {
-    return { success: false, error: getErrorMessage(error) }
-  }
-}
-
 export async function installGlobalConfig(): Promise<GlobalConfigResult> {
   const aiProvider = require('../ai-provider')
   const activeProvider = await aiProvider.getActiveProvider()
@@ -111,64 +69,60 @@ export async function installGlobalConfig(): Promise<GlobalConfigResult> {
     const globalConfigPath = path.join(activeProvider.configDir, activeProvider.contextFile)
 
     // Use inline content for Claude, or provider-specific template for others
-    let templateContent = GLOBAL_CLAUDE_MD_CONTENT
-
-    if (providerName !== 'claude') {
+    const templateContent = await (async () => {
+      if (providerName === 'claude') return GLOBAL_CLAUDE_MD_CONTENT
       // Try provider-specific template (bundle then filesystem)
       const bundled = getTemplateContent(`global/${activeProvider.contextFile}`)
-      if (bundled) {
-        templateContent = bundled
-      } else {
-        const { PACKAGE_ROOT } = require('../../utils/version')
-        const templatePath = path.join(
-          PACKAGE_ROOT,
-          'templates',
-          'global',
-          activeProvider.contextFile
+      if (bundled) return bundled
+      const { PACKAGE_ROOT } = require('../../utils/version')
+      const templatePath = path.join(
+        PACKAGE_ROOT,
+        'templates',
+        'global',
+        activeProvider.contextFile
+      )
+      return fs
+        .readFile(templatePath, 'utf-8')
+        .catch(() =>
+          providerName === 'gemini'
+            ? GLOBAL_CLAUDE_MD_CONTENT.replace(/Claude/g, 'Gemini')
+            : GLOBAL_CLAUDE_MD_CONTENT
         )
-        try {
-          templateContent = await fs.readFile(templatePath, 'utf-8')
-        } catch {
-          if (providerName === 'gemini') {
-            templateContent = GLOBAL_CLAUDE_MD_CONTENT.replace(/Claude/g, 'Gemini')
-          }
-        }
-      }
-    }
+    })()
 
-    let existingContent = ''
-    let fileExists = false
-
-    try {
-      existingContent = await fs.readFile(globalConfigPath, 'utf-8')
-      fileExists = true
-    } catch (error) {
-      if (isNotFoundError(error)) fileExists = false
-      else throw error
-    }
+    const existingFile = await fs
+      .readFile(globalConfigPath, 'utf-8')
+      .then((content) => ({ content, exists: true }))
+      .catch((error) => {
+        if (isNotFoundError(error)) return { content: '', exists: false }
+        throw error
+      })
 
     // Strip legacy prjct-project sections (static context generation removed)
     const projectStartMarker = '<!-- prjct-project:start - DO NOT REMOVE THIS MARKER -->'
     const projectEndMarker = '<!-- prjct-project:end - DO NOT REMOVE THIS MARKER -->'
-    if (
-      existingContent.includes(projectStartMarker) &&
-      existingContent.includes(projectEndMarker)
-    ) {
-      const beforeProject = existingContent.substring(
+    const existingContent = (() => {
+      if (
+        !existingFile.content.includes(projectStartMarker) ||
+        !existingFile.content.includes(projectEndMarker)
+      ) {
+        return existingFile.content
+      }
+      const beforeProject = existingFile.content.substring(
         0,
-        existingContent.indexOf(projectStartMarker)
+        existingFile.content.indexOf(projectStartMarker)
       )
-      const afterProject = existingContent.substring(
-        existingContent.indexOf(projectEndMarker) + projectEndMarker.length
+      const afterProject = existingFile.content.substring(
+        existingFile.content.indexOf(projectEndMarker) + projectEndMarker.length
       )
-      existingContent = `${(beforeProject + afterProject).replace(/\n{3,}/g, '\n\n').trim()}\n`
-    }
+      return `${(beforeProject + afterProject).replace(/\n{3,}/g, '\n\n').trim()}\n`
+    })()
 
     const startMarker = '<!-- prjct:start - DO NOT REMOVE THIS MARKER -->'
     const endMarker = '<!-- prjct:end - DO NOT REMOVE THIS MARKER -->'
 
     const merged = mergeWithMarkers(
-      fileExists ? existingContent : '',
+      existingFile.exists ? existingContent : '',
       templateContent,
       startMarker,
       endMarker

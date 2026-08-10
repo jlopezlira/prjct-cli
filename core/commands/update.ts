@@ -143,23 +143,25 @@ export class UpdateCommands extends PrjctCommandsBase {
     if (dryRun) {
       const homebrew = isHomebrewInstall()
       if (homebrew) {
-        let pmName: string
-        try {
-          pmName = selectPackageManager().name
-        } catch (err) {
-          pmName = '<none-available>'
-          result.errors.push(getErrorMessage(err))
-        }
+        const pmName = (() => {
+          try {
+            return selectPackageManager().name
+          } catch (err) {
+            result.errors.push(getErrorMessage(err))
+            return '<none-available>'
+          }
+        })()
         result.details.push('Would uninstall homebrew formula')
         result.details.push(`Would install via ${pmName}`)
       } else if (installsBefore.length === 0) {
-        let pmName: string
-        try {
-          pmName = selectPackageManager().name
-        } catch (err) {
-          pmName = '<none-available>'
-          result.errors.push(getErrorMessage(err))
-        }
+        const pmName = (() => {
+          try {
+            return selectPackageManager().name
+          } catch (err) {
+            result.errors.push(getErrorMessage(err))
+            return '<none-available>'
+          }
+        })()
         result.details.push(`Would install via ${pmName}`)
       } else {
         for (const { pm, version } of installsBefore) {
@@ -187,31 +189,25 @@ export class UpdateCommands extends PrjctCommandsBase {
       // - If installs already exist, update each of them (preserves user's
       //   chosen PMs; fixes PATH-shadowing when there are duplicates).
       // - Otherwise (homebrew migration or fresh install), use the detected PM.
-      let targets: PkgManager[]
-      if (installsBefore.length > 0) {
-        targets = installsBefore.map((i) => i.pm)
-      } else {
-        targets = [selectPackageManager()]
-      }
+      const targets: PkgManager[] =
+        installsBefore.length > 0 ? installsBefore.map((i) => i.pm) : [selectPackageManager()]
 
       // Source of truth is ALWAYS registry.npmjs.org — never monorepo package.json,
       // never npm-link, never the running binary's baked VERSION (mem_9174).
       // Pin exact version so PM metadata caches cannot downgrade the install.
-      let registryVersion: string | null = null
-      let pinnedSpec: string | null = null
-      try {
-        const v = (await new UpdateChecker().getLatestVersion())?.trim()
-        if (v && /^\d+\.\d+\.\d+/.test(v)) {
-          registryVersion = v
-          pinnedSpec = `prjct-cli@${v}`
-        }
-      } catch (err) {
-        result.errors.push(
-          `npm registry unreachable — refuse to install from local tree: ${getErrorMessage(err)}`
-        )
-        result.success = false
-        return result
-      }
+      const registryVersion = await new UpdateChecker()
+        .getLatestVersion()
+        .then((version) => version?.trim() ?? null)
+        .catch((err) => {
+          result.errors.push(
+            `npm registry unreachable — refuse to install from local tree: ${getErrorMessage(err)}`
+          )
+          return null
+        })
+      const pinnedSpec =
+        registryVersion && /^\d+\.\d+\.\d+/.test(registryVersion)
+          ? `prjct-cli@${registryVersion}`
+          : null
 
       if (!pinnedSpec || !registryVersion) {
         result.success = false
@@ -355,14 +351,20 @@ export class UpdateCommands extends PrjctCommandsBase {
                   geminiContent.indexOf(endMarker) + endMarker.length
                 )
 
-                let cleaned = before + prjctSection + after
                 const projStart = '<!-- prjct-project:start - DO NOT REMOVE THIS MARKER -->'
                 const projEnd = '<!-- prjct-project:end - DO NOT REMOVE THIS MARKER -->'
-                if (cleaned.includes(projStart) && cleaned.includes(projEnd)) {
-                  const bp = cleaned.substring(0, cleaned.indexOf(projStart))
-                  const ap = cleaned.substring(cleaned.indexOf(projEnd) + projEnd.length)
-                  cleaned = `${(bp + ap).replace(/\n{3,}/g, '\n\n').trim()}\n`
-                }
+                const withPrjctSection = before + prjctSection + after
+                const cleaned =
+                  withPrjctSection.includes(projStart) && withPrjctSection.includes(projEnd)
+                    ? `${(
+                        withPrjctSection.substring(0, withPrjctSection.indexOf(projStart)) +
+                        withPrjctSection.substring(
+                          withPrjctSection.indexOf(projEnd) + projEnd.length
+                        )
+                      )
+                        .replace(/\n{3,}/g, '\n\n')
+                        .trim()}\n`
+                    : withPrjctSection
 
                 await fs.writeFile(geminiPath, cleaned, 'utf-8')
                 result.details.push('Gemini global config updated')

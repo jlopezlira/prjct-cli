@@ -211,13 +211,14 @@ export async function semanticVerifyCommand(
     const projectId = proj.value
 
     // Get project path from project doc
-    let repoPath = projectPath
-    try {
-      const projectDoc = prjctDb.getDoc<Record<string, unknown>>(projectId, 'project')
-      repoPath = (projectDoc?.repoPath as string) || projectPath
-    } catch {
-      // Use fallback projectPath
-    }
+    const repoPath = (() => {
+      try {
+        const projectDoc = prjctDb.getDoc<Record<string, unknown>>(projectId, 'project')
+        return (projectDoc?.repoPath as string) || projectPath
+      } catch {
+        return projectPath
+      }
+    })()
 
     // Run semantic verification
     const result = await analysisStorage.semanticVerify(projectId, repoPath)

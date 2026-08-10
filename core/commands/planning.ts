@@ -21,13 +21,15 @@ import { OnboardingWizard } from '../workflows/onboarding'
 import { PrjctCommandsBase } from './base'
 
 // Lazy-loaded to avoid circular dependencies
-let _analysisCommands: import('./analysis').AnalysisCommands | null = null
+const analysisCommandsCache: { current: import('./analysis').AnalysisCommands | null } = {
+  current: null,
+}
 async function getAnalysisCommands(): Promise<import('./analysis').AnalysisCommands> {
-  if (!_analysisCommands) {
+  if (!analysisCommandsCache.current) {
     const { AnalysisCommands } = await import('./analysis')
-    _analysisCommands = new AnalysisCommands()
+    analysisCommandsCache.current = new AnalysisCommands()
   }
-  return _analysisCommands
+  return analysisCommandsCache.current
 }
 
 export class PlanningCommands extends PrjctCommandsBase {
@@ -68,12 +70,8 @@ export class PlanningCommands extends PrjctCommandsBase {
   ): Promise<CommandResult> {
     try {
       // Handle legacy signature: init(idea, projectPath)
-      let opts: InitOptions = {}
-      if (typeof options === 'string' || options === null) {
-        opts = { idea: options }
-      } else {
-        opts = options
-      }
+      const opts: InitOptions =
+        typeof options === 'string' || options === null ? { idea: options } : options
 
       await this.initializeAgent()
 
@@ -90,19 +88,12 @@ export class PlanningCommands extends PrjctCommandsBase {
       const skipWizard = opts.yes || !isTTY || process.env.CI === 'true'
 
       // Run wizard if interactive
-      let wizardResult = null
-      if (!skipWizard) {
-        const wizard = new OnboardingWizard(projectPath)
-        wizardResult = await wizard.run()
-
-        if (wizardResult.skipped) {
-          return { success: false, message: 'Setup cancelled' }
-        }
-      } else if (isTTY && opts.yes) {
-        // Non-interactive but show progress
-        const wizard = new OnboardingWizard(projectPath)
-        wizardResult = await wizard.runNonInteractive()
-      }
+      const wizardResult = !skipWizard
+        ? await new OnboardingWizard(projectPath).run()
+        : isTTY && opts.yes
+          ? await new OnboardingWizard(projectPath).runNonInteractive()
+          : null
+      if (wizardResult?.skipped) return { success: false, message: 'Setup cancelled' }
 
       out.step(1, 4, 'Detecting author...')
 
@@ -295,18 +286,14 @@ export class PlanningCommands extends PrjctCommandsBase {
     opts: InitOptions
   ): Promise<void> {
     const { activatePacks, detectSuggestedPacks } = await import('../packs/pack-manager')
-    let packNames: string[] = []
-    if (opts.pack) {
-      packNames = opts.pack
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    } else if (!opts.persona) {
-      // No explicit intent from the caller → fall back to auto-detect so
-      // fresh repos still get sensible default packs (e.g. code+daily
-      // on a package.json repo).
-      packNames = await detectSuggestedPacks(projectPath)
-    }
+    const packNames = opts.pack
+      ? opts.pack
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : !opts.persona
+        ? await detectSuggestedPacks(projectPath)
+        : []
 
     if (packNames.length > 0) {
       await activatePacks(projectPath, packNames, { suggestPersona: true })
@@ -330,8 +317,6 @@ export class PlanningCommands extends PrjctCommandsBase {
    */
   private async _seedShipWorkflow(projectId: string, projectPath: string): Promise<void> {
     const detected = await detectProjectCommands(projectPath)
-    let sortOrder = 0
-
     // Workflow-first core: version bump, changelog, git commit/push live
     // as rules seeded here. Non-code projects get none and ship reduces
     // to a shipped_features write + clarification for ambiguous runs.
@@ -339,7 +324,7 @@ export class PlanningCommands extends PrjctCommandsBase {
     await seedCodeShipRules(projectId, projectPath)
     // seedCodeShipRules picks its own sortOrder starting after existing
     // rules. Re-align our local counter so gate/lint/test land after.
-    sortOrder =
+    const sortOrder =
       workflowRuleStorage
         .getRulesForCommand(projectId, 'ship')
         .reduce((m, r) => Math.max(m, r.sortOrder ?? 0), 0) + 1
@@ -353,7 +338,7 @@ export class PlanningCommands extends PrjctCommandsBase {
       description: 'Prevent shipping from main branch',
       enabled: true,
       timeoutMs: 5000,
-      sortOrder: sortOrder++,
+      sortOrder,
       createdAt: new Date().toISOString(),
     })
 
@@ -367,7 +352,7 @@ export class PlanningCommands extends PrjctCommandsBase {
         description: 'Lint code',
         enabled: true,
         timeoutMs: 120000,
-        sortOrder: sortOrder++,
+        sortOrder: sortOrder + 1,
         createdAt: new Date().toISOString(),
       })
     }
@@ -382,7 +367,7 @@ export class PlanningCommands extends PrjctCommandsBase {
         description: 'Run tests',
         enabled: true,
         timeoutMs: 300000,
-        sortOrder: sortOrder++,
+        sortOrder: sortOrder + (detected.lint ? 2 : 1),
         createdAt: new Date().toISOString(),
       })
     }

@@ -14,7 +14,11 @@ import { migrations } from '../../storage/database/migrations'
 import { openDatabase } from '../../storage/database/sqlite-compat'
 import { shippedStorage } from '../../storage/shipped-storage'
 
-let tmpRoot: string
+const fixture: {
+  tmpRoot: string
+} = {
+  tmpRoot: '',
+}
 const pid = 'test-shipped-typed'
 const origGlobal = pathManager.getGlobalProjectPath.bind(pathManager)
 const origFile = pathManager.getFilePath.bind(pathManager)
@@ -27,12 +31,12 @@ const iso = (daysAgo: number) => {
 describe('shipped-storage — typed table (Schema v2 C5)', () => {
   beforeEach(async () => {
     prjctDb.close()
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-shipped-'))
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-shipped-'))
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
     pathManager.getFilePath = (id: string, layer: string, filename: string) =>
-      path.join(tmpRoot, id, layer, filename)
-    await fs.mkdir(path.join(tmpRoot, pid, 'sync'), { recursive: true })
-    await fs.writeFile(path.join(tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
+      path.join(fixture.tmpRoot, id, layer, filename)
+    await fs.mkdir(path.join(fixture.tmpRoot, pid, 'sync'), { recursive: true })
+    await fs.writeFile(path.join(fixture.tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
     prjctDb.getDb(pid)
   })
 
@@ -40,7 +44,7 @@ describe('shipped-storage — typed table (Schema v2 C5)', () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = origGlobal
     pathManager.getFilePath = origFile
-    if (tmpRoot) await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('addShipped is idempotent on the natural key (root-cause of the 33k blob)', async () => {

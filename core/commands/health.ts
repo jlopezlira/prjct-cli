@@ -150,13 +150,16 @@ function computeScore(results: HealthResult[]): number {
   if (results.length === 0) return 0
   // Weighted: each pass contributes its full weight, fails contribute 0,
   // skipped don't change the denominator (we only count present dimensions).
-  let pts = 0
-  let denom = 0
-  for (const r of results) {
-    if (r.status === 'skipped') continue
-    denom += r.dimension.weight
-    if (r.status === 'pass') pts += r.dimension.weight
-  }
+  const { pts, denom } = results.reduce(
+    (score, result) =>
+      result.status === 'skipped'
+        ? score
+        : {
+            pts: score.pts + (result.status === 'pass' ? result.dimension.weight : 0),
+            denom: score.denom + result.dimension.weight,
+          },
+    { pts: 0, denom: 0 }
+  )
   if (denom === 0) return 0
   return Math.round((pts / denom) * 100)
 }

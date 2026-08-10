@@ -74,7 +74,6 @@ const IGNORE_PATTERNS = [
   '**/*.tmp',
   '**/CLAUDE.md', // Don't trigger on our own output
   '**/.cursorrules',
-  '**/.windsurfrules',
   '**/.prjct/**',
   '**/.prjct-cli/**',
 ]

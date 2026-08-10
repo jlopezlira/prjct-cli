@@ -16,8 +16,13 @@ import {
   preferencesStorage,
 } from '../../storage/preferences-storage'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 const originalGetStoragePath = pathManager.getStoragePath.bind(pathManager)
@@ -28,11 +33,11 @@ beforeEach(async () => {
   // connections persist across tests because prjctDb is a module-level
   // singleton; closing here is the only reliable isolation.
   prjctDb.close()
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-prefs-test-'))
-  projectId = `test-prefs-${crypto.randomUUID()}`
-  pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-prefs-test-'))
+  fixture.projectId = `test-prefs-${crypto.randomUUID()}`
+  pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
   pathManager.getStoragePath = (id: string, filename: string) =>
-    path.join(tmpRoot, id, 'storage', filename)
+    path.join(fixture.tmpRoot, id, 'storage', filename)
 })
 
 afterEach(async () => {
@@ -40,10 +45,10 @@ afterEach(async () => {
   // next beforeEach starts truly fresh — without this, an old projectId
   // can reappear on cache lookups when prjctDb's MAX_DB_CONNECTIONS LRU
   // hasn't evicted it yet, and its data leaks across tests.
-  prjctDb.close(projectId)
+  prjctDb.close(fixture.projectId)
   pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
   pathManager.getStoragePath = originalGetStoragePath
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('preferencesStorage validation', () => {
@@ -74,12 +79,12 @@ describe('preferencesStorage validation', () => {
 
 describe('preferencesStorage CRUD', () => {
   it('returns null for unknown question and ASK_NORMALLY for check', () => {
-    expect(preferencesStorage.get(projectId, 'never-set')).toBeNull()
-    expect(preferencesStorage.check(projectId, 'never-set')).toBe('ASK_NORMALLY')
+    expect(preferencesStorage.get(fixture.projectId, 'never-set')).toBeNull()
+    expect(preferencesStorage.check(fixture.projectId, 'never-set')).toBe('ASK_NORMALLY')
   })
 
   it('persists a preference and round-trips through get/check', () => {
-    const entry = preferencesStorage.set(projectId, {
+    const entry = preferencesStorage.set(fixture.projectId, {
       questionId: 'commit-style',
       preference: 'auto-decide',
       reason: 'always use feat: prefix',
@@ -89,66 +94,68 @@ describe('preferencesStorage CRUD', () => {
     expect(entry.reason).toBe('always use feat: prefix')
     expect(entry.setAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
 
-    expect(preferencesStorage.get(projectId, 'commit-style')?.preference).toBe('auto-decide')
-    expect(preferencesStorage.check(projectId, 'commit-style')).toBe('AUTO_DECIDE')
+    expect(preferencesStorage.get(fixture.projectId, 'commit-style')?.preference).toBe(
+      'auto-decide'
+    )
+    expect(preferencesStorage.check(fixture.projectId, 'commit-style')).toBe('AUTO_DECIDE')
   })
 
   it('maps never-ask to NEVER_ASK and always-ask to ASK_NORMALLY', () => {
-    preferencesStorage.set(projectId, { questionId: 'q1', preference: 'never-ask' })
-    preferencesStorage.set(projectId, { questionId: 'q2', preference: 'always-ask' })
-    expect(preferencesStorage.check(projectId, 'q1')).toBe('NEVER_ASK')
-    expect(preferencesStorage.check(projectId, 'q2')).toBe('ASK_NORMALLY')
+    preferencesStorage.set(fixture.projectId, { questionId: 'q1', preference: 'never-ask' })
+    preferencesStorage.set(fixture.projectId, { questionId: 'q2', preference: 'always-ask' })
+    expect(preferencesStorage.check(fixture.projectId, 'q1')).toBe('NEVER_ASK')
+    expect(preferencesStorage.check(fixture.projectId, 'q2')).toBe('ASK_NORMALLY')
   })
 
   it('overwrites existing preference on re-set with newer setAt', async () => {
-    preferencesStorage.set(projectId, {
+    preferencesStorage.set(fixture.projectId, {
       questionId: 'router',
       preference: 'auto-decide',
       reason: 'first take',
     })
     await new Promise((r) => setTimeout(r, 5))
-    preferencesStorage.set(projectId, {
+    preferencesStorage.set(fixture.projectId, {
       questionId: 'router',
       preference: 'always-ask',
       reason: 'changed my mind',
     })
-    const entry = preferencesStorage.get(projectId, 'router')
+    const entry = preferencesStorage.get(fixture.projectId, 'router')
     expect(entry?.preference).toBe('always-ask')
     expect(entry?.reason).toBe('changed my mind')
   })
 
   it('list() returns all entries sorted newest-first', async () => {
-    preferencesStorage.set(projectId, { questionId: 'a', preference: 'never-ask' })
+    preferencesStorage.set(fixture.projectId, { questionId: 'a', preference: 'never-ask' })
     await new Promise((r) => setTimeout(r, 5))
-    preferencesStorage.set(projectId, { questionId: 'b', preference: 'auto-decide' })
-    const list = preferencesStorage.list(projectId)
+    preferencesStorage.set(fixture.projectId, { questionId: 'b', preference: 'auto-decide' })
+    const list = preferencesStorage.list(fixture.projectId)
     expect(list.map((e) => e.questionId)).toEqual(['b', 'a'])
   })
 
   it('clear(id) removes a single entry, clear() wipes all', () => {
-    preferencesStorage.set(projectId, { questionId: 'x', preference: 'never-ask' })
-    preferencesStorage.set(projectId, { questionId: 'y', preference: 'auto-decide' })
+    preferencesStorage.set(fixture.projectId, { questionId: 'x', preference: 'never-ask' })
+    preferencesStorage.set(fixture.projectId, { questionId: 'y', preference: 'auto-decide' })
 
-    expect(preferencesStorage.clear(projectId, 'x')).toBe(1)
-    expect(preferencesStorage.get(projectId, 'x')).toBeNull()
-    expect(preferencesStorage.get(projectId, 'y')?.preference).toBe('auto-decide')
+    expect(preferencesStorage.clear(fixture.projectId, 'x')).toBe(1)
+    expect(preferencesStorage.get(fixture.projectId, 'x')).toBeNull()
+    expect(preferencesStorage.get(fixture.projectId, 'y')?.preference).toBe('auto-decide')
 
-    expect(preferencesStorage.clear(projectId)).toBe(1)
-    expect(preferencesStorage.list(projectId)).toEqual([])
+    expect(preferencesStorage.clear(fixture.projectId)).toBe(1)
+    expect(preferencesStorage.list(fixture.projectId)).toEqual([])
   })
 
   it('clear(unknown) is a no-op that returns 0', () => {
-    expect(preferencesStorage.clear(projectId, 'never-was-set')).toBe(0)
+    expect(preferencesStorage.clear(fixture.projectId, 'never-was-set')).toBe(0)
   })
 
   it('rejects an invalid question id at set time', () => {
     expect(() =>
-      preferencesStorage.set(projectId, { questionId: 'a;b', preference: 'auto-decide' })
+      preferencesStorage.set(fixture.projectId, { questionId: 'a;b', preference: 'auto-decide' })
     ).toThrow(/Invalid questionId/)
   })
 
   it('strips whitespace-only reasons to undefined', () => {
-    const entry = preferencesStorage.set(projectId, {
+    const entry = preferencesStorage.set(fixture.projectId, {
       questionId: 'q',
       preference: 'auto-decide',
       reason: '   ',

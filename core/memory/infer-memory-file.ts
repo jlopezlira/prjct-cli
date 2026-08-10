@@ -114,14 +114,13 @@ const ABS_PATH_RE = new RegExp(
 export function extractRepoRelativePaths(content: string): string[] {
   const out: string[] = []
   PATH_RE.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = PATH_RE.exec(content)) !== null) {
+  for (const m of content.matchAll(PATH_RE)) {
     const cleaned = cleanPath(m[1])
     if (cleaned) out.push(cleaned)
   }
   ABS_PATH_RE.lastIndex = 0
-  while ((m = ABS_PATH_RE.exec(content)) !== null) {
-    const cleaned = cleanPath(m[1])
+  for (const m2 of content.matchAll(ABS_PATH_RE)) {
+    const cleaned = cleanPath(m2[1])
     if (cleaned) out.push(cleaned)
   }
   return dedupePaths(out)
@@ -135,22 +134,20 @@ function scoreCandidate(
   if (BLOCKED_SEGMENT.test(filePath)) return 0
   if (filePath.includes('://')) return 0
 
-  let score = 1
-  if (STRONG_PREFIX.test(filePath)) score += 3
+  const adjustments = [1, STRONG_PREFIX.test(filePath) ? 3 : 0]
   // Backtick / explicit citation weight: path appears in backticks in content
-  if (content.includes(`\`${filePath}\``)) score += 2
+  if (content.includes(`\`${filePath}\``)) adjustments.push(2)
   if (projectPath) {
     try {
       const abs = path.isAbsolute(filePath) ? filePath : path.join(projectPath, filePath)
-      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) score += 6
-      else score -= 1 // prefer existing when project root known
+      adjustments.push(fs.existsSync(abs) && fs.statSync(abs).isFile() ? 6 : -1)
     } catch {
       /* ignore fs errors */
     }
   }
   // Prefer deeper, more specific paths slightly
-  score += Math.min(3, filePath.split('/').length - 1)
-  return score
+  adjustments.push(Math.min(3, filePath.split('/').length - 1))
+  return adjustments.reduce((total, adjustment) => total + adjustment, 0)
 }
 
 function firstFromCommaList(raw: string | undefined): string | null {
@@ -164,17 +161,16 @@ function firstFromCommaList(raw: string | undefined): string | null {
 
 function cleanPath(raw: string | undefined | null): string | null {
   if (!raw) return null
-  let p = raw.trim().replace(/\\/g, '/')
+  const normalized = raw.trim().replace(/\\/g, '/')
   // strip wrapping quotes/backticks
-  p = p.replace(/^['"`]+|['"`]+$/g, '')
+  const unquoted = normalized.replace(/^['"`]+|['"`]+$/g, '')
   // drop leading ./
-  p = p.replace(/^\.\//, '')
+  const relative = unquoted.replace(/^\.\//, '')
   // absolute / home paths → leftmost strong root (src/ before nested lib/)
-  if (path.isAbsolute(p) || p.startsWith('/')) {
-    const stripped = stripAbsoluteToStrongRelative(p)
-    if (!stripped) return null
-    p = stripped
-  }
+  const p =
+    path.isAbsolute(relative) || relative.startsWith('/')
+      ? stripAbsoluteToStrongRelative(relative)
+      : relative
   if (!p || BLOCKED_SEGMENT.test(p)) return null
   if (!p.includes('/')) return null
   if (!new RegExp(String.raw`\.(?:${FILE_EXT})$`, 'i').test(p)) return null
@@ -184,16 +180,10 @@ function cleanPath(raw: string | undefined | null): string | null {
 /** `/Users/…/repo/src/lib/api.ts` → `src/lib/api.ts` (leftmost strong root). */
 function stripAbsoluteToStrongRelative(absPath: string): string | null {
   const lower = absPath.toLowerCase()
-  let bestIdx = Infinity
-  let best: string | null = null
-  for (const root of ABS_STRIP_ROOTS) {
-    const needle = `/${root}/`
-    const idx = lower.indexOf(needle)
-    if (idx >= 0 && idx < bestIdx) {
-      bestIdx = idx
-      best = absPath.slice(idx + 1) // drop the leading slash
-    }
-  }
+  const best = ABS_STRIP_ROOTS.map((root) => lower.indexOf(`/${root}/`))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)
+    .map((index) => absPath.slice(index + 1))[0]
   if (best && new RegExp(String.raw`\.(?:${FILE_EXT})$`, 'i').test(best)) return best
   return null
 }

@@ -37,10 +37,12 @@ export async function uninstall(
 
   for (const item of existingItems) {
     const displayPath = pathManager.getDisplayPath(item.path)
-    let info = ''
-
-    if (item.type === 'section') info = chalk.dim('(section only)')
-    else if (item.size) info = chalk.dim(`(${formatSize(item.size)})`)
+    const info =
+      item.type === 'section'
+        ? chalk.dim('(section only)')
+        : item.size
+          ? chalk.dim(`(${formatSize(item.size)})`)
+          : ''
 
     console.log(`  ${chalk.cyan(displayPath.padEnd(35))} ${info}`)
     console.log(`  ${chalk.dim(item.description)}`)

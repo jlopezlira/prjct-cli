@@ -164,12 +164,14 @@ function applyModeFloors(
   tdd: TddMode
 ): OrchestrationPlan {
   if (!isCodeKind(kind)) return plan
-  let spec = plan.spec
-  if (sdd === 'advisory') spec = maxSpec(spec, 'frame')
-  if (sdd === 'strict') spec = maxSpec(spec, 'reviewed')
-  let tests = plan.tests
-  if (tdd === 'assist') tests = maxTest(tests, 'after')
-  if (tdd === 'strict') tests = maxTest(tests, 'first')
+  const spec =
+    sdd === 'strict'
+      ? maxSpec(plan.spec, 'reviewed')
+      : maxSpec(plan.spec, sdd === 'advisory' ? 'frame' : 'none')
+  const tests =
+    tdd === 'strict'
+      ? maxTest(plan.tests, 'first')
+      : maxTest(plan.tests, tdd === 'assist' ? 'after' : 'none')
   return { ...plan, spec, tests }
 }
 
@@ -274,11 +276,12 @@ export function orchestrationFor(
 ): OrchestrationPlan {
   const base = baseline(harness.level, harness.kind, harness.risk)
   const withFloors = applyModeFloors(base, harness.kind, sdd, tdd)
-  let quality = withFloors.quality
-  if (weakModelMode === 'on') {
-    if (quality === 'none') quality = 'standard'
-    else if (quality === 'standard') quality = 'full'
-  }
+  const quality =
+    weakModelMode === 'on' && withFloors.quality === 'none'
+      ? 'standard'
+      : weakModelMode === 'on' && withFloors.quality === 'standard'
+        ? 'full'
+        : withFloors.quality
   const seed = (castSeed ?? `${harness.level}:${harness.kind}:${harness.risk}`).trim()
   const cast = castForFanout(withFloors.fanout, seed)
   const plan: OrchestrationPlan = { ...withFloors, quality, cast }

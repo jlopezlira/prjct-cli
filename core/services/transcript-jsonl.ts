@@ -112,23 +112,24 @@ export function sumTranscriptUsageDetailed(
   lines: TranscriptJsonlLine[],
   window?: UsageWindow
 ): TranscriptUsageDetailed {
-  let tokensInNew = 0
-  let tokensOut = 0
-  // cache_read is cumulative (re-reported each turn) — take the largest single
-  // report, not the sum, so a long session doesn't inflate input quadratically.
-  let maxCacheRead = 0
-  for (const line of lines) {
-    if (!inWindow(line, window)) continue
-    const usage =
-      asRecord(asRecord(line.message)?.usage) ??
-      asRecord(line.usage) ??
-      asRecord(line.usageMetadata)
-    if (!usage) continue
-    const pair = usagePairFrom(usage)
-    tokensInNew += pair.tokensIn
-    tokensOut += pair.tokensOut
-    if (pair.cacheRead > maxCacheRead) maxCacheRead = pair.cacheRead
-  }
+  const totals = lines.reduce<{ tokensInNew: number; tokensOut: number; maxCacheRead: number }>(
+    (sum, line) => {
+      if (!inWindow(line, window)) return sum
+      const usage =
+        asRecord(asRecord(line.message)?.usage) ??
+        asRecord(line.usage) ??
+        asRecord(line.usageMetadata)
+      if (!usage) return sum
+      const pair = usagePairFrom(usage)
+      return {
+        tokensInNew: sum.tokensInNew + pair.tokensIn,
+        tokensOut: sum.tokensOut + pair.tokensOut,
+        maxCacheRead: Math.max(sum.maxCacheRead, pair.cacheRead),
+      }
+    },
+    { tokensInNew: 0, tokensOut: 0, maxCacheRead: 0 }
+  )
+  const { tokensInNew, tokensOut, maxCacheRead } = totals
   return {
     tokensInNew,
     cacheReadMax: maxCacheRead,

@@ -19,16 +19,21 @@ async function freshProject(): Promise<string> {
 }
 
 describe('remember verb', () => {
-  let projectPath: string
-  let cmd: PrimitiveCommands
+  const fixture: {
+    projectPath: string
+    cmd: PrimitiveCommands
+  } = {
+    projectPath: '',
+    cmd: undefined as unknown as PrimitiveCommands,
+  }
 
   beforeEach(async () => {
-    projectPath = await freshProject()
-    cmd = new PrimitiveCommands()
+    fixture.projectPath = await freshProject()
+    fixture.cmd = new PrimitiveCommands()
   })
 
   afterEach(async () => {
-    await fs.rm(projectPath, { recursive: true, force: true })
+    await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('fails instead of reporting success when the memory event write fails', async () => {
@@ -36,9 +41,9 @@ describe('remember verb', () => {
       throw new Error('attempt to write a readonly database')
     })
     try {
-      const result = await cmd.remember(
+      const result = await fixture.cmd.remember(
         'context "write failure must not be confirmed"',
-        projectPath,
+        fixture.projectPath,
         { md: true }
       )
       expect(result.success).toBe(false)

@@ -25,28 +25,33 @@ export const OUTPUT_TIERS: Record<OutputTier, TierConfig> = {
   verbose: { maxLines: Infinity, maxCharsPerLine: Infinity, showMetrics: true },
 } as const
 
-// Current output tier (default: compact for human-readable output)
-let currentTier: OutputTier = 'compact'
+// Mutable runtime details live behind one stable binding.
+const outputState: {
+  currentTier: OutputTier
+  interval: ReturnType<typeof setInterval> | null
+  frame: number
+  quietMode: boolean
+} = { currentTier: 'compact', interval: null, frame: 0, quietMode: false }
 
 /**
  * Set the output tier
  */
 export function setOutputTier(tier: OutputTier): void {
-  currentTier = tier
+  outputState.currentTier = tier
 }
 
 /**
  * Get current output tier
  */
 export function getOutputTier(): OutputTier {
-  return currentTier
+  return outputState.currentTier
 }
 
 /**
  * Get current tier config
  */
 export function getTierConfig(): TierConfig {
-  return OUTPUT_TIERS[currentTier]
+  return OUTPUT_TIERS[outputState.currentTier]
 }
 
 /**
@@ -65,17 +70,11 @@ const ICONS = {
   spinner: chalk.cyan('◐'),
 } as const
 
-let interval: ReturnType<typeof setInterval> | null = null
-let frame = 0
-
-// Quiet mode - suppress all stdout except errors
-let quietMode = false
-
 /**
  * Enable quiet mode (no stdout, only stderr for errors)
  */
 export function setQuietMode(enabled: boolean): void {
-  quietMode = enabled
+  outputState.quietMode = enabled
 }
 
 /**
@@ -116,8 +115,8 @@ export function limitLines(content: string, maxLines?: number): string {
 export function formatForHuman(data: unknown): string {
   const tier = getTierConfig()
 
-  if (currentTier === 'silent') return ''
-  if (currentTier === 'verbose') return JSON.stringify(data, null, 2)
+  if (outputState.currentTier === 'silent') return ''
+  if (outputState.currentTier === 'verbose') return JSON.stringify(data, null, 2)
 
   // For minimal/compact: extract key info
   if (typeof data !== 'object' || data === null) {
@@ -132,7 +131,7 @@ export function formatForHuman(data: unknown): string {
     lines.push(`${obj.identifier}: ${truncate(String(obj.title), tier.maxCharsPerLine - 10)}`)
     if (obj.status) lines.push(`Status: ${obj.status}`)
     if (obj.priority && obj.priority !== 'none') lines.push(`Priority: ${obj.priority}`)
-    if (obj.url && currentTier === 'compact') lines.push(chalk.dim(String(obj.url)))
+    if (obj.url && outputState.currentTier === 'compact') lines.push(chalk.dim(String(obj.url)))
     return limitLines(lines.join('\n'), tier.maxLines)
   }
 
@@ -171,28 +170,28 @@ const clear = (): boolean =>
 const out: Output = {
   // Branding: Show header at start
   start() {
-    if (!quietMode) console.log(branding.cli.header())
+    if (!outputState.quietMode) console.log(branding.cli.header())
     return this
   },
 
   // Branding: Show footer at end
   end() {
-    if (!quietMode) console.log(branding.cli.footer())
+    if (!outputState.quietMode) console.log(branding.cli.footer())
     return this
   },
 
   // Branded spinner: prjct message...
   // In non-TTY (CI, Claude Code), prints a static line instead of animating
   spin(msg: string) {
-    if (quietMode) return this
+    if (outputState.quietMode) return this
     this.stop()
     if (!process.stdout.isTTY) {
       process.stdout.write(`${branding.cli.spin(0, truncate(msg, OUTPUT_LIMITS.SPINNER_MSG))}\n`)
       return this
     }
-    interval = setInterval(() => {
+    outputState.interval = setInterval(() => {
       process.stdout.write(
-        `\r${branding.cli.spin(frame++, truncate(msg, OUTPUT_LIMITS.SPINNER_MSG))}`
+        `\r${branding.cli.spin(outputState.frame++, truncate(msg, OUTPUT_LIMITS.SPINNER_MSG))}`
       )
     }, SPEED)
     return this
@@ -200,18 +199,13 @@ const out: Output = {
 
   done(msg: string, metrics?: OutputMetrics) {
     this.stop()
-    if (!quietMode) {
+    if (!outputState.quietMode) {
       // Build metrics suffix if provided: [2a | 97% | 45K]
-      let suffix = ''
-      if (metrics) {
-        const parts: string[] = []
-        if (metrics.agents !== undefined) parts.push(`${metrics.agents}a`)
-        if (metrics.reduction !== undefined) parts.push(`${metrics.reduction}%`)
-        if (metrics.tokens !== undefined) parts.push(`${Math.round(metrics.tokens)}K`)
-        if (parts.length > 0) {
-          suffix = chalk.dim(` [${parts.join(' | ')}]`)
-        }
-      }
+      const parts: string[] = []
+      if (metrics?.agents !== undefined) parts.push(`${metrics.agents}a`)
+      if (metrics?.reduction !== undefined) parts.push(`${metrics.reduction}%`)
+      if (metrics?.tokens !== undefined) parts.push(`${Math.round(metrics.tokens)}K`)
+      const suffix = parts.length > 0 ? chalk.dim(` [${parts.join(' | ')}]`) : ''
       console.log(`${ICONS.success} ${truncate(msg, OUTPUT_LIMITS.DONE_MSG)}${suffix}`)
     }
     return this
@@ -245,14 +239,15 @@ const out: Output = {
 
   warn(msg: string) {
     this.stop()
-    if (!quietMode) console.log(`${ICONS.warn} ${truncate(msg, OUTPUT_LIMITS.WARN_MSG)}`)
+    if (!outputState.quietMode)
+      console.log(`${ICONS.warn} ${truncate(msg, OUTPUT_LIMITS.WARN_MSG)}`)
     return this
   },
 
   // Informational message
   info(msg: string) {
     this.stop()
-    if (!quietMode) console.log(`${ICONS.info} ${msg}`)
+    if (!outputState.quietMode) console.log(`${ICONS.info} ${msg}`)
     return this
   },
 
@@ -261,7 +256,7 @@ const out: Output = {
     this.stop()
     // DEBUG: Enable debug output (values: '1' or 'true')
     const debugEnabled = process.env.DEBUG === '1' || process.env.DEBUG === 'true'
-    if (!quietMode && debugEnabled) {
+    if (!outputState.quietMode && debugEnabled) {
       console.log(`${ICONS.debug} ${chalk.dim(msg)}`)
     }
     return this
@@ -275,7 +270,7 @@ const out: Output = {
   // Bulleted list
   list(items: string[], options: { bullet?: string; indent?: number } = {}) {
     this.stop()
-    if (quietMode) return this
+    if (outputState.quietMode) return this
     const bullet = options.bullet || ICONS.bullet
     const indent = ' '.repeat(options.indent || 0)
     for (const item of items) {
@@ -287,7 +282,7 @@ const out: Output = {
   // Simple table output
   table(rows: Array<Record<string, string | number>>, options: { header?: boolean } = {}) {
     this.stop()
-    if (quietMode || rows.length === 0) return this
+    if (outputState.quietMode || rows.length === 0) return this
 
     const keys = Object.keys(rows[0])
     const colWidths: Record<string, number> = {}
@@ -309,8 +304,8 @@ const out: Output = {
     }
 
     // Print rows
-    for (const row of rows) {
-      const line = keys.map((k) => String(row[k] ?? '').padEnd(colWidths[k])).join('  ')
+    for (const row2 of rows) {
+      const line = keys.map((k) => String(row2[k] ?? '').padEnd(colWidths[k])).join('  ')
       console.log(line)
     }
     return this
@@ -319,7 +314,7 @@ const out: Output = {
   // Boxed content
   box(title: string, content: string) {
     this.stop()
-    if (quietMode) return this
+    if (outputState.quietMode) return this
     const lines = content.split('\n')
     const maxLen = Math.max(title.length, ...lines.map((l) => l.length))
     const border = '─'.repeat(maxLen + 2)
@@ -337,16 +332,16 @@ const out: Output = {
   // Section header: bold title + underline
   section(title: string) {
     this.stop()
-    if (quietMode) return this
+    if (outputState.quietMode) return this
     console.log(`\n${chalk.bold(title)}`)
     console.log(chalk.dim('─'.repeat(title.length)))
     return this
   },
 
   stop() {
-    if (interval) {
-      clearInterval(interval)
-      interval = null
+    if (outputState.interval) {
+      clearInterval(outputState.interval)
+      outputState.interval = null
       clear()
     }
     return this
@@ -354,7 +349,7 @@ const out: Output = {
 
   // Step counter: [3/7] Running tests...
   step(current: number, total: number, msg: string) {
-    if (quietMode) return this
+    if (outputState.quietMode) return this
     this.stop()
     const counter = chalk.dim(`[${current}/${total}]`)
     if (!process.stdout.isTTY) {
@@ -363,9 +358,9 @@ const out: Output = {
       )
       return this
     }
-    interval = setInterval(() => {
+    outputState.interval = setInterval(() => {
       process.stdout.write(
-        `\r${branding.cli.spin(frame++, `${counter} ${truncate(msg, OUTPUT_LIMITS.STEP_MSG)}`)}`
+        `\r${branding.cli.spin(outputState.frame++, `${counter} ${truncate(msg, OUTPUT_LIMITS.STEP_MSG)}`)}`
       )
     }, SPEED)
     return this
@@ -373,7 +368,7 @@ const out: Output = {
 
   // Progress bar: [████░░░░] 50% Analyzing...
   progress(current: number, total: number, msg?: string) {
-    if (quietMode) return this
+    if (outputState.quietMode) return this
     this.stop()
     const percent = Math.round((current / total) * 100)
     const filled = Math.round(percent / 10)
@@ -384,8 +379,10 @@ const out: Output = {
       process.stdout.write(`${branding.cli.spin(0, `[${bar}] ${percent}%${text}`)}\n`)
       return this
     }
-    interval = setInterval(() => {
-      process.stdout.write(`\r${branding.cli.spin(frame++, `[${bar}] ${percent}%${text}`)}`)
+    outputState.interval = setInterval(() => {
+      process.stdout.write(
+        `\r${branding.cli.spin(outputState.frame++, `[${bar}] ${percent}%${text}`)}`
+      )
     }, SPEED)
     return this
   },

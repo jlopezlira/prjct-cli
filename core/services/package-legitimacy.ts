@@ -45,12 +45,17 @@ export function parsePackageInstallCommand(command: string): ParsedPackageInstal
   if (tokens.length < 2) return null
 
   const managerTok = tokens[0]!.replace(/\.cmd$/i, '')
-  let manager: ParsedPackageInstall['manager'] | null = null
-  if (managerTok === 'npm' || managerTok === 'npx') manager = 'npm'
-  else if (managerTok === 'pnpm') manager = 'pnpm'
-  else if (managerTok === 'yarn') manager = 'yarn'
-  else if (managerTok === 'bun') manager = 'bun'
-  else return null
+  const manager =
+    managerTok === 'npm' || managerTok === 'npx'
+      ? 'npm'
+      : managerTok === 'pnpm'
+        ? 'pnpm'
+        : managerTok === 'yarn'
+          ? 'yarn'
+          : managerTok === 'bun'
+            ? 'bun'
+            : null
+  if (!manager) return null
 
   const verb = tokens[1]!
   const isInstall =
@@ -62,8 +67,8 @@ export function parsePackageInstallCommand(command: string): ParsedPackageInstal
   if (!isInstall) return null
 
   const packages: string[] = []
-  for (let i = 2; i < tokens.length; i++) {
-    const t = tokens[i]!
+  for (const i of tokens.slice(2).keys()) {
+    const t = tokens[i + 2]!
     if (t.startsWith('-')) continue
     if (t.startsWith('.') || t.startsWith('/') || t.startsWith('file:') || t.startsWith('http')) {
       continue

@@ -151,16 +151,14 @@ class SpecStorage {
   }
 
   list(projectId: string, filter: { status?: SpecStatus; includeArchived?: boolean } = {}): Spec[] {
-    let sql = 'SELECT * FROM specs WHERE 1=1'
     const params: SqliteBindings[] = []
-    if (filter.status) {
-      sql += ' AND status = ?'
-      params.push(filter.status)
-    }
-    if (!filter.includeArchived && !filter.status) {
-      sql += " AND status != 'archived'"
-    }
-    sql += ' ORDER BY created_at DESC'
+    if (filter.status) params.push(filter.status)
+    const statusClause = filter.status
+      ? ' AND status = ?'
+      : !filter.includeArchived
+        ? " AND status != 'archived'"
+        : ''
+    const sql = `SELECT * FROM specs WHERE 1=1${statusClause} ORDER BY created_at DESC`
     const rows = prjctDb.query<SpecRow>(projectId, sql, ...params)
     return rows.map((r) => this.rowToSpec(r))
   }

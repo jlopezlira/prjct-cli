@@ -67,13 +67,12 @@ export async function installLefthook(projectPath: string, hooks: HookName[]): P
     : 'lefthook.yaml'
   const configPath = path.join(projectPath, configFile)
 
-  let content = await fs.readFile(configPath, 'utf-8')
-
-  for (const hook of hooks) {
+  const originalContent = await fs.readFile(configPath, 'utf-8')
+  const content = hooks.reduce((currentContent, hook) => {
     const sectionName = hook
     const commandName = `prjct-sync-${hook}`
 
-    if (content.includes(commandName)) continue
+    if (currentContent.includes(commandName)) return currentContent
 
     const hookBlock = `
 ${sectionName}:
@@ -85,15 +84,14 @@ ${sectionName}:
 
     const escapedSection = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const sectionRegex = new RegExp(`^${escapedSection}:\\s*$`, 'm')
-    if (sectionRegex.test(content)) {
-      content = content.replace(
+    if (sectionRegex.test(currentContent)) {
+      return currentContent.replace(
         sectionRegex,
         `${sectionName}:\n  commands:\n    ${commandName}:\n      run: prjct sync --quiet --yes\n      fail_text: "prjct sync failed (non-blocking)"`
       )
-    } else {
-      content = `${content.trimEnd()}\n${hookBlock}`
     }
-  }
+    return `${currentContent.trimEnd()}\n${hookBlock}`
+  }, originalContent)
 
   await fs.writeFile(configPath, content, 'utf-8')
   return true
@@ -151,10 +149,9 @@ export async function uninstallLefthook(projectPath: string): Promise<boolean> {
 
   if (!(await fileExists(configPath))) return false
 
-  let content = await fs.readFile(configPath, 'utf-8')
-
-  content = content.replace(/\s*prjct-sync-[\w-]+:[\s\S]*?(?=\n\S|\n*$)/g, '')
-  content = content.replace(/^(post-commit|post-checkout):\s*commands:\s*$/gm, '')
+  const content = (await fs.readFile(configPath, 'utf-8'))
+    .replace(/\s*prjct-sync-[\w-]+:[\s\S]*?(?=\n\S|\n*$)/g, '')
+    .replace(/^(post-commit|post-checkout):\s*commands:\s*$/gm, '')
 
   await fs.writeFile(configPath, `${content.trimEnd()}\n`, 'utf-8')
   return true

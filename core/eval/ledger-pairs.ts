@@ -96,33 +96,34 @@ function exportStoredEvalPairs(
   projectId: string,
   byId: ReadonlyMap<string, MemoryEntry>
 ): LabeledPair[] {
-  let rows: EvalLabelRow[]
-  try {
-    rows = prjctDb.query<EvalLabelRow>(
-      projectId,
-      `SELECT id, query_text, positive_id, source, created_at
-       FROM retrieval_eval_labels
-       ORDER BY created_at ASC, id ASC`
-    )
-  } catch {
-    return []
-  }
+  const rows = (() => {
+    try {
+      return prjctDb.query<EvalLabelRow>(
+        projectId,
+        `SELECT id, query_text, positive_id, source, created_at
+         FROM retrieval_eval_labels
+         ORDER BY created_at ASC, id ASC`
+      )
+    } catch {
+      return []
+    }
+  })()
 
   const pairs: LabeledPair[] = []
   const seen = new Set<string>()
-  for (const row of rows) {
-    const queryText = toQueryText(row.query_text)
-    const target = byId.get(row.positive_id)
+  for (const row2 of rows) {
+    const queryText = toQueryText(row2.query_text)
+    const target = byId.get(row2.positive_id)
     if (!queryText || !target || TEST_NOISE_RE.test(target.content)) continue
-    const key = `${queryText}\u0000${row.positive_id}\u0000${row.source}`
+    const key = `${queryText}\u0000${row2.positive_id}\u0000${row2.source}`
     if (seen.has(key)) continue
     seen.add(key)
     pairs.push({
-      anchorId: `label_${row.id}`,
+      anchorId: `label_${row2.id}`,
       queryText,
-      positives: [row.positive_id],
-      anchorDate: row.created_at,
-      source: row.source === 'ship-surfaced' ? 'ship-surfaced' : 'reference-edge',
+      positives: [row2.positive_id],
+      anchorDate: row2.created_at,
+      source: row2.source === 'ship-surfaced' ? 'ship-surfaced' : 'reference-edge',
     })
   }
   return pairs

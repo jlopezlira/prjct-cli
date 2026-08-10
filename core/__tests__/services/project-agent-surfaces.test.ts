@@ -4,14 +4,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { writeProjectAgentSurfaces } from '../../services/project-agent-surfaces'
 
-let dir: string
+const fixture: {
+  dir: string
+} = {
+  dir: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-surfaces-test-'))
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-surfaces-test-'))
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('writeProjectAgentSurfaces', () => {
@@ -19,27 +23,27 @@ describe('writeProjectAgentSurfaces', () => {
   // call this WITHOUT `explicit` and must write nothing into the repo. The sole
   // repo footprint is .prjct/. Only `prjct agents` opts in via `explicit: true`.
   it('writes nothing into the repo unless explicitly asked', async () => {
-    const result = await writeProjectAgentSurfaces(dir)
+    const result = await writeProjectAgentSurfaces(fixture.dir)
 
     expect(result.agentsMd.action).toBe('unchanged')
     expect(result.claudeMd).toBeUndefined()
     expect(result.ideRules).toEqual([])
-    const entries = await fs.readdir(dir)
+    const entries = await fs.readdir(fixture.dir)
     expect(entries).toEqual([])
   })
 
   it('is still a no-op even when agents are selected but not explicit', async () => {
-    const result = await writeProjectAgentSurfaces(dir, { agents: ['cursor', 'windsurf'] })
+    const result = await writeProjectAgentSurfaces(fixture.dir, { agents: ['cursor', 'opencode'] })
 
     expect(result.ideRules).toEqual([])
-    expect(await fs.readdir(dir)).toEqual([])
+    expect(await fs.readdir(fixture.dir)).toEqual([])
   })
 
   it('writes AGENTS.md as a minimal pointer on explicit opt-in', async () => {
-    const result = await writeProjectAgentSurfaces(dir, { explicit: true })
+    const result = await writeProjectAgentSurfaces(fixture.dir, { explicit: true })
 
     expect(result.agentsMd.action).toBe('created')
-    const agents = await fs.readFile(path.join(dir, 'AGENTS.md'), 'utf-8')
+    const agents = await fs.readFile(path.join(fixture.dir, 'AGENTS.md'), 'utf-8')
     expect(agents).toContain('prjct work --md')
     expect(agents).toContain('This file holds no rules')
     // No inlined ruleset / RAG protocol in a client-repo surface.
@@ -48,40 +52,43 @@ describe('writeProjectAgentSurfaces', () => {
   })
 
   it('keeps the Claude project surface when Claude is selected (explicit)', async () => {
-    const result = await writeProjectAgentSurfaces(dir, { explicit: true, agents: ['claude'] })
+    const result = await writeProjectAgentSurfaces(fixture.dir, {
+      explicit: true,
+      agents: ['claude'],
+    })
 
     expect(result.claudeMd?.action).toBe('created')
-    const claude = await fs.readFile(path.join(dir, 'CLAUDE.md'), 'utf-8')
+    const claude = await fs.readFile(path.join(fixture.dir, 'CLAUDE.md'), 'utf-8')
     expect(claude).toContain('## prjct')
     expect(claude).toContain('prjct work --md')
     expect(claude).not.toContain('RAG-backed project memory harness')
   })
 
   it('writes known project rule adapters as minimal pointers when selected (explicit)', async () => {
-    const result = await writeProjectAgentSurfaces(dir, {
+    const result = await writeProjectAgentSurfaces(fixture.dir, {
       explicit: true,
-      agents: ['cursor', 'windsurf'],
+      agents: ['cursor'],
     })
 
-    expect(result.ideRules).toEqual(['.cursor/rules/prjct.mdc', '.windsurf/rules/prjct.md'])
-    const cursor = await fs.readFile(path.join(dir, '.cursor', 'rules', 'prjct.mdc'), 'utf-8')
-    const windsurf = await fs.readFile(path.join(dir, '.windsurf', 'rules', 'prjct.md'), 'utf-8')
-    for (const body of [cursor, windsurf]) {
-      expect(body).toContain('prjct work --md')
-      expect(body).toContain('This file holds no rules')
-      expect(body).not.toContain('RAG-backed project memory harness')
-      expect(body).not.toContain('Pull only relevant context')
-    }
+    expect(result.ideRules).toEqual(['.cursor/rules/prjct.mdc'])
+    const cursor = await fs.readFile(
+      path.join(fixture.dir, '.cursor', 'rules', 'prjct.mdc'),
+      'utf-8'
+    )
+    expect(cursor).toContain('prjct work --md')
+    expect(cursor).toContain('This file holds no rules')
+    expect(cursor).not.toContain('RAG-backed project memory harness')
+    expect(cursor).not.toContain('Pull only relevant context')
   })
 
   it('does not invent project files for runtimes covered by AGENTS.md only (explicit)', async () => {
-    const result = await writeProjectAgentSurfaces(dir, {
+    const result = await writeProjectAgentSurfaces(fixture.dir, {
       explicit: true,
       agents: ['opencode', 'qwen-code', 'cline'],
     })
 
     expect(result.ideRules).toEqual([])
-    const entries = await fs.readdir(dir)
+    const entries = await fs.readdir(fixture.dir)
     expect(entries).toEqual(['AGENTS.md'])
   })
 })

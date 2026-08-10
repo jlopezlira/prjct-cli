@@ -125,21 +125,21 @@ export class MemoryExportCommands extends PrjctCommandsBase {
     await fs.rm(dir, { recursive: true, force: true })
     await fs.mkdir(dir, { recursive: true })
 
-    let chunkCount = 0
-    for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
-      chunkCount++
-      const chunk = entries.slice(i, i + CHUNK_SIZE)
+    const chunks = Array.from({ length: Math.ceil(entries.length / CHUNK_SIZE) }, (_, index) =>
+      entries.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE)
+    )
+    for (const [index, chunk] of chunks.entries()) {
       await fs.writeFile(
-        path.join(dir, `chunk-${String(chunkCount).padStart(3, '0')}.jsonl`),
+        path.join(dir, `chunk-${String(index + 1).padStart(3, '0')}.jsonl`),
         `${chunk.map((e) => JSON.stringify(e)).join('\n')}\n`
       )
     }
     await fs.writeFile(
       path.join(dir, 'manifest.json'),
-      `${JSON.stringify({ version: 1, entries: entries.length, chunks: chunkCount, exportedAt: new Date().toISOString() }, null, 2)}\n`
+      `${JSON.stringify({ version: 1, entries: entries.length, chunks: chunks.length, exportedAt: new Date().toISOString() }, null, 2)}\n`
     )
 
-    const msg = `exported ${entries.length} memories → ${EXPORT_DIR}/ (${chunkCount} chunk${chunkCount === 1 ? '' : 's'}). Commit it; teammates run \`prjct memory import\` after clone.`
+    const msg = `exported ${entries.length} memories → ${EXPORT_DIR}/ (${chunks.length} chunk${chunks.length === 1 ? '' : 's'}). Commit it; teammates run \`prjct memory import\` after clone.`
     if (options.md) console.log(`✓ ${msg}`)
     else out.done(msg)
     return { success: true, exported: entries.length }
@@ -158,18 +158,20 @@ export class MemoryExportCommands extends PrjctCommandsBase {
       return { success: false, error: 'no export found' }
     }
 
-    let imported = 0
-    let skipped = 0
+    const imported: ExportedEntry[] = []
+    const skipped: ExportedEntry[] = []
     const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl')).sort()
     for (const file of files) {
       const lines = (await fs.readFile(path.join(dir, file), 'utf-8')).split('\n').filter(Boolean)
       for (const line of lines) {
-        let e: ExportedEntry
-        try {
-          e = JSON.parse(line)
-        } catch {
-          continue // one corrupt line must not sink the import
-        }
+        const e: ExportedEntry | null = (() => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return null
+          }
+        })()
+        if (!e) continue // one corrupt line must not sink the import
         if (!e.type || !e.content || !e.content_hash) continue
         // Dedup BEFORE writing — TYPE-AWARE and active-only, matching the
         // ux_mem_hash index (project, hash, type): the same content under two
@@ -181,7 +183,7 @@ export class MemoryExportCommands extends PrjctCommandsBase {
           e.type
         )
         if (dup) {
-          skipped++
+          skipped.push(e)
           continue
         }
         // Origin time: tolerate a missing/garbage created_at on a hand-edited
@@ -213,13 +215,13 @@ export class MemoryExportCommands extends PrjctCommandsBase {
             e.content_hash
           )
         }
-        imported++
+        imported.push(e)
       }
     }
 
-    const msg = `imported ${imported} memories (${skipped} already present) from ${EXPORT_DIR}/.`
+    const msg = `imported ${imported.length} memories (${skipped.length} already present) from ${EXPORT_DIR}/.`
     if (options.md) console.log(`✓ ${msg}`)
     else out.done(msg)
-    return { success: true, imported, skipped }
+    return { success: true, imported: imported.length, skipped: skipped.length }
   }
 }

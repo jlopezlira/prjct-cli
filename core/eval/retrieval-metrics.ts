@@ -10,18 +10,15 @@
 
 /** Rank (1-indexed) of the first relevant id in `ranked`, or 0 if none. */
 export function firstRelevantRank(ranked: string[], relevant: ReadonlySet<string>): number {
-  for (let i = 0; i < ranked.length; i++) {
-    if (relevant.has(ranked[i])) return i + 1
-  }
-  return 0
+  const index = ranked.findIndex((id) => relevant.has(id))
+  return index < 0 ? 0 : index + 1
 }
 
 /** Fraction of relevant ids found within the top `k`. Single-relevant → 0/1. */
 export function recallAtK(ranked: string[], relevant: ReadonlySet<string>, k: number): number {
   if (relevant.size === 0) return 0
   const top = ranked.slice(0, k)
-  let hit = 0
-  for (const id of top) if (relevant.has(id)) hit++
+  const hit = top.filter((id) => relevant.has(id)).length
   return hit / relevant.size
 }
 
@@ -38,14 +35,16 @@ export function reciprocalRank(ranked: string[], relevant: ReadonlySet<string>):
  */
 export function ndcgAtK(ranked: string[], relevant: ReadonlySet<string>, k: number): number {
   if (relevant.size === 0) return 0
-  let dcg = 0
   const top = ranked.slice(0, k)
-  for (let i = 0; i < top.length; i++) {
-    if (relevant.has(top[i])) dcg += 1 / Math.log2(i + 2)
-  }
+  const dcg = top.reduce(
+    (score, id, index) => score + (relevant.has(id) ? 1 / Math.log2(index + 2) : 0),
+    0
+  )
   const ideal = Math.min(relevant.size, k)
-  let idcg = 0
-  for (let i = 0; i < ideal; i++) idcg += 1 / Math.log2(i + 2)
+  const idcg = Array.from({ length: ideal }).reduce<number>(
+    (score, _, index) => score + 1 / Math.log2(index + 2),
+    0
+  )
   return idcg === 0 ? 0 : dcg / idcg
 }
 
@@ -101,14 +100,14 @@ export function aggregate(
   k: number
 ): AggregateMetrics {
   if (cases.length === 0) return { queries: 0, recallAtK: 0, mrr: 0, ndcgAtK: 0, k }
-  let recall = 0
-  let mrr = 0
-  let ndcg = 0
-  for (const c of cases) {
-    recall += recallAtK(c.ranked, c.relevant, k)
-    mrr += reciprocalRank(c.ranked, c.relevant)
-    ndcg += ndcgAtK(c.ranked, c.relevant, k)
-  }
+  const [recall, mrr, ndcg] = cases.reduce<[number, number, number]>(
+    (totals, current) => [
+      totals[0] + recallAtK(current.ranked, current.relevant, k),
+      totals[1] + reciprocalRank(current.ranked, current.relevant),
+      totals[2] + ndcgAtK(current.ranked, current.relevant, k),
+    ],
+    [0, 0, 0]
+  )
   const n = cases.length
   return { queries: n, recallAtK: recall / n, mrr: mrr / n, ndcgAtK: ndcg / n, k }
 }

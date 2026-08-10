@@ -47,7 +47,7 @@ function optionBearingColdCommands(): string[] {
   }
 
   const optionBearing: string[] = []
-  for (let i = 0; i < entries.length; i++) {
+  for (const i of Array.from({ length: entries.length }, (_, index) => index)) {
     const body = block.slice(entries[i].index, entries[i + 1]?.index ?? block.length)
     // A real option flag is `options.<name>` or `options['<name>']`. The
     // local `md` var and the positional `p` are not option flags.
@@ -91,12 +91,12 @@ describe('cold ↔ daemon option-forwarding parity', () => {
     for (const c of ['embeddings', 'capture', 'ship', 'task', 'team', 'guard', 'remember']) {
       expect(schema.has(c)).toBe(true)
     }
-    for (const c of ['init']) {
-      expect(cased.has(c)).toBe(true)
+    for (const c2 of ['init']) {
+      expect(cased.has(c2)).toBe(true)
     }
-    for (const c of ['login', 'logout', 'auth']) {
-      expect(BIN_COMMANDS_SET.has(c)).toBe(true)
-      expect(cased.has(c)).toBe(false)
+    for (const c3 of ['login', 'logout', 'auth']) {
+      expect(BIN_COMMANDS_SET.has(c3)).toBe(true)
+      expect(cased.has(c3)).toBe(false)
     }
   })
 

@@ -154,12 +154,9 @@ export function runProc(
   }
 
   return new Promise<ProcResult>((resolve) => {
-    let settled = false
     const outChunks: Buffer[] = []
     const errChunks: Buffer[] = []
-    let outLen = 0
-    let errLen = 0
-    let overflow = false
+    const processState = { settled: false, overflow: false, outBytes: 0, errBytes: 0 }
 
     const child = spawnImpl(cmd, args, {
       cwd: opts.cwd,
@@ -169,8 +166,8 @@ export function runProc(
     })
 
     const finish = (result: ProcResult): void => {
-      if (settled) return
-      settled = true
+      if (processState.settled) return
+      processState.settled = true
       clearTimeout(timer)
       opts.signal?.removeEventListener('abort', onAbort)
       resolve(result)
@@ -218,16 +215,16 @@ export function runProc(
     opts.signal?.addEventListener('abort', onAbort, { once: true })
 
     const onChunk = (chunk: Buffer, isErr: boolean): void => {
-      if (settled) return
+      if (processState.settled) return
       if (isErr) {
         errChunks.push(chunk)
-        errLen += chunk.length
+        processState.errBytes += chunk.length
       } else {
         outChunks.push(chunk)
-        outLen += chunk.length
+        processState.outBytes += chunk.length
       }
-      if (!overflow && outLen + errLen > maxBuffer) {
-        overflow = true
+      if (!processState.overflow && processState.outBytes + processState.errBytes > maxBuffer) {
+        processState.overflow = true
         finishOverflow()
       }
     }
@@ -247,7 +244,7 @@ export function runProc(
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       // Overflow/timeout already settled — ignore the late close.
-      if (settled) return
+      if (processState.settled) return
       const { stdout, stderr } = partials()
       if (code === 0) {
         finish({ ok: true, stdout, stderr, durationMs: duration() })

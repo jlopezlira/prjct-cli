@@ -116,7 +116,7 @@ describe('buildHookOutput routes per Claude Code schema', () => {
     // range of caps — the naive slice would leave a lone high surrogate.
     const head = 'x'.repeat(40)
     const s = `${head}🤖${'y'.repeat(40)}`
-    for (let max = 30; max <= 60; max++) {
+    for (const max of Array.from({ length: 31 }, (_, index) => index + 30)) {
       const t = safeTruncate(s, max, '…')
       expect(isWellFormedUtf8(t)).toBe(true)
       expect(t.length).toBeLessThanOrEqual(max)

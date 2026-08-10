@@ -74,13 +74,14 @@ export async function stats(
     }
 
     // Get project info for header
-    let projectName = 'Unknown'
-    try {
-      const projectDoc = prjctDb.getDoc<Record<string, unknown>>(projectId, 'project')
-      projectName = (projectDoc?.name as string) || 'Unknown'
-    } catch {
-      // Use fallback
-    }
+    const projectName = (() => {
+      try {
+        const projectDoc = prjctDb.getDoc<Record<string, unknown>>(projectId, 'project')
+        return (projectDoc?.name as string) || 'Unknown'
+      } catch {
+        return 'Unknown'
+      }
+    })()
 
     // Determine first sync date (MIN(date) over the typed metrics_daily rows)
     const firstSync = await metricsStorage.getFirstSyncDate(projectId)

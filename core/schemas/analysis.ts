@@ -480,33 +480,28 @@ async function getProjectExtensions(projectPath: string): Promise<string[]> {
  * Count total files in a project (excluding common ignore patterns)
  */
 async function countProjectFiles(projectPath: string): Promise<number> {
-  let count = 0
   const ignorePatterns = [/node_modules/, /\.git/, /dist/, /build/, /\.next/, /\.turbo/, /coverage/]
 
-  async function scanDir(dir: string): Promise<void> {
+  async function scanDir(dir: string): Promise<number> {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true })
+      const counts = await Promise.all(
+        entries.map(async (entry) => {
+          const fullPath = path.join(dir, entry.name)
+          const relativePath = path.relative(projectPath, fullPath)
 
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name)
-        const relativePath = path.relative(projectPath, fullPath)
-
-        // Skip ignored patterns
-        if (ignorePatterns.some((pattern) => pattern.test(relativePath))) {
-          continue
-        }
-
-        if (entry.isDirectory()) {
-          await scanDir(fullPath)
-        } else if (entry.isFile()) {
-          count++
-        }
-      }
+          // Skip ignored patterns
+          if (ignorePatterns.some((pattern) => pattern.test(relativePath))) {
+            return 0
+          }
+          if (entry.isDirectory()) return scanDir(fullPath)
+          return entry.isFile() ? 1 : 0
+        })
+      )
+      return counts.reduce((total, count) => total + count, 0)
     } catch {
-      // Silently skip directories we can't read
+      return 0
     }
   }
-
-  await scanDir(projectPath)
-  return count
+  return scanDir(projectPath)
 }

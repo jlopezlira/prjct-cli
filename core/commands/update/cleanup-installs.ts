@@ -189,23 +189,21 @@ export function planCleanupFrom(input: CleanupPlanInput): CleanupPlan {
   const brewWinner = isBrewWinnerPath(winnerReal)
   // Prefer the PM that owns the winning *binary path* over a mis-detected
   // installer string (fixes multi-install footgun that deleted the active copy).
-  let winner: CleanupPlan['winner'] = brewWinner ? 'brew' : winnerPm
-  if (!brewWinner && winnerReal) {
-    for (const loc of locations) {
-      const root = loc.installRoot
-      if (
-        ownsWinner(root, winnerReal) ||
-        ownsWinner(root ? path.join(root, 'prjct-cli') : null, winnerReal)
-      ) {
-        winner = loc.name
-        break
-      }
-    }
-  }
+  const pathOwner =
+    !brewWinner && winnerReal
+      ? locations.find((loc) => {
+          const root = loc.installRoot
+          return (
+            ownsWinner(root, winnerReal) ||
+            ownsWinner(root ? path.join(root, 'prjct-cli') : null, winnerReal)
+          )
+        })?.name
+      : undefined
+  const winner = brewWinner ? 'brew' : (pathOwner ?? winnerPm)
 
   const removable: CleanupPlan['removable'] = []
-  for (const loc of locations) {
-    const root = loc.installRoot
+  for (const loc2 of locations) {
+    const root = loc2.installRoot
     // Keep only the definitive winner, or any root that owns the PATH binary.
     // Do NOT keep a mis-detected winnerPm when path ownership points elsewhere
     // (that was the multi-install footgun: active copy deleted, shadow kept).
@@ -213,20 +211,26 @@ export function planCleanupFrom(input: CleanupPlanInput): CleanupPlan {
     const pathOwned =
       ownsWinner(root, winnerReal) ||
       ownsWinner(root ? path.join(root, 'prjct-cli') : null, winnerReal)
-    const owns = loc.name === winner || pathOwned || (!winnerReal && loc.name === winnerPm)
+    const owns = loc2.name === winner || pathOwned || (!winnerReal && loc2.name === winnerPm)
     if (owns) {
-      skipped.push({ pm: loc.name, reason: 'PATH winner (or owns winning binary) — kept' })
+      skipped.push({
+        pm: loc2.name,
+        reason: 'PATH winner (or owns winning binary) — kept',
+      })
       continue
     }
     // Gate: never remove the dev source tree (npm/bun link).
     if (root && src) {
       const resolved = resolvePath(path.join(root, 'prjct-cli'))
       if (resolved === src) {
-        skipped.push({ pm: loc.name, reason: 'resolves to the dev source tree (link) — kept' })
+        skipped.push({
+          pm: loc2.name,
+          reason: 'resolves to the dev source tree (link) — kept',
+        })
         continue
       }
     }
-    removable.push({ pm: loc.name, version: loc.version })
+    removable.push({ pm: loc2.name, version: loc2.version })
   }
 
   // Brew: only if a brew copy exists AND it is not the winner.
@@ -347,10 +351,10 @@ export async function consolidateInstalls(
     return { details, errors }
   }
 
-  for (const r of plan.removable) {
-    const res = removeOne(r.pm)
-    if (res.ok) details.push(`Removed redundant ${r.pm} install`)
-    else errors.push(res.error ?? `failed to remove ${r.pm}`)
+  for (const r2 of plan.removable) {
+    const res = removeOne(r2.pm)
+    if (res.ok) details.push(`Removed redundant ${r2.pm} install`)
+    else errors.push(res.error ?? `failed to remove ${r2.pm}`)
   }
   for (const s of plan.skipped) details.push(`Kept ${s.pm}: ${s.reason}`)
 

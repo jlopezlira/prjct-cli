@@ -41,19 +41,19 @@ async function warmOutput(
   opts: RunHookOptions<unknown>,
   input: unknown
 ): Promise<{ out: string; pendingAfterEmit: number }> {
-  let out = ''
+  const chunks: string[] = []
   const pending: Array<() => Promise<void>> = []
   const io: HookIo = {
     input,
     sink: (chunk) => {
-      out += chunk
+      chunks.push(chunk)
     },
     detachAfterEmit: (fn) => {
       pending.push(fn)
     },
   }
   await runHook(opts, io)
-  return { out, pendingAfterEmit: pending.length }
+  return { out: chunks.join(''), pendingAfterEmit: pending.length }
 }
 
 describe('hook routing — process/daemon parity', () => {
@@ -91,18 +91,18 @@ describe('hook routing — process/daemon parity', () => {
   })
 
   test('io mode DETACHES afterEmit (does not await it before returning)', async () => {
-    let afterEmitRan = false
+    const afterEmitCalls: true[] = []
     const opts: RunHookOptions<unknown> = {
       event: 'Stop',
       afterEmit: async () => {
-        afterEmitRan = true
+        afterEmitCalls.push(true)
       },
     }
     const { pendingAfterEmit } = await warmOutput(opts, {})
     // runHook returned WITHOUT running afterEmit — it was handed to the
     // detach sink for the daemon to schedule out-of-band.
     expect(pendingAfterEmit).toBe(1)
-    expect(afterEmitRan).toBe(false)
+    expect(afterEmitCalls).toHaveLength(0)
   })
 })
 

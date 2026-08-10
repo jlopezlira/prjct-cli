@@ -19,55 +19,61 @@ import os from 'node:os'
 import path from 'node:path'
 import { SetupCommands } from '../../commands/setup'
 
-let tmpHome: string
-let prevHome: string | undefined
-let statusLinePath: string
+const fixture: {
+  tmpHome: string
+  prevHome: string | undefined
+  statusLinePath: string
+} = {
+  tmpHome: '',
+  prevHome: undefined as unknown as string | undefined,
+  statusLinePath: '',
+}
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-statusline-'))
-  fs.mkdirSync(path.join(tmpHome, '.claude'), { recursive: true })
-  statusLinePath = path.join(tmpHome, '.claude', 'prjct-statusline.sh')
-  prevHome = process.env.HOME
-  process.env.HOME = tmpHome
+  fixture.tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-statusline-'))
+  fs.mkdirSync(path.join(fixture.tmpHome, '.claude'), { recursive: true })
+  fixture.statusLinePath = path.join(fixture.tmpHome, '.claude', 'prjct-statusline.sh')
+  fixture.prevHome = process.env.HOME
+  process.env.HOME = fixture.tmpHome
 })
 
 afterEach(() => {
-  if (prevHome === undefined) delete process.env.HOME
-  else process.env.HOME = prevHome
-  fs.rmSync(tmpHome, { recursive: true, force: true })
+  if (fixture.prevHome === undefined) delete process.env.HOME
+  else process.env.HOME = fixture.prevHome
+  fs.rmSync(fixture.tmpHome, { recursive: true, force: true })
 })
 
 describe('installStatusLine — guard', () => {
   test('replaces a legacy project.json body with the flag-reading body', async () => {
     fs.writeFileSync(
-      statusLinePath,
+      fixture.statusLinePath,
       '#!/bin/bash\nCLI_VERSION="3.0.0"\n# legacy: checks project.json\n'
     )
 
     const result = await new SetupCommands().installStatusLine()
     expect(result.success).toBe(true)
 
-    const body = fs.readFileSync(statusLinePath, 'utf-8')
+    const body = fs.readFileSync(fixture.statusLinePath, 'utf-8')
     expect(body).toContain('update-status.json')
     expect(body).not.toContain('project.json')
   })
 
   test('does not clobber a modern modular (v2) statusline', async () => {
     const modular = '#!/usr/bin/env bash\n# prjct statusline v2\nbuild_statusline() { :; }\n'
-    fs.writeFileSync(statusLinePath, modular)
+    fs.writeFileSync(fixture.statusLinePath, modular)
 
     const result = await new SetupCommands().installStatusLine()
     expect(result.success).toBe(true)
 
     // Untouched — still the modular script.
-    expect(fs.readFileSync(statusLinePath, 'utf-8')).toBe(modular)
+    expect(fs.readFileSync(fixture.statusLinePath, 'utf-8')).toBe(modular)
   })
 
   test('installs the flag-reading body on a fresh machine', async () => {
     const result = await new SetupCommands().installStatusLine()
     expect(result.success).toBe(true)
 
-    const body = fs.readFileSync(statusLinePath, 'utf-8')
+    const body = fs.readFileSync(fixture.statusLinePath, 'utf-8')
     expect(body).toContain('update-status.json')
     expect(body).not.toContain('project.json')
   })

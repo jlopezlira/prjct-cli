@@ -115,15 +115,12 @@ export class ShippingCommands extends PrjctCommandsBase {
         // Best-effort recovery — never block a ship on reconciliation.
       }
 
-      let featureName = normalizeShipFeature(feature)
-
       // Resolve the task for THIS worktree first. Hard gates run BEFORE
       // completeActiveTask so a blocked ship does not silently close the cycle.
       const currentTask = await resolveActiveTask(projectId, projectPath)
       const linkedSpecId = currentTask?.linkedSpecId
-      if (currentTask && !featureName) {
-        featureName = normalizeShipFeature(currentTask.description)
-      }
+      const taskFeatureName =
+        normalizeShipFeature(feature) ?? normalizeShipFeature(currentTask?.description ?? null)
 
       // SDD strict gate (opt-in via config.sdd.mode === 'strict'): refuse to
       // ship work with no linked spec — the pipeline is mandatory in strict.
@@ -276,15 +273,13 @@ export class ShippingCommands extends PrjctCommandsBase {
           harnessLevel: currentTask?.harness?.level,
           harnessKind: currentTask?.harness?.kind,
         }
-        let { intensity } = intensityFromChangeset(
+        const inferredIntensity = intensityFromChangeset(
           { files: cs?.files ?? 0, loc: cs?.loc ?? 0 },
           signals
-        )
+        ).intensity
         // SUPERIOR: code-strict ALWAYS dual-blind (full) — even trivial diffs.
         // Ship-grade packs never skip the judgment ledger.
-        if (isCodeStrictPack) {
-          intensity = 'full'
-        }
+        const intensity = isCodeStrictPack ? 'full' : inferredIntensity
         // Hard gate for any non-skip intensity; pack code-strict always hard.
         const codeStrict = isCodeStrictPack || shipRequiresQuality(intensity)
         const ledger = judgmentLedgerStorage.get(projectId)
@@ -443,32 +438,41 @@ export class ShippingCommands extends PrjctCommandsBase {
         }
       }
 
-      let rules = workflowRuleStorage.getRulesForCommand(projectId, 'ship')
+      const initialRules = workflowRuleStorage.getRulesForCommand(projectId, 'ship')
 
       // If the caller explicitly asked to seed, do it up front and continue.
-      if (options.intent === 'seed-code-workflow') {
-        const seeded = await seedCodeShipRules(projectId, projectPath)
-        if (!seeded) {
-          return {
-            success: false,
-            error:
-              'seed-code-workflow requested but this project does not look like code (no package.json / Cargo.toml / pyproject.toml / VERSION). Add rules manually with `prjct workflow add`.',
-          }
+      const explicitlySeeded =
+        options.intent === 'seed-code-workflow'
+          ? await seedCodeShipRules(projectId, projectPath)
+          : null
+      if (explicitlySeeded === false) {
+        return {
+          success: false,
+          error:
+            'seed-code-workflow requested but this project does not look like code (no package.json / Cargo.toml / pyproject.toml / VERSION). Add rules manually with `prjct workflow add`.',
         }
-        rules = workflowRuleStorage.getRulesForCommand(projectId, 'ship')
       }
+      const rulesAfterExplicitSeed =
+        explicitlySeeded === true
+          ? workflowRuleStorage.getRulesForCommand(projectId, 'ship')
+          : initialRules
 
       // Migration path: first ship on an existing code project that
       // predates workflow-first seeding. Silent — log a one-liner so
       // users see what happened.
-      const hasSteps = rules.some((r) => r.type === 'step' && r.position === 'before')
-      if (!hasSteps && options.intent !== 'register-only') {
-        const seeded = await seedCodeShipRules(projectId, projectPath)
-        if (seeded) {
-          console.log('ℹ️  Auto-seeded code ship workflow (one-time migration)')
-          rules = workflowRuleStorage.getRulesForCommand(projectId, 'ship')
-        }
+      const hasSteps = rulesAfterExplicitSeed.some(
+        (rule) => rule.type === 'step' && rule.position === 'before'
+      )
+      const autoSeeded =
+        !hasSteps && options.intent !== 'register-only'
+          ? await seedCodeShipRules(projectId, projectPath)
+          : false
+      if (autoSeeded) {
+        console.log('ℹ️  Auto-seeded code ship workflow (one-time migration)')
       }
+      const rules = autoSeeded
+        ? workflowRuleStorage.getRulesForCommand(projectId, 'ship')
+        : rulesAfterExplicitSeed
 
       // Ambiguity gate. Only triggers when the caller did NOT pass an
       // explicit intent — callers that have already asked the user
@@ -479,7 +483,7 @@ export class ShippingCommands extends PrjctCommandsBase {
         return { success: false, clarification }
       }
 
-      featureName = featureName ?? (await inferShipFeatureFromBranch(projectPath))
+      const featureName = taskFeatureName ?? (await inferShipFeatureFromBranch(projectPath))
       if (!featureName) {
         return {
           success: false,
@@ -583,21 +587,20 @@ export class ShippingCommands extends PrjctCommandsBase {
       // Compound after ship: judgment receipt so closed-loop metrics move on
       // the ship path (not only land/Stop). Dynasty receipts were 0 when users
       // shipped without land — product gap. Best-effort; never block ship.
-      let receiptSummary: string | null = null
-      try {
-        const { synthesizeJudgmentReceipt } = await import('../services/judgment-receipt')
-        const receipt = await synthesizeJudgmentReceipt({
-          projectId,
-          projectPath,
-          cycleDescription: currentTask?.description ?? featureName,
-          cycleId: currentTask?.id ?? null,
-        })
-        if (receipt.wrote) {
-          receiptSummary = receipt.summary ?? 'Judgment receipt written'
+      const receiptSummary = await (async (): Promise<string | null> => {
+        try {
+          const { synthesizeJudgmentReceipt } = await import('../services/judgment-receipt')
+          const receipt = await synthesizeJudgmentReceipt({
+            projectId,
+            projectPath,
+            cycleDescription: currentTask?.description ?? featureName,
+            cycleId: currentTask?.id ?? null,
+          })
+          return receipt.wrote ? (receipt.summary ?? 'Judgment receipt written') : null
+        } catch {
+          return null
         }
-      } catch {
-        /* never block ship on receipt */
-      }
+      })()
 
       if (options.md) {
         const steps = getNextSteps('ship', true)
@@ -717,7 +720,6 @@ export async function seedCodeShipRules(projectId: string, projectPath: string):
   // Seeded rules are sorted after any user-authored rules. Start from
   // max(existing) + 1 so we don't collide.
   const maxSort = existing.reduce((m, r) => Math.max(m, r.sortOrder ?? 0), 0)
-  let sort = maxSort + 1
 
   // Gate: refuse to ship from main/master. Auto-seed used to skip this
   // and only add the 4 steps, so projects that predated workflow-first
@@ -755,39 +757,26 @@ export async function seedCodeShipRules(projectId: string, projectPath: string):
     steps.push({ action: 'git:push', description: 'Push to origin', timeoutMs: 30000 })
   }
 
-  let added = 0
-  for (const g of gates) {
-    if (existingActions.has(g.action)) continue
+  const newRules = [
+    ...gates.map((gate) => ({ ...gate, type: 'gate' as const })),
+    ...steps.map((step) => ({ ...step, type: 'step' as const })),
+  ].filter((rule) => !existingActions.has(rule.action))
+
+  for (const [index, rule] of newRules.entries()) {
     workflowRuleStorage.addRule(projectId, {
-      type: 'gate',
+      type: rule.type,
       command: 'ship',
       position: 'before',
-      action: g.action,
-      description: g.description,
+      action: rule.action,
+      description: rule.description,
       enabled: true,
-      timeoutMs: g.timeoutMs,
-      sortOrder: sort++,
+      timeoutMs: rule.timeoutMs,
+      sortOrder: maxSort + index + 1,
       createdAt: now,
     })
-    added++
-  }
-  for (const s of steps) {
-    if (existingActions.has(s.action)) continue
-    workflowRuleStorage.addRule(projectId, {
-      type: 'step',
-      command: 'ship',
-      position: 'before',
-      action: s.action,
-      description: s.description,
-      enabled: true,
-      timeoutMs: s.timeoutMs,
-      sortOrder: sort++,
-      createdAt: now,
-    })
-    added++
   }
 
-  return added > 0
+  return newRules.length > 0
 }
 
 /**

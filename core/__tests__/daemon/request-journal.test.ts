@@ -16,32 +16,38 @@ function request(overrides: Partial<DaemonRequest> = {}): DaemonRequest {
 describe('RequestJournal', () => {
   test('shares one in-flight runner for duplicate request ids', async () => {
     const journal = new RequestJournal()
-    let calls = 0
-    let release!: () => void
+    const fixture: {
+      calls: number
+      release: () => void
+    } = {
+      calls: 0,
+      release: undefined as unknown as () => void,
+    }
+
     const wait = new Promise<void>((resolve) => {
-      release = resolve
+      fixture.release = resolve
     })
 
     const runner = async (): Promise<DaemonResponse> => {
-      calls++
+      fixture.calls++
       await wait
       return { id: 'req-1', success: true, exitCode: 0, stdout: 'ok' }
     }
 
     const first = journal.run(request(), runner)
     const second = journal.run(request(), runner)
-    release()
+    fixture.release()
 
     expect(await first).toEqual({ id: 'req-1', success: true, exitCode: 0, stdout: 'ok' })
     expect(await second).toEqual({ id: 'req-1', success: true, exitCode: 0, stdout: 'ok' })
-    expect(calls).toBe(1)
+    expect(fixture.calls).toBe(1)
   })
 
   test('replays a completed response without rerunning side effects', async () => {
     const journal = new RequestJournal()
-    let calls = 0
+    const calls: true[] = []
     const runner = async (): Promise<DaemonResponse> => {
-      calls++
+      calls.push(true)
       return { id: 'req-1', success: true, exitCode: 0, result: { done: true } }
     }
 
@@ -57,7 +63,7 @@ describe('RequestJournal', () => {
       exitCode: 0,
       result: { done: true },
     })
-    expect(calls).toBe(1)
+    expect(calls).toHaveLength(1)
   })
 
   test('rejects the same request id with a different payload', async () => {
@@ -76,18 +82,24 @@ describe('RequestJournal', () => {
   })
 
   test('expires old entries by ttl', async () => {
-    let now = 0
-    const journal = new RequestJournal({ ttlMs: 10, now: () => now })
-    let calls = 0
+    const fixture: {
+      now: number
+      calls: number
+    } = {
+      now: 0,
+      calls: 0,
+    }
+    const journal = new RequestJournal({ ttlMs: 10, now: () => fixture.now })
+
     const runner = async (): Promise<DaemonResponse> => {
-      calls++
+      fixture.calls++
       return { id: 'req-1', success: true, exitCode: 0 }
     }
 
     await journal.run(request(), runner)
-    now = 11
+    fixture.now = 11
     await journal.run(request(), runner)
 
-    expect(calls).toBe(2)
+    expect(fixture.calls).toBe(2)
   })
 })

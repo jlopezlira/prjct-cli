@@ -14,13 +14,6 @@ import { TTLCache } from '../utils/cache'
 import { getTimestamp } from '../utils/date-helper'
 import { prjctDb } from './database'
 
-/**
- * Map a legacy compound type ("task.started", "idea.archived") to the
- * (entity_type, event_type) pair the cloud expects. Anything ending in
- * "deleted" / "archived" / "removed" is treated as a tombstone; the rest
- * is `upsert`. Unknown shapes return undefined entity (`publishEvent`
- * tolerates this — the wire format fields stay null).
- */
 function deriveEntityShape(legacyType: string): {
   entityType?: string
   eventType?: 'upsert' | 'delete'
@@ -61,9 +54,9 @@ function sortKeys(obj: Record<string, unknown>): Record<string, unknown> {
  * Lazy device-id resolution. Fully implemented in B6; returns
  * 'unknown-device' until then so events still flow.
  */
-let _cachedDeviceId: string | null = null
+const deviceIdCache: { value: string | null } = { value: null }
 async function _resolveDeviceId(): Promise<string> {
-  if (_cachedDeviceId) return _cachedDeviceId
+  if (deviceIdCache.value) return deviceIdCache.value
   try {
     // Lazy import — auth-config reaches into pathManager/file-helper which
     // would otherwise pull a heavy graph into every storage import.
@@ -72,8 +65,9 @@ async function _resolveDeviceId(): Promise<string> {
     type WithDeviceId = { getDeviceId?: () => Promise<string> }
     const ac = authConfig as unknown as WithDeviceId
     if (typeof ac.getDeviceId === 'function') {
-      _cachedDeviceId = await ac.getDeviceId()
-      return _cachedDeviceId
+      const deviceId = await ac.getDeviceId()
+      deviceIdCache.value = deviceId
+      return deviceId
     }
     return 'unknown-device'
   } catch {

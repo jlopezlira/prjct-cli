@@ -259,18 +259,19 @@ export async function startTask(
     const { effectiveSddMode } = await import('../commands/sdd')
     const { discussLockVerdict } = await import('./discuss-lock')
     const harnessPreview = buildTaskHarness(description)
-    let specStatus: string | null = null
-    if (options.spec) {
-      try {
-        const { specService } = await import('./spec-service')
-        const spec = await specService.get(projectPath, options.spec)
-        if (!spec) {
-          return { ok: false, blocked: `Spec ${options.spec} not found.` }
-        }
-        specStatus = spec.status
-      } catch {
-        /* lookup failure — discuss-lock treats as unknown status */
-      }
+    const specStatus = options.spec
+      ? await import('./spec-service')
+          .then(({ specService }) => specService.get(projectPath, options.spec!))
+          .then((spec) => spec?.status ?? null)
+          .catch(() => null)
+      : null
+    if (options.spec && specStatus === null) {
+      const { specService } = await import('./spec-service')
+      const confirmedMissing = await specService
+        .get(projectPath, options.spec)
+        .then((spec) => !spec)
+        .catch(() => false)
+      if (confirmedMissing) return { ok: false, blocked: `Spec ${options.spec} not found.` }
     }
     const lock = discussLockVerdict({
       sddMode: effectiveSddMode(cfg),
@@ -324,17 +325,15 @@ export async function startTask(
         NORMAL_MAX_LOC,
       } = await import('./delivery-geometry')
       const harnessPreview = buildTaskHarness(description)
-      let treeLarge = false
-      let cs: Awaited<ReturnType<typeof computeWorkingTreeChangeset>> = null
-      if (existsSync(path.join(projectPath, '.git'))) {
-        const threshold = cfg?.deliveryGeometry?.locThreshold ?? NORMAL_MAX_LOC
-        cs = await computeWorkingTreeChangeset(projectPath)
-        treeLarge = Boolean(cs && cs.loc >= threshold)
-        // Legacy path: strict + fat tree without --geometry still hard-blocks.
-        if (mode === 'strict' && treeLarge && cs && !options.geometry) {
-          const geometry = geometryOf(tierOf(cs))
-          return { ok: false, blocked: geometryBlockMessage(cs, geometry) }
-        }
+      const cs = existsSync(path.join(projectPath, '.git'))
+        ? await computeWorkingTreeChangeset(projectPath)
+        : null
+      const threshold = cfg?.deliveryGeometry?.locThreshold ?? NORMAL_MAX_LOC
+      const treeLarge = Boolean(cs && cs.loc >= threshold)
+      // Legacy path: strict + fat tree without --geometry still hard-blocks.
+      if (mode === 'strict' && treeLarge && cs && !options.geometry) {
+        const geometry = geometryOf(tierOf(cs))
+        return { ok: false, blocked: geometryBlockMessage(cs, geometry) }
       }
       // Geometry-at-intent: H2+/H3 plan delivery shape before code.
       const ig = intentGeometryVerdict({
@@ -405,11 +404,10 @@ export async function startTask(
   const { resolveCallerIdentity } = await import('./agent-identity')
   const owner = resolveCallerIdentity(description)
 
-  let effectivePath = projectPath
-  let isolation: StartTaskOutcome['isolation']
-
   // Auto-worktree isolation: foreign occupant on this workspace → sibling tree.
-  {
+  const isolationOutcome = await (async (): Promise<
+    { effectivePath: string; isolation: StartTaskOutcome['isolation'] } | { blocked: string }
+  > => {
     const mode = cfg?.multiAgent?.autoWorktree ?? 'auto'
     try {
       const { getOccupancy, shouldIsolate, worktreeSlugFromIntent } = await import(
@@ -418,7 +416,7 @@ export async function startTask(
       const occupancy = await getOccupancy(projectId, projectPath, owner)
       const decision = shouldIsolate(occupancy, mode, description)
       if (decision.block) {
-        return { ok: false, blocked: decision.reason }
+        return { blocked: decision.reason }
       }
       if (decision.isolate && occupancy.isMain) {
         const { worktreeService } = await import('./worktree-service')
@@ -428,26 +426,31 @@ export async function startTask(
           created.path,
           await worktreeService.getMainWorktree(projectPath)
         )
-        effectivePath = created.path
         const occ = decision.occupant
-        isolation = {
-          reason: decision.reason,
-          worktreePath: created.path,
-          branch: created.branch,
-          slug: created.slug,
-          occupantSummary: occ
-            ? `${[occ.ownerAgent, occ.ownerIdentity].filter(Boolean).join('/') || 'other'} · ${occ.taskId.slice(0, 8)} · "${occ.description.slice(0, 60)}"`
-            : 'foreign cycle',
+        return {
+          effectivePath: created.path,
+          isolation: {
+            reason: decision.reason,
+            worktreePath: created.path,
+            branch: created.branch,
+            slug: created.slug,
+            occupantSummary: occ
+              ? `${[occ.ownerAgent, occ.ownerIdentity].filter(Boolean).join('/') || 'other'} · ${occ.taskId.slice(0, 8)} · "${occ.description.slice(0, 60)}"`
+              : 'foreign cycle',
+          },
         }
       }
     } catch (err) {
       // Isolation is best-effort when git fails; fall through to normal start
       // unless we were in ask/block mode (already returned). Log-free by design.
       if (err instanceof Error && err.message.includes('already active')) {
-        return { ok: false, blocked: err.message }
+        return { blocked: err.message }
       }
     }
-  }
+    return { effectivePath: projectPath, isolation: undefined }
+  })()
+  if ('blocked' in isolationOutcome) return { ok: false, blocked: isolationOutcome.blocked }
+  const { effectivePath, isolation } = isolationOutcome
 
   const ws = await deriveWorkspace(effectivePath)
   if (ws.gitError) {
@@ -585,23 +588,24 @@ export async function startTask(
   const risks = recallRisksForFiles(projectId, likelyFiles)
 
   // Dynasty D5: cycle budget card ONCE at work start (not every turn).
-  let cycleBudget: string | null = null
-  try {
-    const { buildCycleBudgetCard } = await import('./cycle-budget-card')
-    const { contextPressureVerdict } = await import('./context-pressure')
-    const pressure = contextPressureVerdict(cfg, { turnCount: 0, tokensIn: 0, tokensOut: 0 })
-    const card = buildCycleBudgetCard({
-      turns: 0,
-      turnLimit: cfg?.maxTurnsPerCycle ?? pressure.limit,
-      tokensSpent: 0,
-      tokenBudget: cfg?.maxTokensPerCycle ?? null,
-      pressureLevel: pressure.level,
-    })
-    cycleBudget = card.line
-    console.log(card.line)
-  } catch {
-    /* budget card best-effort */
-  }
+  const cycleBudget: string | null = await (async () => {
+    try {
+      const { buildCycleBudgetCard } = await import('./cycle-budget-card')
+      const { contextPressureVerdict } = await import('./context-pressure')
+      const pressure = contextPressureVerdict(cfg, { turnCount: 0, tokensIn: 0, tokensOut: 0 })
+      const card = buildCycleBudgetCard({
+        turns: 0,
+        turnLimit: cfg?.maxTurnsPerCycle ?? pressure.limit,
+        tokensSpent: 0,
+        tokenBudget: cfg?.maxTokensPerCycle ?? null,
+        pressureLevel: pressure.level,
+      })
+      console.log(card.line)
+      return card.line
+    } catch {
+      return null
+    }
+  })()
 
   return {
     ok: true,
@@ -641,11 +645,18 @@ export function recallRisksForFiles(projectId: string, files: LikelyFileHit[]): 
   const risks: RiskHit[] = []
   try {
     for (const f of files.slice(0, 5)) {
-      const hits = projectMemory.recallForFile(projectId, f.path, 2, { preventiveOnly: true })
+      const hits = projectMemory.recallForFile(projectId, f.path, 2, {
+        preventiveOnly: true,
+      })
       for (const h of hits) {
         if (seen.has(h.id)) continue
         seen.add(h.id)
-        risks.push({ id: h.id, label: preventiveLabel(h), title: deriveMemTitle(h), file: f.path })
+        risks.push({
+          id: h.id,
+          label: preventiveLabel(h),
+          title: deriveMemTitle(h),
+          file: f.path,
+        })
         if (risks.length >= 4) return risks
       }
     }

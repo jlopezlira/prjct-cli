@@ -100,7 +100,11 @@ export async function batchProcess<T, R>(
   fn: (item: T) => Promise<R | null>
 ): Promise<R[]> {
   const results: R[] = []
-  for (let i = 0; i < items.length; i += batchSize) {
+  const offsets = Array.from(
+    { length: Math.ceil(items.length / batchSize) },
+    (_, index) => index * batchSize
+  )
+  for (const i of offsets) {
     const batchResults = await Promise.all(items.slice(i, i + batchSize).map(fn))
     for (const r of batchResults) if (r !== null) results.push(r)
   }
@@ -241,19 +245,10 @@ export async function listFiles(
 ): Promise<string[]> {
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true })
-    let files = entries
-
-    if (options.filesOnly) {
-      files = files.filter((entry) => entry.isFile())
-    }
-
-    if (options.dirsOnly) {
-      files = files.filter((entry) => entry.isDirectory())
-    }
-
-    if (options.extension) {
-      files = files.filter((entry) => entry.name.endsWith(options.extension!))
-    }
+    const files = entries
+      .filter((entry) => !options.filesOnly || entry.isFile())
+      .filter((entry) => !options.dirsOnly || entry.isDirectory())
+      .filter((entry) => !options.extension || entry.name.endsWith(options.extension))
 
     return files.map((entry) => entry.name)
   } catch (error) {

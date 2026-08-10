@@ -103,13 +103,9 @@ export async function createSubtasks(
   projectId: string,
   subtasks: Omit<Subtask, 'status' | 'startedAt' | 'completedAt' | 'output' | 'summary'>[]
 ): Promise<void> {
-  let taskId: string | null = null
-  let fullSubtasks: Subtask[] = []
-
-  await backend.update(projectId, (current) => {
+  const updatedState = await backend.update(projectId, (current) => {
     if (!current.currentTask) return current
-    taskId = current.currentTask.id
-    fullSubtasks = subtasks.map((subtask, index) => ({
+    const fullSubtasks: Subtask[] = subtasks.map((subtask, index) => ({
       ...subtask,
       status: index === 0 ? 'in_progress' : 'pending',
       startedAt: index === 0 ? getTimestamp() : undefined,
@@ -126,6 +122,8 @@ export async function createSubtasks(
       lastUpdated: getTimestamp(),
     }
   })
+  const taskId = updatedState.currentTask?.id ?? null
+  const fullSubtasks = updatedState.currentTask?.subtasks ?? []
 
   if (!taskId) return
 

@@ -6,20 +6,25 @@ import { forceKillDaemon, shouldUnlinkDaemonSocket } from '../../daemon/client'
 import { DAEMON_PATHS } from '../../daemon/protocol'
 
 describe('daemon client lifecycle safety', () => {
-  let cliHome: string
-  let previousCliHome: string | undefined
+  const fixture: {
+    cliHome: string
+    previousCliHome: string | undefined
+  } = {
+    cliHome: '',
+    previousCliHome: undefined as unknown as string | undefined,
+  }
 
   beforeEach(() => {
-    previousCliHome = process.env.PRJCT_CLI_HOME
-    cliHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-daemon-client-'))
-    process.env.PRJCT_CLI_HOME = cliHome
+    fixture.previousCliHome = process.env.PRJCT_CLI_HOME
+    fixture.cliHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-daemon-client-'))
+    process.env.PRJCT_CLI_HOME = fixture.cliHome
     fs.mkdirSync(DAEMON_PATHS.runDir(), { recursive: true })
   })
 
   afterEach(() => {
-    if (previousCliHome === undefined) delete process.env.PRJCT_CLI_HOME
-    else process.env.PRJCT_CLI_HOME = previousCliHome
-    fs.rmSync(cliHome, { recursive: true, force: true })
+    if (fixture.previousCliHome === undefined) delete process.env.PRJCT_CLI_HOME
+    else process.env.PRJCT_CLI_HOME = fixture.previousCliHome
+    fs.rmSync(fixture.cliHome, { recursive: true, force: true })
   })
 
   it('unlinks only sockets that are definitely stale', () => {

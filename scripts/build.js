@@ -102,9 +102,9 @@ async function buildJs() {
       js: `import { createRequire as __createRequire } from 'module';
 import { fileURLToPath as __fileURLToPath } from 'url';
 import { dirname as __pathDirname } from 'path';
-var require = __createRequire(import.meta.url);
-var __filename = __fileURLToPath(import.meta.url);
-var __dirname = __pathDirname(__filename);`,
+const require = __createRequire(import.meta.url);
+const __filename = __fileURLToPath(import.meta.url);
+const __dirname = __pathDirname(__filename);`,
     },
   })
 
@@ -131,9 +131,9 @@ var __dirname = __pathDirname(__filename);`,
 import { createRequire as __createRequire } from 'module';
 import { fileURLToPath as __fileURLToPath } from 'url';
 import { dirname as __pathDirname } from 'path';
-var require = __createRequire(import.meta.url);
-var __filename = __fileURLToPath(import.meta.url);
-var __dirname = __pathDirname(__filename);`,
+const require = __createRequire(import.meta.url);
+const __filename = __fileURLToPath(import.meta.url);
+const __dirname = __pathDirname(__filename);`,
     },
   })
 
@@ -162,9 +162,9 @@ var __dirname = __pathDirname(__filename);`,
 import { createRequire as __createRequire } from 'module';
 import { fileURLToPath as __fileURLToPath } from 'url';
 import { dirname as __pathDirname } from 'path';
-var require = __createRequire(import.meta.url);
-var __filename = __fileURLToPath(import.meta.url);
-var __dirname = __pathDirname(__filename);`,
+const require = __createRequire(import.meta.url);
+const __filename = __fileURLToPath(import.meta.url);
+const __dirname = __pathDirname(__filename);`,
     },
   })
   fs.chmodSync(path.join(DIST, 'daemon', 'entry.mjs'), 0o755)
@@ -188,9 +188,9 @@ var __dirname = __pathDirname(__filename);`,
 import { createRequire as __createRequire } from 'module';
 import { fileURLToPath as __fileURLToPath } from 'url';
 import { dirname as __pathDirname } from 'path';
-var require = __createRequire(import.meta.url);
-var __filename = __fileURLToPath(import.meta.url);
-var __dirname = __pathDirname(__filename);`,
+const require = __createRequire(import.meta.url);
+const __filename = __fileURLToPath(import.meta.url);
+const __dirname = __pathDirname(__filename);`,
     },
   })
   fs.chmodSync(path.join(DIST, 'mcp', 'server.mjs'), 0o755)
@@ -287,22 +287,22 @@ function isSafeRetry(e){const c=e&&e.code||"",m=e&&e.message||"";return c==="ECO
 // response raw. Hooks must never disturb the host session, so ANY failure
 // (connect error, timeout, closed socket) degrades to the empty no-op {} and
 // exit 0 — the same fail-soft contract the in-process hook runner honors.
-let hookDone=false;
+const hookCompletion=new AbortController();
 function sendHook(sub,data){
-  if(hookDone)return;hookDone=true;
+  if(hookCompletion.signal.aborted)return;hookCompletion.abort();
   const msg=JSON.stringify({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data})+"\\n";
-  const sock=connect(sockPath);let buf="",done=false;
-  const soft=()=>{if(!done){done=true;clearTimeout(t);sock.destroy();process.stdout.write("{}\\n");process.exit(0)}};
+  const sock=connect(sockPath);const chunks=[],completion=new AbortController();
+  const soft=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();process.stdout.write("{}\\n");process.exit(0)}};
   const t=setTimeout(soft,5000);
   sock.on("connect",()=>sock.write(msg));
-  sock.on("data",c=>{buf+=c.toString();const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));if(r.retry){soft();return}done=true;clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(r.exitCode!=null?r.exitCode:0)}});
+  sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));if(r.retry){soft();return}completion.abort();clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(r.exitCode!=null?r.exitCode:0)}});
   sock.on("error",soft);
   sock.on("close",soft);
 }
 if(cmd==="hook"){
   if(process.env.PRJCT_NO_DAEMON!=="1"&&hasEndpoint()){
     const sub=args[1];
-    if(process.stdin.isTTY){sendHook(sub,"")}else{let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>sendHook(sub,d));process.stdin.on("error",()=>sendHook(sub,d));setTimeout(()=>sendHook(sub,d),1000)}
+    if(process.stdin.isTTY){sendHook(sub,"")}else{const chunks=[];process.stdin.on("data",c=>chunks.push(c));const send=()=>sendHook(sub,Buffer.concat(chunks).toString("utf8"));process.stdin.on("end",send);process.stdin.on("error",send);setTimeout(send,1000)}
   }else{
     // Cold path (daemon disabled/unreachable): run the hook from the dedicated
     // hooks bundle, NOT the full core. cold-entry emits host JSON then detaches
@@ -311,17 +311,17 @@ if(cmd==="hook"){
   }
 }else if(cmd&&!skip.has(cmd)&&process.env.PRJCT_NO_DAEMON!=="1"&&hasEndpoint()){
   const cArgs=[],cOpts={};
-  for(let i=0;i<args.length;i++){const a=args[i];if(a.startsWith("--")){const r=a.slice(2);if(r.includes("=")){const e=r.indexOf("=");cOpts[r.slice(0,e)]=r.slice(e+1)}else if(i+1<args.length&&!args[i+1].startsWith("--")){cOpts[r]=args[++i]}else{cOpts[r]=true}}else if(a.startsWith("-")&&a.length===2){cOpts[a.slice(1)]=true}else if(i>0){cArgs.push(a)}}
+  const consumed=new Set();for(const [i,a] of args.entries()){if(consumed.has(i))continue;if(a.startsWith("--")){const r=a.slice(2);if(r.includes("=")){const e=r.indexOf("=");cOpts[r.slice(0,e)]=r.slice(e+1)}else if(i+1<args.length&&!args[i+1].startsWith("--")){cOpts[r]=args[i+1];consumed.add(i+1)}else{cOpts[r]=true}}else if(a.startsWith("-")&&a.length===2){cOpts[a.slice(1)]=true}else if(i>0){cArgs.push(a)}}
   const msg=JSON.stringify({id:randomUUID(),command:cmd,args:cArgs,options:cOpts,cwd:process.cwd()})+"\\n";
-  const sock=connect(sockPath);let buf="",done=false;
+  const sock=connect(sockPath);const chunks=[],completion=new AbortController();
   // Long verbs (ship/sync/…) need 10min; everything else stays at 30s.
   const LONG=new Set(["ship","sync","dream","update","upgrade","analyze","init","cloud"]);
   const waitMs=LONG.has(cmd)?600000:30000;
-  const t=setTimeout(()=>{if(!done){done=true;sock.destroy();refuse("timed out")}},waitMs);
+  const t=setTimeout(()=>{if(!completion.signal.aborted){completion.abort();sock.destroy();refuse("timed out")}},waitMs);
   sock.on("connect",()=>sock.write(msg));
-  sock.on("data",c=>{buf+=c.toString();const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));done=true;clearTimeout(t);sock.end();if(r.retry){process.env.PRJCT_NO_DAEMON="1";fallback();return}if(r.stdout)console.log(r.stdout);if(r.stderr)console.error(r.stderr);process.exit(r.exitCode)}});
-  sock.on("error",e=>{if(!done){done=true;clearTimeout(t);if(isSafeRetry(e))fallback();else refuse(e&&e.message||String(e))}});
-  sock.on("close",()=>{if(!done){done=true;clearTimeout(t);refuse("Connection closed before response")}});
+  sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));completion.abort();clearTimeout(t);sock.end();if(r.retry){process.env.PRJCT_NO_DAEMON="1";fallback();return}if(r.stdout)console.log(r.stdout);if(r.stderr)console.error(r.stderr);process.exit(r.exitCode)}});
+  sock.on("error",e=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);if(isSafeRetry(e))fallback();else refuse(e&&e.message||String(e))}});
+  sock.on("close",()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);refuse("Connection closed before response")}});
 }else{fallback()}
 async function fallback(){await import("./prjct-core.mjs")}
 `
@@ -359,25 +359,21 @@ function generateSkillTemplate() {
 function bundleTemplates() {
   const templatesDir = path.join(ROOT, 'templates')
   const bundle = {}
-  let fileCount = 0
 
   function walk(dir, prefix) {
     const entries = fs.readdirSync(dir, { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.name === '.DS_Store') continue
-      const fullPath = path.join(dir, entry.name)
-      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
-
-      if (entry.isDirectory()) {
-        walk(fullPath, relativePath)
-      } else {
+    return entries
+      .filter((entry) => entry.name !== '.DS_Store')
+      .reduce((count, entry) => {
+        const fullPath = path.join(dir, entry.name)
+        const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+        if (entry.isDirectory()) return count + walk(fullPath, relativePath)
         bundle[relativePath] = fs.readFileSync(fullPath, 'utf-8')
-        fileCount++
-      }
-    }
+        return count + 1
+      }, 0)
   }
 
-  walk(templatesDir, '')
+  const fileCount = walk(templatesDir, '')
 
   // Architecture guard: no shipped template may instruct an agent to write
   // outside the DB or the regenerated vault. The list below tracks the
@@ -434,16 +430,14 @@ function printSummary() {
   }
   walkDist(DIST, '')
 
-  let totalSize = 0
-  for (const file of files) {
+  const totalSize = files.reduce((sum, file) => {
     const filePath = path.join(DIST, file)
-    if (fs.existsSync(filePath)) {
-      const stat = fs.statSync(filePath)
-      totalSize += stat.size
-      const sizeKb = (stat.size / 1024).toFixed(1)
-      console.log(`  ${file.padEnd(25)} ${sizeKb} KB`)
-    }
-  }
+    if (!fs.existsSync(filePath)) return sum
+    const stat = fs.statSync(filePath)
+    const sizeKb = (stat.size / 1024).toFixed(1)
+    console.log(`  ${file.padEnd(25)} ${sizeKb} KB`)
+    return sum + stat.size
+  }, 0)
 
   console.log(`  ${'─'.repeat(40)}`)
   console.log(`  ${'Total'.padEnd(25)} ${(totalSize / 1024).toFixed(1)} KB`)

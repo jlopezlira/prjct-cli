@@ -137,22 +137,22 @@ export function rankReadyWithImpact(
   const now = opts.nowMs ?? Date.now()
   const withFactors = items.map((item) => {
     const seeds = seedHintsFromDescription(item.description)
-    let impactNeighbors = 0
-    let impactTraps = 0
-    let sotPressure = 0
-    if (seeds.length > 0) {
+    const impactFactors = (() => {
+      if (seeds.length === 0) return { impactNeighbors: 0, impactTraps: 0, sotPressure: 0 }
       try {
         const impact = breakImpact(projectId, seeds, 6)
-        impactNeighbors = impact.neighbors.length
-        impactTraps = impact.traps.length
-        // SoT pressure: gotcha/decision traps only
-        sotPressure = impact.traps.filter(
-          (t) => t.type === 'gotcha' || t.type === 'decision' || t.type === 'fact'
-        ).length
+        return {
+          impactNeighbors: impact.neighbors.length,
+          impactTraps: impact.traps.length,
+          sotPressure: impact.traps.filter(
+            (t) => t.type === 'gotcha' || t.type === 'decision' || t.type === 'fact'
+          ).length,
+        }
       } catch {
-        /* cold indexes */
+        return { impactNeighbors: 0, impactTraps: 0, sotPressure: 0 }
       }
-    }
+    })()
+    const { impactNeighbors, impactTraps, sotPressure } = impactFactors
     const factors: ImpactRankFactors = {
       unblocks: item.unblocks,
       priorityPts: priorityPoints(item.priority),

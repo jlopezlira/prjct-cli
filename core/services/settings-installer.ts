@@ -104,7 +104,7 @@ function subcommandOf(entry: HookEntry): string | null {
  */
 function pruneOrphanedManagedHooks(hooks: Record<string, HookMatcher[]>): number {
   const valid = new Set<string>(PRJCT_HOOKS.map((h) => h.subcommand))
-  let pruned = 0
+  const pruned: HookEntry[] = []
   for (const event of Object.keys(hooks)) {
     const blocks = hooks[event]
     const keptBlocks: HookMatcher[] = []
@@ -113,7 +113,7 @@ function pruneOrphanedManagedHooks(hooks: Record<string, HookMatcher[]>): number
         if (!isPrjctHook(h)) return true
         const sub = subcommandOf(h)
         if (sub && !valid.has(sub)) {
-          pruned++
+          pruned.push(h)
           return false
         }
         return true
@@ -123,7 +123,7 @@ function pruneOrphanedManagedHooks(hooks: Record<string, HookMatcher[]>): number
     if (keptBlocks.length > 0) hooks[event] = keptBlocks
     else delete hooks[event]
   }
-  return pruned
+  return pruned.length
 }
 
 interface UninstallResult {
@@ -207,17 +207,15 @@ export async function install(): Promise<InstallResult> {
   const settings = await readSettings()
   const hooks: Record<string, HookMatcher[]> = settings.hooks ?? {}
 
-  let hooksWritten = 0
-  let alreadyPresent = 0
+  const written: HookSpec[] = []
+  const present: HookSpec[] = []
 
   for (const spec of PRJCT_HOOKS) {
     const eventEntries: HookMatcher[] = hooks[spec.event] ?? []
-    const desiredCommand = hookCommand(spec.subcommand)
-
     // Find an existing matcher block with the same matcher, or add one.
-    let block = eventEntries.find((b) => (b.matcher ?? '') === spec.matcher)
-    if (!block) {
-      block = { matcher: spec.matcher, hooks: [] }
+    const existingBlock = eventEntries.find((b) => (b.matcher ?? '') === spec.matcher)
+    const block = existingBlock ?? { matcher: spec.matcher, hooks: [] }
+    if (!existingBlock) {
       eventEntries.push(block)
     }
 
@@ -238,20 +236,18 @@ export async function install(): Promise<InstallResult> {
         existing.if === refreshed.if &&
         droppedLegacy === 0
       ) {
-        alreadyPresent++
+        present.push(spec)
       } else {
         existing.command = refreshed.command
         existing.if = refreshed.if
-        hooksWritten++
+        written.push(spec)
       }
     } else {
       block.hooks.push(hookEntryFor(spec))
-      hooksWritten++
+      written.push(spec)
     }
 
     hooks[spec.event] = eventEntries
-    // Silence unused var lint on desiredCommand (we read it via hookEntryFor).
-    void desiredCommand
   }
 
   // Prune orphaned managed hooks: entries we wrote in a prior version whose
@@ -264,7 +260,12 @@ export async function install(): Promise<InstallResult> {
 
   settings.hooks = hooks
   await writeSettings(settings)
-  return { settingsPath: settingsPath(), hooksWritten, alreadyPresent, hooksPruned }
+  return {
+    settingsPath: settingsPath(),
+    hooksWritten: written.length,
+    alreadyPresent: present.length,
+    hooksPruned,
+  }
 }
 
 /**
@@ -276,13 +277,13 @@ export async function uninstall(): Promise<UninstallResult> {
   const settings = await readSettings()
   if (!settings.hooks) return { settingsPath: settingsPath(), hooksRemoved: 0 }
 
-  let hooksRemoved = 0
+  const removedHooks: HookEntry[] = []
   for (const [event, blocks] of Object.entries(settings.hooks)) {
     const cleanedBlocks: HookMatcher[] = []
     for (const block of blocks) {
       const remaining = block.hooks.filter((h) => {
         if (isPrjctHook(h)) {
-          hooksRemoved++
+          removedHooks.push(h)
           return false
         }
         return true
@@ -296,18 +297,16 @@ export async function uninstall(): Promise<UninstallResult> {
   if (Object.keys(settings.hooks).length === 0) delete settings.hooks
 
   await writeSettings(settings)
-  return { settingsPath: settingsPath(), hooksRemoved }
+  return { settingsPath: settingsPath(), hooksRemoved: removedHooks.length }
 }
 
 /** Introspection for `prjct doctor` — returns count currently installed. */
 export async function status(): Promise<{ installed: number; expected: number }> {
   const settings = await readSettings()
   const hooks = settings.hooks ?? {}
-  let installed = 0
-  for (const blocks of Object.values(hooks)) {
-    for (const block of blocks) {
-      for (const h of block.hooks) if (isPrjctHook(h)) installed++
-    }
-  }
+  const installed = Object.values(hooks)
+    .flat()
+    .flatMap((block) => block.hooks)
+    .filter(isPrjctHook).length
   return { installed, expected: PRJCT_HOOKS.length }
 }

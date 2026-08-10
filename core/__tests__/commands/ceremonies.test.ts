@@ -4,21 +4,27 @@ import os from 'node:os'
 import path from 'node:path'
 import { prjctDb } from '../../storage/database'
 
-let tmpHome: string
-let prevHome: string | undefined
+const fixture: {
+  tmpHome: string
+  prevHome: string | undefined
+} = {
+  tmpHome: '',
+  prevHome: undefined as unknown as string | undefined,
+}
+
 const pid = 'ceremony-test'
 
 beforeAll(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cer-test-'))
-  prevHome = process.env.PRJCT_CLI_HOME
-  process.env.PRJCT_CLI_HOME = tmpHome
+  fixture.tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cer-test-'))
+  fixture.prevHome = process.env.PRJCT_CLI_HOME
+  process.env.PRJCT_CLI_HOME = fixture.tmpHome
   prjctDb.get(pid, 'SELECT 1')
 })
 
 afterAll(() => {
-  if (prevHome) process.env.PRJCT_CLI_HOME = prevHome
+  if (fixture.prevHome) process.env.PRJCT_CLI_HOME = fixture.prevHome
   else delete process.env.PRJCT_CLI_HOME
-  fs.rmSync(tmpHome, { recursive: true, force: true })
+  fs.rmSync(fixture.tmpHome, { recursive: true, force: true })
 })
 
 describe('ceremonies — journal + brief persistence', () => {

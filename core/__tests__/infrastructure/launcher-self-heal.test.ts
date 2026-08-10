@@ -12,9 +12,15 @@ const SKILL_BODY = fs.readFileSync(SKILL_SOURCE, 'utf8')
 const PACKAGE_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
   .version as string
 
-let tempDir: string
-let testHome: string
-let setupLog: string
+const fixture: {
+  tempDir: string
+  testHome: string
+  setupLog: string
+} = {
+  tempDir: '',
+  testHome: '',
+  setupLog: '',
+}
 
 function writeExecutable(filePath: string, body: string): void {
   fs.writeFileSync(filePath, body, { mode: 0o755 })
@@ -47,9 +53,9 @@ function installMutationWrappers(binDir: string): void {
 }
 
 function installCurrentDestinations(): void {
-  const statuslineDir = path.join(testHome, '.prjct-cli/statusline')
+  const statuslineDir = path.join(fixture.testHome, '.prjct-cli/statusline')
   const statuslineDest = path.join(statuslineDir, 'statusline.sh')
-  const claudeDir = path.join(testHome, '.claude')
+  const claudeDir = path.join(fixture.testHome, '.claude')
   const skillDest = path.join(claudeDir, 'skills/prjct/SKILL.md')
 
   fs.mkdirSync(path.dirname(skillDest), { recursive: true })
@@ -71,42 +77,42 @@ function installCurrentDestinations(): void {
 }
 
 function runLauncher(options: { failLn?: boolean } = {}): string[] {
-  fs.writeFileSync(setupLog, '')
+  fs.writeFileSync(fixture.setupLog, '')
   const result = spawnSync('/bin/sh', [LAUNCHER, '--version'], {
     cwd: ROOT,
     encoding: 'utf8',
     env: {
       ...process.env,
-      HOME: testHome,
-      PATH: `${path.join(tempDir, 'bin')}:/usr/bin:/bin`,
-      PRJCT_TEST_SETUP_LOG: setupLog,
+      HOME: fixture.testHome,
+      PATH: `${path.join(fixture.tempDir, 'bin')}:/usr/bin:/bin`,
+      PRJCT_TEST_SETUP_LOG: fixture.setupLog,
       PRJCT_TEST_FAIL_LN: options.failLn ? '1' : '0',
     },
   })
 
   expect(result.status).toBe(0)
-  return fs.readFileSync(setupLog, 'utf8').split('\n').filter(Boolean)
+  return fs.readFileSync(fixture.setupLog, 'utf8').split('\n').filter(Boolean)
 }
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-launcher-self-heal-'))
-  testHome = path.join(tempDir, 'home')
-  setupLog = path.join(tempDir, 'setup.log')
-  const binDir = path.join(tempDir, 'bin')
+  fixture.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-launcher-self-heal-'))
+  fixture.testHome = path.join(fixture.tempDir, 'home')
+  fixture.setupLog = path.join(fixture.tempDir, 'setup.log')
+  const binDir = path.join(fixture.tempDir, 'bin')
   fs.mkdirSync(binDir, { recursive: true })
   writeExecutable(path.join(binDir, 'bun'), '#!/bin/sh\nexit 0\n')
   installMutationWrappers(binDir)
 })
 
 afterEach(() => {
-  fs.rmSync(tempDir, { recursive: true, force: true })
+  fs.rmSync(fixture.tempDir, { recursive: true, force: true })
 })
 
 describe('bin/prjct statusline self-heal', () => {
   test('does not run setup mutations for current statusline and skill destinations', () => {
     installCurrentDestinations()
-    const statuslineDest = path.join(testHome, '.prjct-cli/statusline/statusline.sh')
-    const skillDest = path.join(testHome, '.claude/skills/prjct/SKILL.md')
+    const statuslineDest = path.join(fixture.testHome, '.prjct-cli/statusline/statusline.sh')
+    const skillDest = path.join(fixture.testHome, '.claude/skills/prjct/SKILL.md')
     const before = [statuslineDest, skillDest].map((filePath) => ({
       body: fs.readFileSync(filePath, 'utf8'),
       mtimeMs: fs.statSync(filePath).mtimeMs,
@@ -122,9 +128,9 @@ describe('bin/prjct statusline self-heal', () => {
   })
 
   test('installs statusline and skill when HOME has no .claude directory', () => {
-    const statuslineDest = path.join(testHome, '.prjct-cli/statusline/statusline.sh')
-    const claudeStatusline = path.join(testHome, '.claude/prjct-statusline.sh')
-    const skillDest = path.join(testHome, '.claude/skills/prjct/SKILL.md')
+    const statuslineDest = path.join(fixture.testHome, '.prjct-cli/statusline/statusline.sh')
+    const claudeStatusline = path.join(fixture.testHome, '.claude/prjct-statusline.sh')
+    const skillDest = path.join(fixture.testHome, '.claude/skills/prjct/SKILL.md')
 
     const mutations = runLauncher()
 
@@ -138,8 +144,8 @@ describe('bin/prjct statusline self-heal', () => {
 
   test('repairs a missing statusline destination', () => {
     installCurrentDestinations()
-    const statuslineDest = path.join(testHome, '.prjct-cli/statusline/statusline.sh')
-    const claudeStatusline = path.join(testHome, '.claude/prjct-statusline.sh')
+    const statuslineDest = path.join(fixture.testHome, '.prjct-cli/statusline/statusline.sh')
+    const claudeStatusline = path.join(fixture.testHome, '.claude/prjct-statusline.sh')
     fs.rmSync(statuslineDest)
     fs.rmSync(claudeStatusline)
 
@@ -153,7 +159,7 @@ describe('bin/prjct statusline self-heal', () => {
 
   test('repairs a stale statusline destination', () => {
     installCurrentDestinations()
-    const statuslineDest = path.join(testHome, '.prjct-cli/statusline/statusline.sh')
+    const statuslineDest = path.join(fixture.testHome, '.prjct-cli/statusline/statusline.sh')
     fs.writeFileSync(statuslineDest, '#!/bin/sh\nCLI_VERSION="stale"\n')
     const stale = new Date(1_000)
     fs.utimesSync(statuslineDest, stale, stale)
@@ -169,7 +175,7 @@ describe('bin/prjct statusline self-heal', () => {
 
   test('repairs a missing skill destination with the exact source body', () => {
     installCurrentDestinations()
-    const skillDest = path.join(testHome, '.claude/skills/prjct/SKILL.md')
+    const skillDest = path.join(fixture.testHome, '.claude/skills/prjct/SKILL.md')
     fs.rmSync(skillDest)
 
     const mutations = runLauncher()
@@ -181,7 +187,7 @@ describe('bin/prjct statusline self-heal', () => {
 
   test('repairs a stale skill destination with the exact source body', () => {
     installCurrentDestinations()
-    const skillDest = path.join(testHome, '.claude/skills/prjct/SKILL.md')
+    const skillDest = path.join(fixture.testHome, '.claude/skills/prjct/SKILL.md')
     fs.writeFileSync(skillDest, 'stale skill\n')
     const stale = new Date(1_000)
     fs.utimesSync(skillDest, stale, stale)
@@ -195,8 +201,8 @@ describe('bin/prjct statusline self-heal', () => {
 
   test('falls back to a regular statusline copy when symlink creation fails', () => {
     installCurrentDestinations()
-    const statuslineDest = path.join(testHome, '.prjct-cli/statusline/statusline.sh')
-    const claudeStatusline = path.join(testHome, '.claude/prjct-statusline.sh')
+    const statuslineDest = path.join(fixture.testHome, '.prjct-cli/statusline/statusline.sh')
+    const claudeStatusline = path.join(fixture.testHome, '.claude/prjct-statusline.sh')
     fs.rmSync(statuslineDest)
     fs.rmSync(claudeStatusline)
 

@@ -8,23 +8,30 @@ import { buildCloudCodeGraphSnapshot, isUploadableGraph } from '../../services/c
 import prjctDb from '../../storage/database'
 
 describe('code-graph-cloud compact structural snapshot', () => {
-  let testDir: string
-  let testProjectId: string
-  let sourceDir: string
+  const fixture: {
+    testDir: string
+    testProjectId: string
+    sourceDir: string
+  } = {
+    testDir: '',
+    testProjectId: '',
+    sourceDir: '',
+  }
+
   const originalGet = pathManager.getGlobalProjectPath.bind(pathManager)
 
   beforeEach(async () => {
-    testDir = path.join(
+    fixture.testDir = path.join(
       os.tmpdir(),
       `prjct-cloud-graph-${Date.now()}-${Math.random().toString(36).slice(2)}`
     )
-    sourceDir = path.join(testDir, 'src-repo')
-    testProjectId = `test-cloud-graph-${Date.now()}`
-    await fs.mkdir(path.join(sourceDir, 'src'), { recursive: true })
-    pathManager.getGlobalProjectPath = (id: string) => path.join(testDir, 'projects', id)
+    fixture.sourceDir = path.join(fixture.testDir, 'src-repo')
+    fixture.testProjectId = `test-cloud-graph-${Date.now()}`
+    await fs.mkdir(path.join(fixture.sourceDir, 'src'), { recursive: true })
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.testDir, 'projects', id)
 
     await fs.writeFile(
-      path.join(sourceDir, 'src', 'svc.ts'),
+      path.join(fixture.sourceDir, 'src', 'svc.ts'),
       `
 export class Service {
   run() {
@@ -40,7 +47,7 @@ export function unused() {
 `
     )
     await fs.writeFile(
-      path.join(sourceDir, 'src', 'main.ts'),
+      path.join(fixture.sourceDir, 'src', 'main.ts'),
       `
 import { Service } from './svc'
 export function main() {
@@ -54,16 +61,16 @@ export function main() {
   afterEach(async () => {
     pathManager.getGlobalProjectPath = originalGet
     try {
-      prjctDb.close(testProjectId)
+      prjctDb.close(fixture.testProjectId)
     } catch {
       /* ok */
     }
-    await fs.rm(testDir, { recursive: true, force: true })
+    await fs.rm(fixture.testDir, { recursive: true, force: true })
   })
 
   it('builds Function/Class/File nodes with structural edges (not knowledge)', async () => {
-    await indexSymbols(sourceDir, testProjectId)
-    const snap = buildCloudCodeGraphSnapshot(testProjectId)
+    await indexSymbols(fixture.sourceDir, fixture.testProjectId)
+    const snap = buildCloudCodeGraphSnapshot(fixture.testProjectId)
     expect(isUploadableGraph(snap)).toBe(true)
     expect(snap!.version).toBe(1)
     expect(snap!.nodes.length).toBeGreaterThan(0)
@@ -102,9 +109,9 @@ export function main() {
   })
 
   it('optional maxNodes/maxLinks only apply when explicitly passed', async () => {
-    await indexSymbols(sourceDir, testProjectId)
-    const full = buildCloudCodeGraphSnapshot(testProjectId)
-    const capped = buildCloudCodeGraphSnapshot(testProjectId, { maxNodes: 3, maxLinks: 20 })
+    await indexSymbols(fixture.sourceDir, fixture.testProjectId)
+    const full = buildCloudCodeGraphSnapshot(fixture.testProjectId)
+    const capped = buildCloudCodeGraphSnapshot(fixture.testProjectId, { maxNodes: 3, maxLinks: 20 })
     expect(full).not.toBeNull()
     expect(capped).not.toBeNull()
     // Default ships the full index (no artificial 400/900 cloud caps)
@@ -115,8 +122,8 @@ export function main() {
   })
 
   it('default snapshot includes every indexed symbol as a node (no drop)', async () => {
-    await indexSymbols(sourceDir, testProjectId)
-    const snap = buildCloudCodeGraphSnapshot(testProjectId)
+    await indexSymbols(fixture.sourceDir, fixture.testProjectId)
+    const snap = buildCloudCodeGraphSnapshot(fixture.testProjectId)
     expect(snap).not.toBeNull()
     // symbolCount is the index size; nodes = symbols + File hubs (≥ symbolCount)
     expect(snap!.nodes.length).toBeGreaterThanOrEqual(snap!.symbolCount)

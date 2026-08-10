@@ -38,27 +38,16 @@ export async function buildLandCue(
   if (overview?.current) {
     const title = overview.current.description.slice(0, 60)
     // Load turn/token counters from live state — ActiveTaskView is display-only.
-    let turnCount: number | undefined
-    let tokensIn: number | undefined
-    let tokensOut: number | undefined
-    try {
-      const { stateStorage } = await import('../storage/state-storage')
-      const live = overview.current.isCurrent
-        ? await stateStorage.getCurrentTask(projectId).catch(() => null)
-        : null
-      // Prefer main currentTask when this workspace is main; child worktrees
-      // may only have description — still surface land cue without false pressure.
-      turnCount = live?.turnCount
-      tokensIn = live?.tokensIn
-      tokensOut = live?.tokensOut
-    } catch {
-      /* pressure falls back to description-only (level ok if no turns) */
-    }
+    const live = overview.current.isCurrent
+      ? await import('../storage/state-storage')
+          .then(({ stateStorage }) => stateStorage.getCurrentTask(projectId))
+          .catch(() => null)
+      : null
     const pressure = contextPressureVerdict(config, {
       description: overview.current.description,
-      turnCount,
-      tokensIn,
-      tokensOut,
+      turnCount: live?.turnCount,
+      tokensIn: live?.tokensIn,
+      tokensOut: live?.tokensOut,
     })
     const hard = mode === 'strict' || pressure.level === 'critical' || pressure.level === 'warn'
     const head = hard ? `# prjct: LAND REQUIRED before context dies` : `# prjct: land the plane`

@@ -28,14 +28,18 @@ type TestData = z.infer<typeof TestSchema>
 
 // Setup
 
-let tmpDir: string
+const fixture: {
+  tmpDir: string
+} = {
+  tmpDir: '',
+}
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-safe-reader-test-'))
+  fixture.tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-safe-reader-test-'))
 })
 
 afterEach(async () => {
-  await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(fixture.tmpDir, { recursive: true, force: true })
 })
 
 // Tests
@@ -43,7 +47,7 @@ afterEach(async () => {
 describe('safeRead', () => {
   describe('valid data', () => {
     it('should return validated data for valid JSON matching schema', async () => {
-      const filePath = path.join(tmpDir, 'valid.json')
+      const filePath = path.join(fixture.tmpDir, 'valid.json')
       const data: TestData = { name: 'test', count: 42, items: ['a', 'b'] }
       await fs.writeFile(filePath, JSON.stringify(data, null, 2))
 
@@ -53,7 +57,7 @@ describe('safeRead', () => {
     })
 
     it('should preserve extra fields not in schema', async () => {
-      const filePath = path.join(tmpDir, 'extra-fields.json')
+      const filePath = path.join(fixture.tmpDir, 'extra-fields.json')
       const data = {
         name: 'test',
         count: 1,
@@ -72,7 +76,7 @@ describe('safeRead', () => {
     })
 
     it('should not create .backup for valid data', async () => {
-      const filePath = path.join(tmpDir, 'no-backup.json')
+      const filePath = path.join(fixture.tmpDir, 'no-backup.json')
       const data: TestData = { name: 'ok', count: 0, items: [] }
       await fs.writeFile(filePath, JSON.stringify(data))
 
@@ -88,13 +92,13 @@ describe('safeRead', () => {
 
   describe('missing files', () => {
     it('should return null for non-existent file', async () => {
-      const result = await safeRead<TestData>(path.join(tmpDir, 'missing.json'), TestSchema)
+      const result = await safeRead<TestData>(path.join(fixture.tmpDir, 'missing.json'), TestSchema)
 
       expect(result).toBeNull()
     })
 
     it('should not create .backup for missing file', async () => {
-      const filePath = path.join(tmpDir, 'missing.json')
+      const filePath = path.join(fixture.tmpDir, 'missing.json')
       await safeRead<TestData>(filePath, TestSchema)
 
       const backupExists = await fs
@@ -107,7 +111,7 @@ describe('safeRead', () => {
 
   describe('corrupted JSON', () => {
     it('should return null for malformed JSON', async () => {
-      const filePath = path.join(tmpDir, 'malformed.json')
+      const filePath = path.join(fixture.tmpDir, 'malformed.json')
       await fs.writeFile(filePath, 'not valid json {{{')
 
       const result = await safeRead<TestData>(filePath, TestSchema)
@@ -116,7 +120,7 @@ describe('safeRead', () => {
     })
 
     it('should create .backup for malformed JSON', async () => {
-      const filePath = path.join(tmpDir, 'malformed.json')
+      const filePath = path.join(fixture.tmpDir, 'malformed.json')
       const badContent = 'not valid json {{{'
       await fs.writeFile(filePath, badContent)
 
@@ -127,7 +131,7 @@ describe('safeRead', () => {
     })
 
     it('should return null for empty file', async () => {
-      const filePath = path.join(tmpDir, 'empty.json')
+      const filePath = path.join(fixture.tmpDir, 'empty.json')
       await fs.writeFile(filePath, '')
 
       const result = await safeRead<TestData>(filePath, TestSchema)
@@ -136,7 +140,7 @@ describe('safeRead', () => {
     })
 
     it('write-once: a second corrupt read does NOT clobber the first .backup', async () => {
-      const filePath = path.join(tmpDir, 'recurring.json')
+      const filePath = path.join(fixture.tmpDir, 'recurring.json')
       const firstBad = '{ first corrupt evidence'
       await fs.writeFile(filePath, firstBad)
       await safeRead<TestData>(filePath, TestSchema)
@@ -153,7 +157,7 @@ describe('safeRead', () => {
 
   describe('valid JSON with wrong schema', () => {
     it('should return null when required field is missing', async () => {
-      const filePath = path.join(tmpDir, 'missing-field.json')
+      const filePath = path.join(fixture.tmpDir, 'missing-field.json')
       await fs.writeFile(filePath, JSON.stringify({ name: 'test' })) // missing count and items
 
       const result = await safeRead<TestData>(filePath, TestSchema)
@@ -162,7 +166,7 @@ describe('safeRead', () => {
     })
 
     it('should create .backup when schema validation fails', async () => {
-      const filePath = path.join(tmpDir, 'wrong-schema.json')
+      const filePath = path.join(fixture.tmpDir, 'wrong-schema.json')
       const data = { name: 123, count: 'not a number', items: 'not an array' }
       await fs.writeFile(filePath, JSON.stringify(data))
 
@@ -176,7 +180,7 @@ describe('safeRead', () => {
     })
 
     it('should return null when field has wrong type', async () => {
-      const filePath = path.join(tmpDir, 'wrong-type.json')
+      const filePath = path.join(fixture.tmpDir, 'wrong-type.json')
       await fs.writeFile(filePath, JSON.stringify({ name: 42, count: 1, items: [] }))
 
       const result = await safeRead<TestData>(filePath, TestSchema)
@@ -185,7 +189,7 @@ describe('safeRead', () => {
     })
 
     it('should return null when array contains wrong types', async () => {
-      const filePath = path.join(tmpDir, 'wrong-array.json')
+      const filePath = path.join(fixture.tmpDir, 'wrong-array.json')
       await fs.writeFile(filePath, JSON.stringify({ name: 'test', count: 1, items: [1, 2, 3] }))
 
       const result = await safeRead<TestData>(filePath, TestSchema)
@@ -201,7 +205,7 @@ describe('safeRead', () => {
         description: z.string().optional(),
       })
 
-      const filePath = path.join(tmpDir, 'optional.json')
+      const filePath = path.join(fixture.tmpDir, 'optional.json')
       await fs.writeFile(filePath, JSON.stringify({ name: 'test' }))
 
       const result = await safeRead<z.infer<typeof OptionalSchema>>(filePath, OptionalSchema)
@@ -217,7 +221,7 @@ describe('safeRead', () => {
         lastUpdated: z.string(),
       })
 
-      const filePath = path.join(tmpDir, 'nullable.json')
+      const filePath = path.join(fixture.tmpDir, 'nullable.json')
       await fs.writeFile(filePath, JSON.stringify({ currentTask: null, lastUpdated: '2026-01-01' }))
 
       const result = await safeRead<z.infer<typeof NullableSchema>>(filePath, NullableSchema)
@@ -232,7 +236,7 @@ describe('safeRead', () => {
       // Import the actual schema used in production
       const { StateJsonSchema } = await import('../../schemas/state')
 
-      const filePath = path.join(tmpDir, 'state.json')
+      const filePath = path.join(fixture.tmpDir, 'state.json')
       const stateData = {
         currentTask: null,
         lastUpdated: '2026-02-07T00:00:00.000Z',
@@ -252,7 +256,7 @@ describe('safeRead', () => {
     it('should reject corrupted state data', async () => {
       const { StateJsonSchema } = await import('../../schemas/state')
 
-      const filePath = path.join(tmpDir, 'bad-state.json')
+      const filePath = path.join(fixture.tmpDir, 'bad-state.json')
       // currentTask should be an object or null, not a number
       const badData = { currentTask: 42, lastUpdated: '2026-02-07' }
       await fs.writeFile(filePath, JSON.stringify(badData))

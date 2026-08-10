@@ -31,17 +31,18 @@ export async function saveLlmAnalysis(
     const projectId = proj.value
 
     const resolved = await resolveAnalysisInput(analysisInput, projectPath)
-    let analysis = await normalizeAnalysis(resolved.content, projectPath)
-    let mergedNotes = false
+    const normalized = await normalizeAnalysis(resolved.content, projectPath)
 
     // Anti-clobber (mem_8432): freeform markdown/notes yield style=unknown +
     // empty patterns. Never supersede a rich house-style analysis with that —
     // fold insights into the existing active analysis instead.
     const previous = llmAnalysisStorage.getActive(projectId)
-    if (previous && isRichLlmAnalysis(previous) && isThinLlmAnalysis(analysis)) {
-      analysis = mergeThinNotesIntoRich(previous, analysis)
-      mergedNotes = true
-    }
+    const mergedNotes = Boolean(
+      previous && isRichLlmAnalysis(previous) && isThinLlmAnalysis(normalized)
+    )
+    const analysis = mergedNotes
+      ? mergeThinNotesIntoRich(previous as NonNullable<typeof previous>, normalized)
+      : normalized
 
     llmAnalysisStorage.save(projectId, analysis)
 

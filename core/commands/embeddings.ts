@@ -114,18 +114,13 @@ export class EmbeddingsCommands extends PrjctCommandsBase {
     // direct programmatic call (or a test) works the same way.
     const key = options.key ?? flag(parts, 'key')
     const model = options.model ?? flag(parts, 'model')
-    let baseUrl = options.baseUrl ?? flag(parts, 'base-url') ?? flag(parts, 'baseUrl')
+    const configuredBaseUrl = options.baseUrl ?? flag(parts, 'base-url') ?? flag(parts, 'baseUrl')
     // Zero-config: infer the base URL from the key prefix (sk-or-… → OpenRouter,
     // sk-… → OpenAI, …) so pasting just `--key` is enough. An explicit
     // `--base-url` always wins; detection also fires when switching providers.
-    let detectedProvider: string | undefined
-    if (!baseUrl && key) {
-      const detected = detectBaseUrlFromKey(key)
-      if (detected) {
-        baseUrl = detected.baseUrl
-        detectedProvider = detected.provider
-      }
-    }
+    const detected = !configuredBaseUrl && key ? detectBaseUrlFromKey(key) : null
+    const baseUrl = configuredBaseUrl ?? detected?.baseUrl
+    const detectedProvider = detected?.provider
     const authHeader = options.authHeader ?? flag(parts, 'auth-header')
     // `none` (case-insensitive) → raw key, no scheme prefix (Azure's api-key).
     const authSchemeRaw = options.authScheme ?? flag(parts, 'auth-scheme')
@@ -147,14 +142,15 @@ export class EmbeddingsCommands extends PrjctCommandsBase {
       )
     }
 
-    let location: 'keychain' | 'file' | undefined
-    if (key) {
-      try {
-        location = await setEmbeddingsKey(key)
-      } catch (error) {
-        return failHard(`Could not store the key securely: ${getErrorMessage(error)}`)
-      }
+    const keyStorage: { location?: 'keychain' | 'file'; error?: string } = key
+      ? await setEmbeddingsKey(key)
+          .then((location) => ({ location }))
+          .catch((error) => ({ error: getErrorMessage(error) }))
+      : {}
+    if (keyStorage.error) {
+      return failHard(`Could not store the key securely: ${keyStorage.error}`)
     }
+    const location = keyStorage.location
     const settings = setGlobalEmbeddings({
       model,
       baseUrl,

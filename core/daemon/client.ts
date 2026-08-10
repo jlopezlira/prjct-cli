@@ -130,12 +130,12 @@ export function sendRequest(
   return new Promise((resolve, reject) => {
     const socketPath = DAEMON_PATHS.socket()
     const socket = connect(socketPath)
-    let buffer = ''
-    let resolved = false
+    const chunks: string[] = []
+    const completion = new AbortController()
 
     const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true
+      if (!completion.signal.aborted) {
+        completion.abort()
         socket.destroy()
         reject(new Error('Daemon request timed out'))
       }
@@ -146,12 +146,13 @@ export function sendRequest(
     })
 
     socket.on('data', (chunk) => {
-      buffer += chunk.toString()
+      chunks.push(chunk.toString())
+      const buffer = chunks.join('')
 
       // Guard against a runaway response (malformed / hostile peer).
       if (buffer.length > 8 * 1024 * 1024) {
-        if (!resolved) {
-          resolved = true
+        if (!completion.signal.aborted) {
+          completion.abort()
           clearTimeout(timeout)
           socket.destroy()
           reject(new Error('Daemon response too large'))
@@ -162,16 +163,16 @@ export function sendRequest(
       const newlineIdx = buffer.indexOf('\n')
       if (newlineIdx !== -1) {
         const line = buffer.slice(0, newlineIdx)
-        buffer = buffer.slice(newlineIdx + 1)
+        chunks.splice(0, chunks.length, buffer.slice(newlineIdx + 1))
 
         try {
           const response = JSON.parse(line) as DaemonResponse
-          resolved = true
+          completion.abort()
           clearTimeout(timeout)
           socket.end()
           resolve(response)
         } catch (err) {
-          resolved = true
+          completion.abort()
           clearTimeout(timeout)
           socket.end()
           reject(new Error(`Invalid daemon response: ${(err as Error).message}`))
@@ -180,16 +181,16 @@ export function sendRequest(
     })
 
     socket.on('error', (err) => {
-      if (!resolved) {
-        resolved = true
+      if (!completion.signal.aborted) {
+        completion.abort()
         clearTimeout(timeout)
         reject(err)
       }
     })
 
     socket.on('close', () => {
-      if (!resolved) {
-        resolved = true
+      if (!completion.signal.aborted) {
+        completion.abort()
         clearTimeout(timeout)
         reject(new Error('Connection closed before response'))
       }
@@ -270,29 +271,22 @@ export function forceKillDaemon(): boolean {
   const pidPath = DAEMON_PATHS.pid()
   const socketPath = DAEMON_PATHS.socket()
 
-  let killed = false
-  let safeToCleanOwnership = !fs.existsSync(pidPath)
-
   // Try to kill via PID file
-  if (fs.existsSync(pidPath)) {
+  const killResult = (() => {
+    if (!fs.existsSync(pidPath)) return { killed: false, safeToCleanOwnership: true }
     const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10)
     if (Number.isNaN(pid)) {
-      safeToCleanOwnership = true
-    } else {
-      try {
-        process.kill(pid, 'SIGKILL')
-        killed = true
-        safeToCleanOwnership = true
-      } catch (error) {
-        // ESRCH proves the PID is stale. EPERM/EACCES or an unknown failure
-        // means a live process may still own the endpoint, so retain both
-        // files rather than orphaning an uncontrollable daemon.
-        safeToCleanOwnership = systemErrorCode(error) === 'ESRCH'
-      }
+      return { killed: false, safeToCleanOwnership: true }
     }
-  }
+    try {
+      process.kill(pid, 'SIGKILL')
+      return { killed: true, safeToCleanOwnership: true }
+    } catch (error) {
+      return { killed: false, safeToCleanOwnership: systemErrorCode(error) === 'ESRCH' }
+    }
+  })()
 
-  if (!safeToCleanOwnership) return false
+  if (!killResult.safeToCleanOwnership) return false
 
   // Clean up stale files
   try {
@@ -308,7 +302,7 @@ export function forceKillDaemon(): boolean {
     }
   }
 
-  return killed
+  return killResult.killed
 }
 
 /**
@@ -324,14 +318,14 @@ export function forceKillDaemon(): boolean {
  * symptom: "Failed to listen" / "chmod ENOENT" storms in daemon.log).
  */
 /** In-process single-flight so one CLI process never double-spawns. */
-let _spawnInFlight: Promise<boolean> | null = null
+const spawnState: { inFlight: Promise<boolean> | null } = { inFlight: null }
 
 export async function spawnDaemon(): Promise<boolean> {
-  if (_spawnInFlight) return _spawnInFlight
-  _spawnInFlight = spawnDaemonExclusive().finally(() => {
-    _spawnInFlight = null
+  if (spawnState.inFlight) return spawnState.inFlight
+  spawnState.inFlight = spawnDaemonExclusive().finally(() => {
+    spawnState.inFlight = null
   })
-  return _spawnInFlight
+  return spawnState.inFlight
 }
 
 async function spawnDaemonExclusive(): Promise<boolean> {
@@ -358,25 +352,16 @@ async function spawnDaemonExclusive(): Promise<boolean> {
     // When running from bin/, the daemon is at dist/daemon/entry.mjs
     const distPath = path.join(__dirname, '..', 'dist', 'daemon', 'entry.mjs')
 
-    let entryPath: string
-    let runtime: string
     const preferBun = process.platform !== 'win32' && isBunAvailable()
-
-    if (fs.existsSync(srcPath)) {
-      // Dev mode: use raw TypeScript with bun
-      entryPath = srcPath
-      runtime = 'bun'
-    } else if (fs.existsSync(distPathAdjacent)) {
-      // Production (running from dist/): prefer bun if available
-      entryPath = distPathAdjacent
-      runtime = preferBun ? 'bun' : 'node'
-    } else if (fs.existsSync(distPath)) {
-      // Production (running from bin/): prefer bun if available
-      entryPath = distPath
-      runtime = preferBun ? 'bun' : 'node'
-    } else {
-      return false
-    }
+    const launch = fs.existsSync(srcPath)
+      ? { entryPath: srcPath, runtime: 'bun' }
+      : fs.existsSync(distPathAdjacent)
+        ? { entryPath: distPathAdjacent, runtime: preferBun ? 'bun' : 'node' }
+        : fs.existsSync(distPath)
+          ? { entryPath: distPath, runtime: preferBun ? 'bun' : 'node' }
+          : null
+    if (!launch) return false
+    const { entryPath, runtime } = launch
 
     const runDir = DAEMON_PATHS.runDir()
     fs.mkdirSync(runDir, { recursive: true })
@@ -407,13 +392,13 @@ async function spawnDaemonExclusive(): Promise<boolean> {
  */
 async function waitUntilDaemonRunning(budgetMs: number): Promise<boolean> {
   const deadline = Date.now() + budgetMs
-  let delay = 40
-  while (Date.now() < deadline) {
+  const poll = async (delay: number): Promise<boolean> => {
+    if (Date.now() >= deadline) return isDaemonRunning()
     if (await isDaemonRunning()) return true
     await new Promise((resolve) => setTimeout(resolve, delay))
-    delay = Math.min(delay * 2, 250)
+    return poll(Math.min(delay * 2, 250))
   }
-  return isDaemonRunning()
+  return poll(40)
 }
 
 /**

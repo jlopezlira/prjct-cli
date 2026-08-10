@@ -126,9 +126,9 @@ export class SpecCommands extends PrjctCommandsBase {
         if (specs.length === 0) {
           out.info('no specs yet — `prjct spec "<title>"` to start one')
         } else {
-          for (const s of specs) {
-            const ac = s.content.acceptance_criteria.length
-            console.log(`  ${s.status.padEnd(12)} ${s.id.slice(0, 8)}  ${s.title}  (${ac} AC)`)
+          for (const s2 of specs) {
+            const ac = s2.content.acceptance_criteria.length
+            console.log(`  ${s2.status.padEnd(12)} ${s2.id.slice(0, 8)}  ${s2.title}  (${ac} AC)`)
           }
         }
       }
@@ -165,11 +165,11 @@ export class SpecCommands extends PrjctCommandsBase {
         }
         if (spec.content.scope.length > 0) {
           console.log('\nscope:')
-          for (const c of spec.content.scope) console.log(`  - ${c}`)
+          for (const c2 of spec.content.scope) console.log(`  - ${c2}`)
         }
         if (spec.content.out_of_scope.length > 0) {
           console.log('\nout of scope:')
-          for (const c of spec.content.out_of_scope) console.log(`  - ${c}`)
+          for (const c3 of spec.content.out_of_scope) console.log(`  - ${c3}`)
         }
         if (spec.content.risks.length > 0) {
           console.log('\nrisks:')
@@ -177,7 +177,7 @@ export class SpecCommands extends PrjctCommandsBase {
         }
         if (spec.content.test_plan.length > 0) {
           console.log('\ntest plan:')
-          for (const c of spec.content.test_plan) console.log(`  - ${c}`)
+          for (const c4 of spec.content.test_plan) console.log(`  - ${c4}`)
         }
       }
 
@@ -212,12 +212,14 @@ export class SpecCommands extends PrjctCommandsBase {
       const initResult = await this.ensureProjectInit(projectPath)
       if (!initResult.success) return initResult
 
-      let patch: unknown
-      try {
-        patch = JSON.parse(jsonInput)
-      } catch {
-        return failWith('--json is not valid JSON')
-      }
+      const patch = (() => {
+        try {
+          return JSON.parse(jsonInput) as unknown
+        } catch {
+          return undefined
+        }
+      })()
+      if (patch === undefined) return failWith('--json is not valid JSON')
       if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
         return failWith('--json must decode to an object')
       }
@@ -463,8 +465,8 @@ export class SpecCommands extends PrjctCommandsBase {
       const { breakdownSpecToTasks } = await import('../services/spec-task-breakdown')
       const result = await breakdownSpecToTasks(projectId, projectPath, spec)
 
-      let forcedEventMemId: string | null = null
-      if (forced) {
+      const forcedEventMemId = await (async (): Promise<string | null> => {
+        if (!forced) return null
         // Audit event so a forced breakdown shows up in `prjct context
         // memory spec` and the event log. Free-form `type` string per
         // publishEvent semantics.
@@ -479,8 +481,8 @@ export class SpecCommands extends PrjctCommandsBase {
           },
           source: spec.id,
         })
-        forcedEventMemId = typeof memId === 'string' ? memId : null
-      }
+        return typeof memId === 'string' ? memId : null
+      })()
 
       const lines: string[] = []
       if (forcedEventMemId) lines.push(`forced-breakdown event=${forcedEventMemId}`)
@@ -598,7 +600,7 @@ function renderSpecMarkdown(spec: {
   }
   if (c.out_of_scope.length > 0) {
     lines.push('', '## Out of scope')
-    for (const s of c.out_of_scope) lines.push(`- ${s}`)
+    for (const s2 of c.out_of_scope) lines.push(`- ${s2}`)
   }
   if (c.risks.length > 0) {
     lines.push('', '## Risks')

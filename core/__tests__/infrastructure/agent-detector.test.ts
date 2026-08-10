@@ -7,21 +7,26 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { isSandboxed } from '../../infrastructure/agent-detector'
 
-let prevCodex: string | undefined
-let prevPrjct: string | undefined
+const fixture: {
+  prevCodex: string | undefined
+  prevPrjct: string | undefined
+} = {
+  prevCodex: undefined as unknown as string | undefined,
+  prevPrjct: undefined as unknown as string | undefined,
+}
 
 beforeEach(() => {
-  prevCodex = process.env.CODEX_SANDBOX
-  prevPrjct = process.env.PRJCT_SANDBOX
+  fixture.prevCodex = process.env.CODEX_SANDBOX
+  fixture.prevPrjct = process.env.PRJCT_SANDBOX
   delete process.env.CODEX_SANDBOX
   delete process.env.PRJCT_SANDBOX
 })
 
 afterEach(() => {
-  if (prevCodex === undefined) delete process.env.CODEX_SANDBOX
-  else process.env.CODEX_SANDBOX = prevCodex
-  if (prevPrjct === undefined) delete process.env.PRJCT_SANDBOX
-  else process.env.PRJCT_SANDBOX = prevPrjct
+  if (fixture.prevCodex === undefined) delete process.env.CODEX_SANDBOX
+  else process.env.CODEX_SANDBOX = fixture.prevCodex
+  if (fixture.prevPrjct === undefined) delete process.env.PRJCT_SANDBOX
+  else process.env.PRJCT_SANDBOX = fixture.prevPrjct
 })
 
 describe('isSandboxed', () => {

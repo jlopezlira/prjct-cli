@@ -19,16 +19,21 @@ import {
   toOpenCodeLocalMcp,
 } from '../../utils/opencode-mcp'
 
-let dir: string
-let configPath: string
+const fixture: {
+  dir: string
+  configPath: string
+} = {
+  dir: '',
+  configPath: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-opencode-mcp-test-'))
-  configPath = path.join(dir, 'opencode.json')
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-opencode-mcp-test-'))
+  fixture.configPath = path.join(fixture.dir, 'opencode.json')
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('toOpenCodeLocalMcp', () => {
@@ -47,11 +52,11 @@ describe('toOpenCodeLocalMcp', () => {
 
 describe('ensureOpenCodeMcpServer', () => {
   it('creates opencode.json with mcp.prjct when missing', async () => {
-    const r = await ensureOpenCodeMcpServer(configPath)
+    const r = await ensureOpenCodeMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
-    expect(r.path).toBe(configPath)
+    expect(r.path).toBe(fixture.configPath)
 
-    const raw = await fs.readFile(configPath, 'utf-8')
+    const raw = await fs.readFile(fixture.configPath, 'utf-8')
     expect(hasOpenCodePrjctMcp(raw)).toBe(true)
     const config = JSON.parse(raw) as {
       $schema?: string
@@ -67,7 +72,7 @@ describe('ensureOpenCodeMcpServer', () => {
 
   it('preserves user-defined MCP servers while upserting prjct', async () => {
     await fs.writeFile(
-      configPath,
+      fixture.configPath,
       `${JSON.stringify(
         {
           mcp: {
@@ -80,10 +85,10 @@ describe('ensureOpenCodeMcpServer', () => {
       'utf-8'
     )
 
-    const r = await ensureOpenCodeMcpServer(configPath)
+    const r = await ensureOpenCodeMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
 
-    const config = JSON.parse(await fs.readFile(configPath, 'utf-8')) as {
+    const config = JSON.parse(await fs.readFile(fixture.configPath, 'utf-8')) as {
       mcp: Record<string, { command?: string[] }>
     }
     expect(config.mcp.mine?.command).toEqual(['echo', 'hi'])
@@ -91,7 +96,7 @@ describe('ensureOpenCodeMcpServer', () => {
   })
 
   it('preserves JSONC comments when modifying', async () => {
-    const jsoncPath = path.join(dir, 'opencode.jsonc')
+    const jsoncPath = path.join(fixture.dir, 'opencode.jsonc')
     await fs.writeFile(
       jsoncPath,
       `{
@@ -114,8 +119,8 @@ describe('ensureOpenCodeMcpServer', () => {
   })
 
   it('is idempotent on re-run', async () => {
-    await ensureOpenCodeMcpServer(configPath)
-    const second = await ensureOpenCodeMcpServer(configPath)
+    await ensureOpenCodeMcpServer(fixture.configPath)
+    const second = await ensureOpenCodeMcpServer(fixture.configPath)
     expect(second.changed).toBe(false)
   })
 })

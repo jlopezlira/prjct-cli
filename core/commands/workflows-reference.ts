@@ -2,7 +2,7 @@
  * `prjct workflows` — the quality methodology, pulled on demand from ANY rig.
  *
  * Claude gets this content as `~/.claude/skills/prjct/workflows.md`; every
- * other agent (Codex, Gemini, Cursor, Windsurf, ...) has no skill file to
+ * other agent (Codex, Gemini, Cursor, OpenCode, ...) has no skill file to
  * read, so this verb prints the SAME single-source reference (subagent
  * dispatch, model policy, review/judgment/security workflows, decision
  * briefs) straight from the generator. Rig-agnostic by construction — the

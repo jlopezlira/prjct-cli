@@ -48,11 +48,9 @@ describe('Fibonacci Estimation', () => {
     })
 
     it('should have increasing typical times across the scale', () => {
-      let prev = 0
-      for (const p of FIBONACCI_POINTS) {
-        const { typical } = pointsToMinutes(p)
-        expect(typical).toBeGreaterThan(prev)
-        prev = typical
+      for (const [index, point] of FIBONACCI_POINTS.entries()) {
+        const previous = index === 0 ? 0 : pointsToMinutes(FIBONACCI_POINTS[index - 1]!).typical
+        expect(pointsToMinutes(point).typical).toBeGreaterThan(previous)
       }
     })
   })

@@ -44,26 +44,32 @@ function makeSpy(): SpyHandler {
   }
 }
 
-let projectId: string
-let originalProjectsDir: string | undefined
-let spy: SpyHandler
+const fixture: {
+  projectId: string
+  originalProjectsDir: string | undefined
+  spy: SpyHandler
+} = {
+  projectId: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  spy: undefined as unknown as SpyHandler,
+}
 
 beforeEach(async () => {
   prjctDb.close()
   const tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-applyev-idem-'))
-  originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+  fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
   process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
-  projectId = `applyev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  await pathManager.ensureProjectStructure(projectId)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0') // force migrations
+  fixture.projectId = `applyev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await pathManager.ensureProjectStructure(fixture.projectId)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0') // force migrations
 
-  spy = makeSpy()
-  ;(entityHandlers as Record<string, EntityHandler>)[TEST_ENTITY_TYPE] = spy
+  fixture.spy = makeSpy()
+  ;(entityHandlers as Record<string, EntityHandler>)[TEST_ENTITY_TYPE] = fixture.spy
 })
 
 afterEach(() => {
-  if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-  else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
+  if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+  else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
   delete (entityHandlers as Record<string, EntityHandler>)[TEST_ENTITY_TYPE]
   prjctDb.close()
 })
@@ -75,7 +81,7 @@ async function applyEvent(event: Record<string, unknown>): Promise<void> {
     syncManager as unknown as {
       applyEvent: (pid: string, ev: Record<string, unknown>) => Promise<void>
     }
-  ).applyEvent(projectId, event)
+  ).applyEvent(fixture.projectId, event)
 }
 
 describe('applyEvent idempotency (Phase 1.6 / B2)', () => {
@@ -90,8 +96,8 @@ describe('applyEvent idempotency (Phase 1.6 / B2)', () => {
     await applyEvent(event)
     await applyEvent(event) // identical re-delivery
 
-    expect(spy.upsertCalls).toHaveLength(1)
-    expect(spy.deleteCalls).toHaveLength(0)
+    expect(fixture.spy.upsertCalls).toHaveLength(1)
+    expect(fixture.spy.deleteCalls).toHaveLength(0)
   })
 
   test('different content_hash forces a re-apply (handler runs again)', async () => {
@@ -108,7 +114,7 @@ describe('applyEvent idempotency (Phase 1.6 / B2)', () => {
       content_hash: 'sha256:v2',
     })
 
-    expect(spy.upsertCalls).toHaveLength(2)
+    expect(fixture.spy.upsertCalls).toHaveLength(2)
   })
 
   test('event without content_hash always applies (no idempotency probe possible)', async () => {
@@ -121,7 +127,7 @@ describe('applyEvent idempotency (Phase 1.6 / B2)', () => {
     await applyEvent(event)
     await applyEvent(event)
 
-    expect(spy.upsertCalls).toHaveLength(2)
+    expect(fixture.spy.upsertCalls).toHaveLength(2)
   })
 
   test('delete event clears the hash trail so a same-payload re-create re-applies', async () => {
@@ -148,8 +154,8 @@ describe('applyEvent idempotency (Phase 1.6 / B2)', () => {
       content_hash: 'sha256:vX',
     })
 
-    expect(spy.upsertCalls).toHaveLength(2)
-    expect(spy.deleteCalls).toHaveLength(1)
+    expect(fixture.spy.upsertCalls).toHaveLength(2)
+    expect(fixture.spy.deleteCalls).toHaveLength(1)
   })
 
   test('different entity ids are tracked independently', async () => {
@@ -166,7 +172,7 @@ describe('applyEvent idempotency (Phase 1.6 / B2)', () => {
       content_hash: 'sha256:same',
     })
 
-    expect(spy.upsertCalls).toHaveLength(2)
+    expect(fixture.spy.upsertCalls).toHaveLength(2)
   })
 
   test('event for unknown entity_type does NOT record a hash (no handler ran)', async () => {
@@ -187,7 +193,7 @@ describe('applyEvent idempotency (Phase 1.6 / B2)', () => {
       content_hash: 'sha256:orphan',
     })
 
-    expect(spy.upsertCalls).toHaveLength(0)
-    expect(spy.deleteCalls).toHaveLength(0)
+    expect(fixture.spy.upsertCalls).toHaveLength(0)
+    expect(fixture.spy.deleteCalls).toHaveLength(0)
   })
 })

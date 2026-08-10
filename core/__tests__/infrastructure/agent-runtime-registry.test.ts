@@ -17,7 +17,7 @@ describe('agent runtime registry', () => {
     expect(universal.contextFiles).toContain('AGENTS.md')
   })
 
-  it('tracks modern coding-agent runtimes beyond the legacy provider list', () => {
+  it('tracks modern coding-agent runtimes beyond the original provider list', () => {
     const ids = new Set(listAgentRuntimes().map((runtime) => runtime.id))
 
     const expectedRuntimes: AgentRuntimeId[] = [
@@ -127,9 +127,7 @@ describe('agent runtime registry', () => {
     }
   })
 
-  it('marks Windsurf as legacy (not a benchmark focus)', () => {
-    const windsurf = getAgentRuntime('windsurf')
-    expect(windsurf.status).toBe('legacy')
-    expect(windsurf.notes).toMatch(/LEGACY/i)
+  it('does not carry retired runtime profiles', () => {
+    expect(listAgentRuntimes().map((runtime) => runtime.id)).not.toContain('windsurf')
   })
 })

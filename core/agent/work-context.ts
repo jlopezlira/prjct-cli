@@ -76,12 +76,7 @@ export async function prepareOwnedAgentWorkContext(opts: {
   const weak = weakModelAppend(opts.profile)
   if (weak) parts.push(weak)
 
-  let projectId: string | null = null
-  try {
-    projectId = (await configManager.getProjectId(opts.root)) || null
-  } catch {
-    projectId = null
-  }
+  const projectId = await configManager.getProjectId(opts.root).catch(() => null)
 
   if (!projectId || opts.noWork) {
     return {
@@ -132,13 +127,11 @@ export async function prepareOwnedAgentWorkContext(opts: {
   const brief = formatStartBrief(outcome)
   if (brief) parts.push(brief)
 
-  let root = opts.root
-  let isolationPath: string | undefined
-  if (outcome.isolation?.worktreePath) {
-    root = outcome.isolation.worktreePath
-    isolationPath = outcome.isolation.worktreePath
+  const isolationPath = outcome.isolation?.worktreePath
+  const root = isolationPath ?? opts.root
+  if (isolationPath) {
     parts.push(
-      `Isolated worktree: ${outcome.isolation.worktreePath} (branch ${outcome.isolation.branch}). All file tools use this root.`
+      `Isolated worktree: ${isolationPath} (branch ${outcome.isolation?.branch}). All file tools use this root.`
     )
   }
 

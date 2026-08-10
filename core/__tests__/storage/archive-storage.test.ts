@@ -25,8 +25,7 @@ import { getTimestamp } from '../../utils/date-helper'
 
 // Test Setup
 
-let tmpRoot: string
-let testProjectId: string
+const fixture = { tmpRoot: '', testProjectId: '' }
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 const originalGetFilePath = pathManager.getFilePath.bind(pathManager)
@@ -47,25 +46,31 @@ describe('Archive Storage', () => {
     // getDb re-resolves through the patch below.
     prjctDb.close()
 
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-archive-test-'))
-    testProjectId = 'test-archive-project'
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-archive-test-'))
+    fixture.testProjectId = 'test-archive-project'
 
-    pathManager.getGlobalProjectPath = (projectId: string) => path.join(tmpRoot, projectId)
+    pathManager.getGlobalProjectPath = (projectId: string) => path.join(fixture.tmpRoot, projectId)
 
     pathManager.getFilePath = (projectId: string, layer: string, filename: string) =>
-      path.join(tmpRoot, projectId, layer, filename)
+      path.join(fixture.tmpRoot, projectId, layer, filename)
 
     // Ensure all required dirs exist
     const dirs = ['context', 'memory', 'core', 'progress', 'planning', 'sync']
     await Promise.all(
-      dirs.map((d) => fs.mkdir(path.join(tmpRoot, testProjectId, d), { recursive: true }))
+      dirs.map((d) =>
+        fs.mkdir(path.join(fixture.tmpRoot, fixture.testProjectId, d), { recursive: true })
+      )
     )
 
     // Create empty pending.json for event bus
-    await fs.writeFile(path.join(tmpRoot, testProjectId, 'sync', 'pending.json'), '[]', 'utf-8')
+    await fs.writeFile(
+      path.join(fixture.tmpRoot, fixture.testProjectId, 'sync', 'pending.json'),
+      '[]',
+      'utf-8'
+    )
 
     // Initialize the database (triggers migrations including archives table)
-    prjctDb.getDb(testProjectId)
+    prjctDb.getDb(fixture.testProjectId)
   })
 
   afterEach(async () => {
@@ -73,8 +78,8 @@ describe('Archive Storage', () => {
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
     pathManager.getFilePath = originalGetFilePath
 
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
     }
   })
 
@@ -82,7 +87,7 @@ describe('Archive Storage', () => {
 
   describe('archive table', () => {
     it('should archive a single item', () => {
-      const id = archiveStorage.archive(testProjectId, {
+      const id = archiveStorage.archive(fixture.testProjectId, {
         entityType: 'shipped',
         entityId: 'ship-1',
         entityData: { name: 'Feature A', version: '1.0.0' },
@@ -92,14 +97,14 @@ describe('Archive Storage', () => {
 
       expect(id).toBeTruthy()
 
-      const records = archiveStorage.getArchived(testProjectId, 'shipped')
+      const records = archiveStorage.getArchived(fixture.testProjectId, 'shipped')
       expect(records).toHaveLength(1)
       expect(records[0].entity_id).toBe('ship-1')
       expect(records[0].summary).toBe('Feature A v1.0.0')
     })
 
     it('should archive multiple items in a transaction', () => {
-      const count = archiveStorage.archiveMany(testProjectId, [
+      const count = archiveStorage.archiveMany(fixture.testProjectId, [
         { entityType: 'shipped', entityId: 's1', entityData: { a: 1 }, reason: 'age' },
         { entityType: 'shipped', entityId: 's2', entityData: { a: 2 }, reason: 'age' },
         { entityType: 'idea', entityId: 'i1', entityData: { b: 1 }, reason: 'dormant' },
@@ -107,50 +112,50 @@ describe('Archive Storage', () => {
 
       expect(count).toBe(3)
 
-      const stats = archiveStorage.getStats(testProjectId)
+      const stats = archiveStorage.getStats(fixture.testProjectId)
       expect(stats.shipped).toBe(2)
       expect(stats.idea).toBe(1)
       expect(stats.total).toBe(3)
     })
 
     it('should restore an archived item', () => {
-      archiveStorage.archive(testProjectId, {
+      archiveStorage.archive(fixture.testProjectId, {
         entityType: 'shipped',
         entityId: 'ship-1',
         entityData: { name: 'restored' },
         reason: 'age',
       })
 
-      const records = archiveStorage.getArchived(testProjectId)
+      const records = archiveStorage.getArchived(fixture.testProjectId)
       expect(records).toHaveLength(1)
 
-      const data = archiveStorage.restore(testProjectId, records[0].id)
+      const data = archiveStorage.restore(fixture.testProjectId, records[0].id)
       expect(data).toEqual({ name: 'restored' })
 
       // Should be removed from archive
-      const after = archiveStorage.getArchived(testProjectId)
+      const after = archiveStorage.getArchived(fixture.testProjectId)
       expect(after).toHaveLength(0)
     })
 
     it('should prune old archives', () => {
       // Insert an archive with old timestamp
-      const db = prjctDb.getDb(testProjectId)
+      const db = prjctDb.getDb(fixture.testProjectId)
       const oldDate = daysAgoISO(400)
       db.prepare(
         'INSERT INTO archives (id, entity_type, entity_id, entity_data, archived_at, reason) VALUES (?, ?, ?, ?, ?, ?)'
       ).run('old-1', 'shipped', 's1', '{}', oldDate, 'age')
 
-      archiveStorage.archive(testProjectId, {
+      archiveStorage.archive(fixture.testProjectId, {
         entityType: 'shipped',
         entityId: 's2',
         entityData: {},
         reason: 'age',
       })
 
-      const pruned = archiveStorage.pruneOldArchives(testProjectId, 365)
+      const pruned = archiveStorage.pruneOldArchives(fixture.testProjectId, 365)
       expect(pruned).toBe(1)
 
-      const remaining = archiveStorage.getArchived(testProjectId)
+      const remaining = archiveStorage.getArchived(fixture.testProjectId)
       expect(remaining).toHaveLength(1)
       expect(remaining[0].entity_id).toBe('s2')
     })
@@ -162,26 +167,26 @@ describe('Archive Storage', () => {
     it('should archive shipped features older than 90 days', async () => {
       // Seed shipped rows (typed store) with old and recent items.
       const recent = await shippedStorage.addShipped(
-        testProjectId,
+        fixture.testProjectId,
         { name: 'Recent', version: '2.0.0' },
         daysAgoISO(10)
       )
       const old = await shippedStorage.addShipped(
-        testProjectId,
+        fixture.testProjectId,
         { name: 'Old', version: '1.0.0' },
         daysAgoISO(100)
       )
 
-      const archived = await shippedStorage.archiveOldShipped(testProjectId)
+      const archived = await shippedStorage.archiveOldShipped(fixture.testProjectId)
       expect(archived).toBe(1)
 
       // Verify active storage only has recent
-      const data = await shippedStorage.getAll(testProjectId)
+      const data = await shippedStorage.getAll(fixture.testProjectId)
       expect(data).toHaveLength(1)
       expect(data[0].id).toBe(recent.id)
 
       // Verify archive table has old item
-      const records = archiveStorage.getArchived(testProjectId, 'shipped')
+      const records = archiveStorage.getArchived(fixture.testProjectId, 'shipped')
       expect(records).toHaveLength(1)
       expect(records[0].entity_id).toBe(old.id)
       expect(records[0].summary).toBe('Old v1.0.0')
@@ -189,20 +194,20 @@ describe('Archive Storage', () => {
 
     it('should not archive recent shipped features', async () => {
       await shippedStorage.addShipped(
-        testProjectId,
+        fixture.testProjectId,
         { name: 'R1', version: '1.0.0' },
         daysAgoISO(5)
       )
       await shippedStorage.addShipped(
-        testProjectId,
+        fixture.testProjectId,
         { name: 'R2', version: '1.1.0' },
         daysAgoISO(30)
       )
 
-      const archived = await shippedStorage.archiveOldShipped(testProjectId)
+      const archived = await shippedStorage.archiveOldShipped(fixture.testProjectId)
       expect(archived).toBe(0)
 
-      const data = await shippedStorage.getAll(testProjectId)
+      const data = await shippedStorage.getAll(fixture.testProjectId)
       expect(data).toHaveLength(2)
     })
   })
@@ -212,21 +217,21 @@ describe('Archive Storage', () => {
   describe('ideas dormancy', () => {
     it('should mark pending ideas older than 180 days as dormant', async () => {
       // Seed typed idea rows: fresh pending, stale pending, converted.
-      await ideasStorage.upsertIdea(testProjectId, {
+      await ideasStorage.upsertIdea(fixture.testProjectId, {
         id: 'new',
         text: 'New idea',
         status: 'pending',
         priority: 'medium',
         addedAt: daysAgoISO(10),
       })
-      await ideasStorage.upsertIdea(testProjectId, {
+      await ideasStorage.upsertIdea(fixture.testProjectId, {
         id: 'stale',
         text: 'Stale idea',
         status: 'pending',
         priority: 'low',
         addedAt: daysAgoISO(200),
       })
-      await ideasStorage.upsertIdea(testProjectId, {
+      await ideasStorage.upsertIdea(fixture.testProjectId, {
         id: 'converted',
         text: 'Converted',
         status: 'converted',
@@ -234,29 +239,31 @@ describe('Archive Storage', () => {
         addedAt: daysAgoISO(300),
       })
 
-      const dormant = await ideasStorage.markDormantIdeas(testProjectId)
+      const dormant = await ideasStorage.markDormantIdeas(fixture.testProjectId)
       expect(dormant).toBe(1)
 
-      expect((await ideasStorage.getById(testProjectId, 'stale'))?.status).toBe('dormant')
+      expect((await ideasStorage.getById(fixture.testProjectId, 'stale'))?.status).toBe('dormant')
       // New idea should remain pending
-      expect((await ideasStorage.getById(testProjectId, 'new'))?.status).toBe('pending')
+      expect((await ideasStorage.getById(fixture.testProjectId, 'new'))?.status).toBe('pending')
       // Converted should remain converted
-      expect((await ideasStorage.getById(testProjectId, 'converted'))?.status).toBe('converted')
+      expect((await ideasStorage.getById(fixture.testProjectId, 'converted'))?.status).toBe(
+        'converted'
+      )
 
       // Archive table should have the dormant idea
-      const records = archiveStorage.getArchived(testProjectId, 'idea')
+      const records = archiveStorage.getArchived(fixture.testProjectId, 'idea')
       expect(records).toHaveLength(1)
     })
 
     it('should track dormant status in SQLite', async () => {
-      await ideasStorage.upsertIdea(testProjectId, {
+      await ideasStorage.upsertIdea(fixture.testProjectId, {
         id: 'active',
         text: 'Active idea',
         status: 'pending',
         priority: 'medium',
         addedAt: daysAgoISO(5),
       })
-      await ideasStorage.upsertIdea(testProjectId, {
+      await ideasStorage.upsertIdea(fixture.testProjectId, {
         id: 'dormant',
         text: 'Dormant idea',
         status: 'dormant',
@@ -265,7 +272,7 @@ describe('Archive Storage', () => {
       })
 
       // Read back from storage — dormant ideas preserved in SQLite
-      const all = await ideasStorage.getAll(testProjectId)
+      const all = await ideasStorage.getAll(fixture.testProjectId)
       const active = all.filter((i) => i.status === 'pending')
       const dormant = all.filter((i) => i.status === 'dormant')
 
@@ -281,7 +288,7 @@ describe('Archive Storage', () => {
   describe('queue cleanup', () => {
     it('should remove completed tasks older than 7 days', async () => {
       // Seed typed queue rows: one active, one recently-completed, one stale.
-      await queueStorage.upsertTask(testProjectId, {
+      await queueStorage.upsertTask(fixture.testProjectId, {
         id: 'active',
         description: 'Active',
         type: 'feature',
@@ -290,7 +297,7 @@ describe('Archive Storage', () => {
         createdAt: daysAgoISO(1),
         completed: false,
       })
-      await queueStorage.upsertTask(testProjectId, {
+      await queueStorage.upsertTask(fixture.testProjectId, {
         id: 'recent-done',
         description: 'Recent done',
         type: 'feature',
@@ -300,7 +307,7 @@ describe('Archive Storage', () => {
         completed: true,
         completedAt: daysAgoISO(2),
       })
-      await queueStorage.upsertTask(testProjectId, {
+      await queueStorage.upsertTask(fixture.testProjectId, {
         id: 'old-done',
         description: 'Old done',
         type: 'feature',
@@ -311,15 +318,15 @@ describe('Archive Storage', () => {
         completedAt: daysAgoISO(10),
       })
 
-      const removed = await queueStorage.removeStaleCompleted(testProjectId)
+      const removed = await queueStorage.removeStaleCompleted(fixture.testProjectId)
       expect(removed).toBe(1)
 
-      const remaining = await queueStorage.getTasks(testProjectId)
+      const remaining = await queueStorage.getTasks(fixture.testProjectId)
       expect(remaining).toHaveLength(2)
       expect(remaining.map((t) => t.id).sort()).toEqual(['active', 'recent-done'])
 
       // Archive should have the old completed task
-      const records = archiveStorage.getArchived(testProjectId, 'queue_task')
+      const records = archiveStorage.getArchived(fixture.testProjectId, 'queue_task')
       expect(records).toHaveLength(1)
       expect(records[0].entity_id).toBe('old-done')
     })
@@ -329,7 +336,7 @@ describe('Archive Storage', () => {
 
   describe('paused task archival', () => {
     it('should archive paused tasks older than 30 days', async () => {
-      await stateStorage.write(testProjectId, {
+      await stateStorage.write(fixture.testProjectId, {
         currentTask: null,
         previousTask: null,
         pausedTasks: [
@@ -351,17 +358,17 @@ describe('Archive Storage', () => {
         lastUpdated: getTimestamp(),
       })
 
-      const archived = await stateStorage.archiveStalePausedTasks(testProjectId)
+      const archived = await stateStorage.archiveStalePausedTasks(fixture.testProjectId)
       expect(archived).toHaveLength(1)
       expect(archived[0].id).toBe('stale')
 
       // Active state should only have recent
-      const state = await stateStorage.read(testProjectId)
+      const state = await stateStorage.read(fixture.testProjectId)
       expect(state.pausedTasks).toHaveLength(1)
       expect(state.pausedTasks![0].id).toBe('recent')
 
       // Archive table should have stale
-      const records = archiveStorage.getArchived(testProjectId, 'paused_task')
+      const records = archiveStorage.getArchived(fixture.testProjectId, 'paused_task')
       expect(records).toHaveLength(1)
       expect(records[0].entity_id).toBe('stale')
     })
@@ -373,8 +380,8 @@ describe('Archive Storage', () => {
     it('should cap memory entries at max limit', async () => {
       // Write more entries than the limit to SQLite events table
       const total = ARCHIVE_POLICIES.MEMORY_MAX_ENTRIES + 50
-      for (let i = 0; i < total; i++) {
-        prjctDb.appendEvent(testProjectId, `memory.action-${i}`, {
+      for (const i of Array.from({ length: total }, (_, index) => index)) {
+        prjctDb.appendEvent(fixture.testProjectId, `memory.action-${i}`, {
           action: `action-${i}`,
           index: i,
         })
@@ -382,18 +389,18 @@ describe('Archive Storage', () => {
 
       // Import and use memoryService
       const { memoryService } = await import('../../services/memory-service')
-      const capped = await memoryService.capEntries(testProjectId)
+      const capped = await memoryService.capEntries(fixture.testProjectId)
       expect(capped).toBe(50)
 
       // SQLite should now have exactly max entries
       const countRow = prjctDb.get<{ cnt: number }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT COUNT(*) as cnt FROM events WHERE type LIKE 'memory.%'"
       )
       expect(countRow!.cnt).toBe(ARCHIVE_POLICIES.MEMORY_MAX_ENTRIES)
 
       // Archive should have the overflow
-      const records = archiveStorage.getArchived(testProjectId, 'memory_entry')
+      const records = archiveStorage.getArchived(fixture.testProjectId, 'memory_entry')
       expect(records).toHaveLength(50)
     })
 
@@ -403,31 +410,33 @@ describe('Archive Storage', () => {
       // delete destroyed the OLDEST remembered decisions/gotchas while
       // keeping newer telemetry. Knowledge must be invisible to the cap
       // (both the count and the delete) — it leaves via `prjct forget`.
-      for (let i = 0; i < 30; i++) {
-        prjctDb.appendEvent(testProjectId, 'memory.remember.decision', {
+      for (const i of Array.from({ length: 30 }, (_, index) => index)) {
+        prjctDb.appendEvent(fixture.testProjectId, 'memory.remember.decision', {
           content: `old precious decision ${i}`,
           tags: {},
         })
       }
       const total = ARCHIVE_POLICIES.MEMORY_MAX_ENTRIES + 20
-      for (let i = 0; i < total; i++) {
-        prjctDb.appendEvent(testProjectId, 'memory.post_edit', { file: `f${i}.ts` })
+      for (const i2 of Array.from({ length: total }, (_, index) => index)) {
+        prjctDb.appendEvent(fixture.testProjectId, 'memory.post_edit', {
+          file: `f${i2}.ts`,
+        })
       }
 
       const { memoryService } = await import('../../services/memory-service')
-      const capped = await memoryService.capEntries(testProjectId)
+      const capped = await memoryService.capEntries(fixture.testProjectId)
       expect(capped).toBe(20)
 
       // Every remember row survives — even though they are the oldest.
       const remembered = prjctDb.get<{ cnt: number }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT COUNT(*) as cnt FROM events WHERE type LIKE 'memory.remember.%'"
       )
       expect(remembered!.cnt).toBe(30)
 
       // Telemetry got capped to the limit.
       const telemetry = prjctDb.get<{ cnt: number }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT COUNT(*) as cnt FROM events WHERE type LIKE 'memory.%' AND type NOT LIKE 'memory.remember.%'"
       )
       expect(telemetry!.cnt).toBe(ARCHIVE_POLICIES.MEMORY_MAX_ENTRIES)
@@ -435,12 +444,15 @@ describe('Archive Storage', () => {
 
     it('should not cap if under limit', async () => {
       // Write a few entries under the limit to SQLite
-      for (let i = 0; i < 10; i++) {
-        prjctDb.appendEvent(testProjectId, `memory.a-${i}`, { action: `a-${i}`, data: {} })
+      for (const i of Array.from({ length: 10 }, (_, index) => index)) {
+        prjctDb.appendEvent(fixture.testProjectId, `memory.a-${i}`, {
+          action: `a-${i}`,
+          data: {},
+        })
       }
 
       const { memoryService } = await import('../../services/memory-service')
-      const capped = await memoryService.capEntries(testProjectId)
+      const capped = await memoryService.capEntries(fixture.testProjectId)
       expect(capped).toBe(0)
     })
   })

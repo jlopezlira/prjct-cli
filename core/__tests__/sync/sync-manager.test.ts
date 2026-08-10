@@ -6,26 +6,34 @@ import authConfig from '../../sync/auth-config'
 import { _setAuthTokenStoreForTests, type AuthTokenLocation } from '../../sync/secure-auth-token'
 import { syncManager } from '../../sync/sync-manager'
 
-let tmpDir: string
+const fixture: {
+  tmpDir: string
+  storedToken: string | null
+} = {
+  tmpDir: '',
+  storedToken: null,
+}
 const originalConfigPath = (authConfig as unknown as { configPath: string }).configPath
 const originalFetch = globalThis.fetch
-let storedToken: string | null = null
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sync-manager-test-'))
-  ;(authConfig as unknown as { configPath: string }).configPath = path.join(tmpDir, 'auth.json')
+  fixture.tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sync-manager-test-'))
+  ;(authConfig as unknown as { configPath: string }).configPath = path.join(
+    fixture.tmpDir,
+    'auth.json'
+  )
   authConfig.clearCache()
-  storedToken = null
+  fixture.storedToken = null
   _setAuthTokenStoreForTests({
-    get: async () => storedToken,
+    get: async () => fixture.storedToken,
     set: async (value: string): Promise<AuthTokenLocation> => {
-      storedToken = value
+      fixture.storedToken = value
       return 'keychain'
     },
     clear: async () => {
-      storedToken = null
+      fixture.storedToken = null
     },
-    location: async () => (storedToken ? 'keychain' : 'none'),
+    location: async () => (fixture.storedToken ? 'keychain' : 'none'),
   })
 })
 
@@ -35,7 +43,7 @@ afterEach(async () => {
   ;(authConfig as unknown as { configPath: string }).configPath = originalConfigPath
   authConfig.clearCache()
   try {
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    await fs.rm(fixture.tmpDir, { recursive: true, force: true })
   } catch {
     // ignore
   }

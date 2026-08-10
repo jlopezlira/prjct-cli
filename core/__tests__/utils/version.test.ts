@@ -12,17 +12,21 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
-let originalEnv: string | undefined
+const fixture: {
+  originalEnv: string | undefined
+} = {
+  originalEnv: undefined as unknown as string | undefined,
+}
 
 beforeEach(() => {
-  originalEnv = process.env.PRJCT_VERSION
+  fixture.originalEnv = process.env.PRJCT_VERSION
 })
 
 afterEach(() => {
-  if (originalEnv === undefined) {
+  if (fixture.originalEnv === undefined) {
     delete process.env.PRJCT_VERSION
   } else {
-    process.env.PRJCT_VERSION = originalEnv
+    process.env.PRJCT_VERSION = fixture.originalEnv
   }
 })
 

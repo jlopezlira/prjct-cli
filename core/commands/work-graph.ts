@@ -74,8 +74,8 @@ export class WorkGraphCommands extends PrjctCommandsBase {
       console.log(lines.join('\n'))
     } else {
       out.info(`${items.length} ready item(s) (impact-ranked):`)
-      for (const i of items) {
-        out.info(`  • [${i.id.slice(0, 8)}] ${i.description.slice(0, 80)}`)
+      for (const i2 of items) {
+        out.info(`  • [${i2.id.slice(0, 8)}] ${i2.description.slice(0, 80)}`)
       }
       if (items[0]?.why) out.info(`  ${items[0].why}`)
     }
@@ -133,15 +133,17 @@ export class WorkGraphCommands extends PrjctCommandsBase {
     const id = await this.resolveId(proj.value, (input ?? '').trim())
     if (!id) return this.fail('Usage: prjct claim <task-id>', options)
     // Codex-style adorable default when neither --as nor PRJCT_AGENT is set.
-    let claimant = options.as ?? process.env.PRJCT_AGENT
-    if (!claimant) {
-      const { pickCodename } = await import('../services/agent-codenames')
-      const taken = workGraph
-        .ready(proj.value, { limit: 50 })
-        .map((i) => i.claimedBy)
-        .filter((x): x is string => Boolean(x))
-      claimant = pickCodename(`claim:${id}:${Date.now()}`, taken)
-    }
+    const claimant =
+      options.as ??
+      process.env.PRJCT_AGENT ??
+      (await (async () => {
+        const { pickCodename } = await import('../services/agent-codenames')
+        const taken = workGraph
+          .ready(proj.value, { limit: 50 })
+          .map((i) => i.claimedBy)
+          .filter((x): x is string => Boolean(x))
+        return pickCodename(`claim:${id}:${Date.now()}`, taken)
+      })())
     const won = workGraph.claim(proj.value, id, claimant)
     const msg = won
       ? `claimed ${id.slice(0, 8)} as ${claimant}`
@@ -226,7 +228,7 @@ export class WorkGraphCommands extends PrjctCommandsBase {
       }
       console.log(lines.join('\n'))
     } else {
-      for (const p of plan) out.info(`phase ${p.phase}: ${p.items.length} item(s)`)
+      for (const p2 of plan) out.info(`phase ${p2.phase}: ${p2.items.length} item(s)`)
     }
     return { success: true, phases: plan.length, plan }
   }
@@ -253,23 +255,26 @@ export class WorkGraphCommands extends PrjctCommandsBase {
       // Read side: serve the decomposition record (or compute one now).
       const parent = (await queueStorage.getTasks(proj.value)).find((t) => t.id === id)
       const description = parent?.description ?? id
-      let rec = workGraph.getComplexity(proj.value, id)
-      if (!rec) {
-        const harness = buildTaskHarness(description)
-        const plan = orchestrationFor(harness)
-        rec = {
-          score: plan.expectedPoints,
-          recommendedSubtasks: plan.expectedPoints >= 5 ? Math.min(plan.expectedPoints, 6) : 0,
-          expansionPrompt: `Decompose "${description}" into ${Math.min(plan.expectedPoints, 6)} independent, testable subtasks; make dependencies explicit; each subtask ≤ 2 points.`,
-          reasoning: `Triage level ${harness.level}; ~${plan.expectedPoints} points.`,
-        }
-        workGraph.recordComplexity(proj.value, id, {
-          score: rec.score,
-          recommendedSubtasks: rec.recommendedSubtasks,
-          expansionPrompt: rec.expansionPrompt ?? undefined,
-          reasoning: rec.reasoning ?? undefined,
-        })
-      }
+      const existingRecord = workGraph.getComplexity(proj.value, id)
+      const rec =
+        existingRecord ??
+        (() => {
+          const harness = buildTaskHarness(description)
+          const plan = orchestrationFor(harness)
+          const computed = {
+            score: plan.expectedPoints,
+            recommendedSubtasks: plan.expectedPoints >= 5 ? Math.min(plan.expectedPoints, 6) : 0,
+            expansionPrompt: `Decompose "${description}" into ${Math.min(plan.expectedPoints, 6)} independent, testable subtasks; make dependencies explicit; each subtask ≤ 2 points.`,
+            reasoning: `Triage level ${harness.level}; ~${plan.expectedPoints} points.`,
+          }
+          workGraph.recordComplexity(proj.value, id, {
+            score: computed.score,
+            recommendedSubtasks: computed.recommendedSubtasks,
+            expansionPrompt: computed.expansionPrompt ?? undefined,
+            reasoning: computed.reasoning ?? undefined,
+          })
+          return computed
+        })()
       if (options.md) {
         const lines = [
           `# Expand \`${id.slice(0, 8)}\` — ${description.slice(0, 90)}`,
@@ -407,9 +412,9 @@ export class WorkGraphCommands extends PrjctCommandsBase {
       lines.push('', 'Accept: `prjct accept <id>`')
       console.log(lines.join('\n'))
     } else {
-      for (const h of rows) {
+      for (const h2 of rows) {
         out.info(
-          `[${h.status}] ${h.id.slice(0, 14)} ${h.fromAgent}→${h.toAgent} ${h.taskId.slice(0, 8)} — ${h.reason.slice(0, 50)}`
+          `[${h2.status}] ${h2.id.slice(0, 14)} ${h2.fromAgent}→${h2.toAgent} ${h2.taskId.slice(0, 8)} — ${h2.reason.slice(0, 50)}`
         )
       }
     }

@@ -221,9 +221,9 @@ class PerformanceTracker {
       'perf.%',
       sinceIso
     )
-    for (const row of legacyRows) {
-      const parsed = JSON.parse(row.data)
-      entries.push({ ...parsed, timestamp: row.timestamp } as PerformanceEntry)
+    for (const row2 of legacyRows) {
+      const parsed = JSON.parse(row2.data)
+      entries.push({ ...parsed, timestamp: row2.timestamp } as PerformanceEntry)
     }
 
     return entries

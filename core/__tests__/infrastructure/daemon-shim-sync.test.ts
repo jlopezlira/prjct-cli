@@ -67,7 +67,7 @@ describe('daemon-shim ↔ manifest sync', () => {
     expect(shim.has('__post-upgrade')).toBe(true)
 
     const src = extractBinUsage()
-    expect(src).toContain("_fastCommand === '__post-upgrade'")
+    expect(src).toContain("_initialFastCommand === '__post-upgrade'")
     // The upgrade block must NOT run setup synchronously on the user's
     // command path (the regression this guards: ~30s stall on the first
     // command after every upgrade).
@@ -137,7 +137,9 @@ describe('daemon-shim fallback policy', () => {
   test('timeout path does NOT silently re-import core', () => {
     // Same hazard: the daemon may still be working when the shim gives up.
     const timeoutBlock = buildSrc.match(/setTimeout\(\(\)\s*=>\s*\{[^}]+\}/g) ?? []
-    const shimTimeout = timeoutBlock.find((b) => b.includes('done') && b.includes('sock'))
+    const shimTimeout = timeoutBlock.find(
+      (block) => block.includes('completion.signal.aborted') && block.includes('sock')
+    )
     expect(shimTimeout).toBeDefined()
     if (shimTimeout) {
       const callsFallback = /fallback\(\)/.test(shimTimeout)

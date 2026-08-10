@@ -53,16 +53,10 @@ export const suggestFromHistory = async (
 
 /** Find the Fibonacci point whose typical time is closest to the given minutes */
 export const findClosestPoint = (minutes: number): FibonacciPoint => {
-  let closest: FibonacciPoint = 1
-  let smallestDiff = Number.POSITIVE_INFINITY
-
-  for (const point of FIBONACCI_POINTS) {
-    const diff = Math.abs(FIBONACCI_MINUTES_MAP[point].typical - minutes)
-    if (diff < smallestDiff) {
-      smallestDiff = diff
-      closest = point
-    }
-  }
-
-  return closest
+  return FIBONACCI_POINTS.reduce((closest, point) =>
+    Math.abs(FIBONACCI_MINUTES_MAP[point].typical - minutes) <
+    Math.abs(FIBONACCI_MINUTES_MAP[closest].typical - minutes)
+      ? point
+      : closest
+  )
 }

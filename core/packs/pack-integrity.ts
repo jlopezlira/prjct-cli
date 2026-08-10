@@ -116,14 +116,14 @@ export function stampPackInstalls(
 /** Drop receipts when packs are deactivated. */
 export function clearPackInstalls(projectId: string, packNames: string[]): void {
   const book = loadPackInstalls(projectId)
-  let changed = false
+  const removedPacks: string[] = []
   for (const name of packNames) {
     if (book[name]) {
       delete book[name]
-      changed = true
+      removedPacks.push(name)
     }
   }
-  if (changed) savePackInstalls(projectId, book)
+  if (removedPacks.length > 0) savePackInstalls(projectId, book)
 }
 
 /**
@@ -141,14 +141,12 @@ export async function buildPackCatalog(projectPath: string): Promise<PackCatalog
     const integrity = packIntegrityHash(m)
     const isActive = active.has(name)
     const receipt = installs[name]
-    let status: PackCatalogEntry['status'] = isActive ? 'active' : 'available'
-    if (isActive && receipt) {
-      if (receipt.integrity !== integrity || receipt.version !== m.version) {
-        status = 'stale' // CLI upgraded pack definition since activate
-      }
-    } else if (isActive && !receipt) {
-      status = 'active' // pre-integrity activation; still trusted builtin
-    }
+    const status: PackCatalogEntry['status'] =
+      isActive && receipt && (receipt.integrity !== integrity || receipt.version !== m.version)
+        ? 'stale'
+        : isActive
+          ? 'active'
+          : 'available'
     entries.push({
       name: m.name,
       version: m.version,
@@ -163,11 +161,11 @@ export async function buildPackCatalog(projectPath: string): Promise<PackCatalog
   }
 
   // Unknown names still listed in persona.packs (corrupt / future remote)
-  for (const name of active) {
-    if (PACK_MANIFESTS[name]) continue
-    const receipt = installs[name]
+  for (const name2 of active) {
+    if (PACK_MANIFESTS[name2]) continue
+    const receipt = installs[name2]
     entries.push({
-      name,
+      name: name2,
       version: receipt?.version ?? '?',
       description: 'Unknown pack (not in built-in catalog)',
       integrity: receipt?.integrity ?? '—',

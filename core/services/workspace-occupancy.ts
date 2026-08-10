@@ -64,14 +64,12 @@ export async function getOccupancy(
   const ws = await deriveWorkspace(projectPath)
   const overview = await collectActiveTasks(projectId, projectPath)
 
-  let current: OccupancyOwner | null = null
-  if (ws.isMain) {
-    const main = await stateStorage.getCurrentTask(projectId)
-    if (main) current = asOwner(main, MAIN_WORKSPACE_ID)
-  } else {
-    const child = await stateStorage.getCurrentTaskForWorkspace(projectId, ws.workspaceId)
-    if (child) current = asOwner(child, ws.workspaceId)
-  }
+  const currentTask = ws.isMain
+    ? await stateStorage.getCurrentTask(projectId)
+    : await stateStorage.getCurrentTaskForWorkspace(projectId, ws.workspaceId)
+  const current = currentTask
+    ? asOwner(currentTask, ws.isMain ? MAIN_WORKSPACE_ID : ws.workspaceId)
+    : null
 
   const others = overview.all
     .filter((v) => !v.isCurrent)

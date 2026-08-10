@@ -86,17 +86,13 @@ export async function listCloudProjectCandidates(): Promise<CloudProjectCandidat
       continue
     }
     const resolved = await resolveFromDoc(projectId)
-    let connected = false
-    let paused = false
-    let name = resolved.name
-    if (resolved.path) {
-      const config = await configManager.readConfig(resolved.path).catch(() => null)
-      if (config?.projectId === projectId || config?.projectId) {
-        connected = !!config.cloud?.enabled
-        paused = !!config.cloud?.paused
-        name = path.basename(resolved.path)
-      }
-    }
+    const config = resolved.path
+      ? await configManager.readConfig(resolved.path).catch(() => null)
+      : null
+    const matchesConfig = Boolean(config?.projectId === projectId || config?.projectId)
+    const connected = matchesConfig && Boolean(config?.cloud?.enabled)
+    const paused = matchesConfig && Boolean(config?.cloud?.paused)
+    const name = matchesConfig && resolved.path ? path.basename(resolved.path) : resolved.name
     byId.set(projectId, {
       projectId,
       projectPath: resolved.path,

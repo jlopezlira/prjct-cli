@@ -111,16 +111,20 @@ describe('BM25', () => {
   // Index Building & Scoring Tests
 
   describe('buildIndex + score', () => {
-    let testDir: string
+    const fixture: {
+      testDir: string
+    } = {
+      testDir: '',
+    }
 
     beforeEach(async () => {
-      testDir = path.join(os.tmpdir(), `prjct-bm25-test-${Date.now()}`)
-      await fs.mkdir(testDir, { recursive: true })
+      fixture.testDir = path.join(os.tmpdir(), `prjct-bm25-test-${Date.now()}`)
+      await fs.mkdir(fixture.testDir, { recursive: true })
     })
 
     afterEach(async () => {
       try {
-        await fs.rm(testDir, { recursive: true, force: true })
+        await fs.rm(fixture.testDir, { recursive: true, force: true })
       } catch {
         // Ignore cleanup errors
       }
@@ -129,19 +133,19 @@ describe('BM25', () => {
     it('should build an index from project files', async () => {
       // Create test files
       await fs.writeFile(
-        path.join(testDir, 'auth.ts'),
+        path.join(fixture.testDir, 'auth.ts'),
         `export class AuthService {\n  validateJwt(token: string) {}\n  refreshSession() {}\n}`
       )
       await fs.writeFile(
-        path.join(testDir, 'middleware.ts'),
+        path.join(fixture.testDir, 'middleware.ts'),
         `import { AuthService } from './auth'\nexport function authMiddleware(req: any) {}`
       )
       await fs.writeFile(
-        path.join(testDir, 'button.tsx'),
+        path.join(fixture.testDir, 'button.tsx'),
         `export function Button({ label }: { label: string }) {\n  return <button>{label}</button>\n}`
       )
 
-      const index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
 
       expect(index.totalDocs).toBe(3)
       expect(index.avgDocLength).toBeGreaterThan(0)
@@ -156,7 +160,7 @@ describe('BM25', () => {
       // init, and threw on `.push` — aborting the WHOLE build (silently, via
       // sync's non-critical catch) and leaving file cues dark.
       await fs.writeFile(
-        path.join(testDir, 'proto.ts'),
+        path.join(fixture.testDir, 'proto.ts'),
         `// constructor prototype hasOwnProperty valueOf toString __proto__ tokens here
          export class Thing {
            constructor() {}
@@ -165,9 +169,7 @@ describe('BM25', () => {
            valueOf() {}
          }`
       )
-      let index!: Awaited<ReturnType<typeof buildIndex>>
-      expect(() => buildIndex(testDir).then((i) => (index = i))).not.toThrow()
-      index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
       expect(index.totalDocs).toBe(1)
       // The colliding tokens are real, queryable index entries — not lost.
       expect(score('constructor prototype', index).length).toBeGreaterThan(0)
@@ -175,19 +177,19 @@ describe('BM25', () => {
 
     it('should rank auth files higher for auth query', async () => {
       await fs.writeFile(
-        path.join(testDir, 'auth.ts'),
+        path.join(fixture.testDir, 'auth.ts'),
         `export class AuthService {\n  // Authenticate user with JWT\n  validateJwt(token: string) {}\n  refreshSession() {}\n}`
       )
       await fs.writeFile(
-        path.join(testDir, 'middleware.ts'),
+        path.join(fixture.testDir, 'middleware.ts'),
         `import { AuthService } from './auth'\n// Auth middleware for JWT validation\nexport function authMiddleware(req: any) {}`
       )
       await fs.writeFile(
-        path.join(testDir, 'button.tsx'),
+        path.join(fixture.testDir, 'button.tsx'),
         `// Render a UI button component\nexport function Button({ label }: { label: string }) {\n  return <button>{label}</button>\n}`
       )
 
-      const index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
       const results = score('Fix the auth middleware for JWT validation', index)
 
       // Auth and middleware should rank higher than button
@@ -202,15 +204,15 @@ describe('BM25', () => {
 
     it('should rank frontend files higher for UI query', async () => {
       await fs.writeFile(
-        path.join(testDir, 'dashboard.tsx'),
+        path.join(fixture.testDir, 'dashboard.tsx'),
         `// Responsive dashboard with charts and data grid\nexport function Dashboard() {\n  return <div className="dashboard">Charts here</div>\n}`
       )
       await fs.writeFile(
-        path.join(testDir, 'api-handler.ts'),
+        path.join(fixture.testDir, 'api-handler.ts'),
         `// Handle API requests for user data\nexport function handleRequest(req: any) { return {} }`
       )
 
-      const index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
       const results = score('Build responsive dashboard', index)
 
       expect(results.length).toBeGreaterThan(0)
@@ -218,40 +220,48 @@ describe('BM25', () => {
     })
 
     it('should skip node_modules', async () => {
-      await fs.mkdir(path.join(testDir, 'node_modules', 'pkg'), { recursive: true })
-      await fs.writeFile(path.join(testDir, 'node_modules', 'pkg', 'index.ts'), 'export default {}')
-      await fs.writeFile(path.join(testDir, 'app.ts'), 'export function main() {}')
+      await fs.mkdir(path.join(fixture.testDir, 'node_modules', 'pkg'), { recursive: true })
+      await fs.writeFile(
+        path.join(fixture.testDir, 'node_modules', 'pkg', 'index.ts'),
+        'export default {}'
+      )
+      await fs.writeFile(path.join(fixture.testDir, 'app.ts'), 'export function main() {}')
 
-      const index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
       expect(index.totalDocs).toBe(1)
       expect(Object.keys(index.documents)).toContain('app.ts')
     })
 
     it('should skip .worktrees directory', async () => {
-      await fs.mkdir(path.join(testDir, '.worktrees', 'test-task', 'core'), { recursive: true })
-      await fs.mkdir(path.join(testDir, 'core'), { recursive: true })
+      await fs.mkdir(path.join(fixture.testDir, '.worktrees', 'test-task', 'core'), {
+        recursive: true,
+      })
+      await fs.mkdir(path.join(fixture.testDir, 'core'), { recursive: true })
       await fs.writeFile(
-        path.join(testDir, '.worktrees', 'test-task', 'core', 'auth.ts'),
+        path.join(fixture.testDir, '.worktrees', 'test-task', 'core', 'auth.ts'),
         'export function login() {}'
       )
-      await fs.writeFile(path.join(testDir, 'core', 'auth.ts'), 'export function login() {}')
+      await fs.writeFile(
+        path.join(fixture.testDir, 'core', 'auth.ts'),
+        'export function login() {}'
+      )
 
-      const index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
       const paths = Object.keys(index.documents)
       expect(paths).toContain(path.join('core', 'auth.ts'))
       expect(paths.every((p) => !p.includes('.worktrees'))).toBe(true)
     })
 
     it('should handle empty query', async () => {
-      await fs.writeFile(path.join(testDir, 'app.ts'), 'export function main() {}')
+      await fs.writeFile(path.join(fixture.testDir, 'app.ts'), 'export function main() {}')
 
-      const index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
       const results = score('', index)
       expect(results).toEqual([])
     })
 
     it('should handle empty project', async () => {
-      const index = await buildIndex(testDir)
+      const index = await buildIndex(fixture.testDir)
       expect(index.totalDocs).toBe(0)
       expect(score('anything', index)).toEqual([])
     })

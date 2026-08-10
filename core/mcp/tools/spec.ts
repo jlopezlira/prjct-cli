@@ -398,7 +398,7 @@ function renderSpecMarkdown(spec: {
   }
   if (c.out_of_scope.length > 0) {
     lines.push('', '## Out of scope')
-    for (const s of c.out_of_scope) lines.push(`- ${s}`)
+    for (const s2 of c.out_of_scope) lines.push(`- ${s2}`)
   }
   if (c.risks.length > 0) {
     lines.push('', '## Risks')

@@ -19,24 +19,30 @@ import pathManager from '../../infrastructure/path-manager'
 import { specService } from '../../services/spec-service'
 import prjctDb from '../../storage/database'
 
-let projectPath: string
-let projectId: string
-let originalProjectsDir: string | undefined
+const fixture: {
+  projectPath: string
+  projectId: string
+  originalProjectsDir: string | undefined
+} = {
+  projectPath: '',
+  projectId: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+}
 
 async function freshProject(): Promise<void> {
   const tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-lensroute-pd-'))
-  originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+  fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
   process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
 
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-lensroute-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `lensroute-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-lensroute-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `lensroute-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+  await pathManager.ensureProjectStructure(fixture.projectId)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
 }
 
 beforeEach(async () => {
@@ -45,15 +51,16 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-  else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-  if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+  if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+  else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+  if (fixture.projectPath)
+    await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   // PRJCT_PROJECTS_DIR is not honored by pathManager (mem_1560), so project
   // data actually lands in ~/.prjct-cli/projects/<id>. Clean it so this test
   // does not pollute the real projects dir.
-  if (projectId)
+  if (fixture.projectId)
     await fs
-      .rm(path.join(os.homedir(), '.prjct-cli', 'projects', projectId), {
+      .rm(path.join(os.homedir(), '.prjct-cli', 'projects', fixture.projectId), {
         recursive: true,
         force: true,
       })
@@ -62,7 +69,7 @@ afterEach(async () => {
 })
 
 const authMigrationSpec = () =>
-  specService.create(projectPath, {
+  specService.create(fixture.projectPath, {
     title: 'auth + migration',
     content: { goal: 'Add token auth and a DB schema migration', scope: ['core/auth/x.ts'] },
     autoContext: false,
@@ -75,17 +82,17 @@ describe('routeSpec — audit forwards --lenses to the method', () => {
       new PrjctCommands(),
       ['audit', spec.id],
       { lenses: 'architecture,security' },
-      projectPath
+      fixture.projectPath
     )
     expect(res.success).toBe(true)
-    const after = await specService.get(projectPath, spec.id)
+    const after = await specService.get(fixture.projectPath, spec.id)
     expect(after?.content.selected_reviewers).toEqual(['architecture', 'security'])
   })
 
   test('without --lenses, the deterministic baseline is used (security + data here)', async () => {
     const spec = await authMigrationSpec()
-    await routeSpec(new PrjctCommands(), ['audit', spec.id], {}, projectPath)
-    const after = await specService.get(projectPath, spec.id)
+    await routeSpec(new PrjctCommands(), ['audit', spec.id], {}, fixture.projectPath)
+    const after = await specService.get(fixture.projectPath, spec.id)
     expect(after?.content.selected_reviewers).toContain('security')
     expect(after?.content.selected_reviewers).toContain('data')
     expect(after?.content.selected_reviewers).not.toEqual(['architecture', 'security'])

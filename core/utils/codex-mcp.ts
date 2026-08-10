@@ -96,8 +96,8 @@ function upsertMarkedBlock(
 
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
     const before = existing.slice(0, startIdx)
-    let after = existing.slice(endIdx + endMarker.length)
-    if (after.startsWith('\n')) after = after.slice(1)
+    const trailing = existing.slice(endIdx + endMarker.length)
+    const after = trailing.startsWith('\n') ? trailing.slice(1) : trailing
     return { next: before + block + after }
   }
   if (new RegExp(`^\\s*\\[mcp_servers\\.${tableName}\\]`, 'm').test(existing)) {
@@ -128,8 +128,8 @@ function ensureCodexStatusLineToml(existing: string): { toml: string; changed: b
   if (tuiMatch) {
     const insertAt = tuiMatch.index + tuiMatch[0].length
     const before = existing.slice(0, insertAt)
-    let after = existing.slice(insertAt)
-    if (after.startsWith('\n')) after = after.slice(1)
+    const trailing = existing.slice(insertAt)
+    const after = trailing.startsWith('\n') ? trailing.slice(1) : trailing
     return {
       toml: `${before}\n${statusLine}${after}`,
       changed: true,
@@ -157,12 +157,7 @@ export async function ensureCodexMcpServer(configPath = getCodexConfigTomlPath()
   skipped?: 'user-managed'
   statusLineChanged?: boolean
 }> {
-  let existing = ''
-  try {
-    existing = await fs.readFile(configPath, 'utf-8')
-  } catch {
-    // Missing file — we'll create it.
-  }
+  const existing = await fs.readFile(configPath, 'utf-8').catch(() => '')
 
   const block = buildPrjctMcpTomlBlock()
   const upserted = upsertMarkedBlock(existing, block, START_MARKER, END_MARKER, 'prjct')
@@ -196,12 +191,7 @@ export async function ensureCodexContext7Server(configPath = getCodexConfigTomlP
   changed: boolean
   skipped?: 'user-managed'
 }> {
-  let existing = ''
-  try {
-    existing = await fs.readFile(configPath, 'utf-8')
-  } catch {
-    // Missing file — we'll create it.
-  }
+  const existing = await fs.readFile(configPath, 'utf-8').catch(() => '')
 
   const block = buildContext7McpTomlBlock()
   const { next, skipped } = upsertMarkedBlock(

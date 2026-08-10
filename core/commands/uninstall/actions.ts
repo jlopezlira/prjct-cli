@@ -60,8 +60,9 @@ async function removePrjctSection(filePath: string): Promise<boolean> {
     const startIndex = content.indexOf(PRJCT_START_MARKER)
     const endIndex = content.indexOf(PRJCT_END_MARKER) + PRJCT_END_MARKER.length
 
-    let newContent = content.substring(0, startIndex) + content.substring(endIndex)
-    newContent = newContent.replace(/\n{3,}/g, '\n\n').trim()
+    const newContent = (content.substring(0, startIndex) + content.substring(endIndex))
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
 
     if (!newContent || newContent.trim().length === 0) {
       await fs.unlink(filePath)

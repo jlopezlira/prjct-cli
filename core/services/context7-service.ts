@@ -2,7 +2,6 @@ import { constants as fsConstants } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { getTemplateContent } from '../agentic/template-loader'
 import { CONTEXT7_VERIFY_TTL_MS } from '../constants/timings'
 import { resolveCliHome } from '../infrastructure/cli-home'
 import { getErrorMessage, isNotFoundError } from '../types/fs'
@@ -15,12 +14,6 @@ import {
 import { execFileAsync } from '../utils/exec'
 import { writeJson } from '../utils/file-helper'
 import { MCP_SERVER_PRESETS } from '../utils/mcp-config'
-
-// Persistent verify cache lives at <cli-home>/state/context7-verify.json so
-// the 5-min TTL survives across CLI invocations. Without this, every fresh
-// `prjct sync` reruns `npx @upstash/context7-mcp --help` (~1.1s warm).
-// Exported so session-cleanup's rotation targets the SAME file instead of
-// rebuilding the path (they had already drifted on env handling).
 export function getVerifyCachePath(): string {
   if (process.env.NODE_ENV === 'test') {
     return path.join(os.tmpdir(), 'prjct-context7-test', 'verify-cache.json')
@@ -58,18 +51,8 @@ async function writePersistedVerify(
   }
 }
 
-interface Context7TemplateConfig {
-  mcpServers?: {
-    context7?: {
-      command?: string
-      args?: string[]
-      description?: string
-    }
-  }
-}
-
 const CONTEXT7_DEFAULT = MCP_SERVER_PRESETS.context7
-let cachedVerify: { at: number; provider: string; status: Context7Status } | null = null
+const verifyCache: { value: PersistedVerify | null } = { value: null }
 
 const CONTEXT7_SMOKE_SYSTEM_PATH_DIRS = [
   path.dirname(process.execPath),
@@ -90,21 +73,6 @@ const CONTEXT7_SMOKE_HOME_RELATIVE_PATH_DIRS = [
   ['.npm-global', 'bin'],
 ]
 
-function parseTemplateConfig(): Context7TemplateConfig {
-  const raw = getTemplateContent('mcp-config.json')
-  if (!raw) return { mcpServers: { context7: CONTEXT7_DEFAULT } }
-  try {
-    return JSON.parse(raw) as Context7TemplateConfig
-  } catch {
-    return { mcpServers: { context7: CONTEXT7_DEFAULT } }
-  }
-}
-
-function getContext7Config() {
-  const template = parseTemplateConfig()
-  return template.mcpServers?.context7 || CONTEXT7_DEFAULT
-}
-
 async function listChildDirs(parent: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(parent, { withFileTypes: true })
@@ -124,8 +92,8 @@ async function discoverNodeManagerBinDirs(homeDir: string): Promise<string[]> {
 
   const fnmRoot = process.env.FNM_DIR || path.join(homeDir, '.local', 'share', 'fnm')
   const fnmVersions = path.join(fnmRoot, 'node-versions')
-  for (const version of await listChildDirs(fnmVersions)) {
-    dirs.push(path.join(fnmVersions, version, 'installation', 'bin'))
+  for (const version2 of await listChildDirs(fnmVersions)) {
+    dirs.push(path.join(fnmVersions, version2, 'installation', 'bin'))
   }
 
   return dirs
@@ -204,7 +172,7 @@ async function readConfig(filePath: string): Promise<Record<string, unknown>> {
 async function runSmokeCheck(): Promise<void> {
   if (process.env.PRJCT_SKIP_CONTEXT7_SMOKE === '1' || process.env.NODE_ENV === 'test') return
 
-  const cfg = getContext7Config()
+  const cfg = CONTEXT7_DEFAULT
   const args = [...(cfg.args || []), '--help']
   const smokePath = await buildContext7SmokePath()
   const command = await resolveExecutable(cfg.command || 'npx', smokePath)
@@ -242,7 +210,7 @@ class Context7Service {
       unknown
     >
 
-    const desired = getContext7Config()
+    const desired = CONTEXT7_DEFAULT
     const current = mcpServers.context7
     // Skip the write — and the verify-cache invalidation — when the existing
     // entry already matches. Avoids invalidating the persisted verify cache
@@ -259,7 +227,7 @@ class Context7Service {
     mcpServers.context7 = desired
     config.mcpServers = mcpServers
     await writeJson(configPath, config)
-    cachedVerify = null
+    verifyCache.value = null
 
     return {
       installed: true,
@@ -271,7 +239,7 @@ class Context7Service {
 
   private async installCodex(): Promise<Context7Status> {
     const result = await ensureCodexContext7Server()
-    if (result.changed) cachedVerify = null
+    if (result.changed) verifyCache.value = null
     return {
       installed: true,
       verified: false,
@@ -310,11 +278,11 @@ class Context7Service {
   async verify(provider: string = 'claude'): Promise<Context7Status> {
     const now = Date.now()
     if (
-      cachedVerify &&
-      cachedVerify.provider === provider &&
-      now - cachedVerify.at < CONTEXT7_VERIFY_TTL_MS
+      verifyCache.value &&
+      verifyCache.value.provider === provider &&
+      now - verifyCache.value.at < CONTEXT7_VERIFY_TTL_MS
     ) {
-      return cachedVerify.status
+      return verifyCache.value.status
     }
 
     // Persistent cache — skip the ~1.1s `npx ... --help` smoke check when a
@@ -325,7 +293,7 @@ class Context7Service {
       persisted.provider === provider &&
       now - persisted.at < CONTEXT7_VERIFY_TTL_MS
     ) {
-      cachedVerify = persisted
+      verifyCache.value = persisted
       return persisted.status
     }
 
@@ -342,7 +310,7 @@ class Context7Service {
     try {
       await runSmokeCheck()
       const status = { installed: true, verified: true, configPath: configured.configPath }
-      cachedVerify = { at: now, provider, status }
+      verifyCache.value = { at: now, provider, status }
       // Persist successful verify so subsequent CLI invocations skip the smoke check.
       await writePersistedVerify(now, provider, status)
       return status
@@ -353,7 +321,7 @@ class Context7Service {
         configPath: configured.configPath,
         message: `Context7 smoke check failed: ${getErrorMessage(error)}`,
       }
-      cachedVerify = { at: now, provider, status }
+      verifyCache.value = { at: now, provider, status }
       // Don't persist failures — next invocation should retry.
       return status
     }

@@ -122,19 +122,21 @@ class CommandRegistry {
     type LegacyMethod = (...args: unknown[]) => Promise<CommandResult>
     // Memoized on success only: a failed load/lookup leaves `resolved`
     // unset so the next dispatch retries instead of replaying the error.
-    let resolved: { instance: object; method: LegacyMethod } | undefined
+    const resolvedMethods: { instance: object; method: LegacyMethod }[] = []
     this.lazyResetters.push(() => {
-      resolved = undefined
+      resolvedMethods.length = 0
     })
     const resolve = async (): Promise<{ instance: object; method: LegacyMethod }> => {
+      const resolved = resolvedMethods.at(-1)
       if (resolved) return resolved
       const instance = await loadInstance()
       const method = (instance as Record<string, unknown>)[methodName]
       if (typeof method !== 'function') {
         throw new Error(`${methodName} is not a function`)
       }
-      resolved = { instance, method: method as LegacyMethod }
-      return resolved
+      const loaded = { instance, method: method as LegacyMethod }
+      resolvedMethods.push(loaded)
+      return loaded
     }
 
     const wrapper: HandlerFn<unknown> = async (params, context) => {
@@ -388,24 +390,25 @@ class CommandRegistry {
     const meta = this.metadata.get(name)
 
     // Build context (may throw if project not initialized)
-    let context: ExecutionContext
-    if (meta?.requiresProject === false) {
-      context = {
-        projectId: '',
-        projectPath,
-        globalPath: '',
-        timestamp: getTimestamp(),
+    const context = await (async (): Promise<ExecutionContext | CommandResult> => {
+      if (meta?.requiresProject === false) {
+        return {
+          projectId: '',
+          projectPath,
+          globalPath: '',
+          timestamp: getTimestamp(),
+        }
       }
-    } else {
       try {
-        context = await this.buildContext(projectPath)
+        return await this.buildContext(projectPath)
       } catch (error) {
         return {
           success: false,
           error: getErrorMessage(error),
         }
       }
-    }
+    })()
+    if ('success' in context) return context
 
     // Check class-based handlers first
     const handler = this.handlers.get(name)

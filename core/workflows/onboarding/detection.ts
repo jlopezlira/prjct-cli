@@ -39,7 +39,6 @@ export const PROJECT_TYPES: { value: ProjectType; title: string; description: st
 export const AI_AGENTS: { value: AIAgent; title: string; description: string }[] = [
   { value: 'claude', title: 'Claude Code', description: "Anthropic's Claude in VS Code/CLI" },
   { value: 'cursor', title: 'Cursor', description: 'AI-first code editor' },
-  { value: 'windsurf', title: 'Windsurf', description: "Codeium's AI IDE" },
   { value: 'copilot', title: 'GitHub Copilot', description: "GitHub's AI pair programmer" },
   { value: 'gemini', title: 'Gemini CLI', description: "Google's Gemini in terminal" },
   { value: 'codex', title: 'OpenAI Codex', description: "OpenAI's coding agent in terminal" },
@@ -105,7 +104,6 @@ export async function detectInstalledAgents(projectPath: string): Promise<AIAgen
 
   if (await dirExists(path.join(os.homedir(), '.claude'))) agents.push('claude')
   if (await fileExists(path.join(projectPath, '.cursorrules'))) agents.push('cursor')
-  if (await fileExists(path.join(projectPath, '.windsurfrules'))) agents.push('windsurf')
   if (await fileExists(path.join(projectPath, '.github', 'copilot-instructions.md'))) {
     agents.push('copilot')
   }

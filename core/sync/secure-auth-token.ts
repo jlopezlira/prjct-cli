@@ -24,8 +24,10 @@ export interface AuthTokenStore {
   location(): Promise<AuthTokenLocation>
 }
 
-let cached: string | null | undefined
-let testStore: AuthTokenStore | null = null
+const authTokenState: {
+  cached: string | null | undefined
+  testStore: AuthTokenStore | null
+} = { cached: undefined, testStore: null }
 
 function isDarwin(): boolean {
   return process.platform === 'darwin'
@@ -42,24 +44,24 @@ function isWindows(): boolean {
 function runWithStdin(command: string, args: string[], input: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
+    const stdout: string[] = []
+    const stderr: string[] = []
 
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (chunk) => {
-      stdout += chunk
+      stdout.push(String(chunk))
     })
     child.stderr.on('data', (chunk) => {
-      stderr += chunk
+      stderr.push(String(chunk))
     })
     child.on('error', reject)
     child.on('close', (code) => {
       if (code === 0) {
-        resolve(stdout)
+        resolve(stdout.join(''))
         return
       }
-      reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
+      reject(new Error(stderr.join('').trim() || `${command} exited with code ${code}`))
     })
 
     child.stdin.end(input)
@@ -347,7 +349,7 @@ async function platformLocation(): Promise<AuthTokenLocation> {
 
 function activeStore(): AuthTokenStore {
   return (
-    testStore ?? {
+    authTokenState.testStore ?? {
       get: platformGet,
       set: platformSet,
       clear: platformClear,
@@ -360,8 +362,8 @@ export async function getAuthToken(): Promise<string | null> {
   // Auth can change from a different `prjct` process while the daemon is
   // alive. Do not let a long-running process keep a stale token or stale
   // unauthenticated state in memory.
-  cached = await activeStore().get()
-  return cached
+  authTokenState.cached = await activeStore().get()
+  return authTokenState.cached
 }
 
 export async function setAuthToken(value: string): Promise<AuthTokenLocation> {
@@ -372,16 +374,16 @@ export async function setAuthToken(value: string): Promise<AuthTokenLocation> {
     throw new Error('Refusing to store an empty Cloud API token.')
   }
   const location = await activeStore().set(token)
-  cached = token
+  authTokenState.cached = token
   return location
 }
 
 export async function clearAuthToken(): Promise<void> {
-  cached = null
+  authTokenState.cached = null
   await activeStore().clear()
 }
 
 export function _setAuthTokenStoreForTests(store: AuthTokenStore | null): void {
-  testStore = store
-  cached = undefined
+  authTokenState.testStore = store
+  authTokenState.cached = undefined
 }

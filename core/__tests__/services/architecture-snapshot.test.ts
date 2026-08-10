@@ -11,40 +11,46 @@ import {
 import prjctDb from '../../storage/database'
 
 describe('architecture-snapshot', () => {
-  let testDir: string
-  let testProjectId: string
+  const fixture: {
+    testDir: string
+    testProjectId: string
+  } = {
+    testDir: '',
+    testProjectId: '',
+  }
+
   const original = pathManager.getGlobalProjectPath.bind(pathManager)
 
   beforeEach(async () => {
-    testDir = path.join(os.tmpdir(), `prjct-arch-${Date.now()}`)
-    testProjectId = `test-arch-${Date.now()}`
-    await fs.mkdir(testDir, { recursive: true })
-    pathManager.getGlobalProjectPath = () => testDir
+    fixture.testDir = path.join(os.tmpdir(), `prjct-arch-${Date.now()}`)
+    fixture.testProjectId = `test-arch-${Date.now()}`
+    await fs.mkdir(fixture.testDir, { recursive: true })
+    pathManager.getGlobalProjectPath = () => fixture.testDir
   })
 
   afterEach(async () => {
     pathManager.getGlobalProjectPath = original
     prjctDb.close()
-    await fs.rm(testDir, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.testDir, { recursive: true, force: true }).catch(() => {})
   })
 
   it('returns not-ready without index', () => {
-    const snap = buildArchitectureSnapshot(testProjectId)
+    const snap = buildArchitectureSnapshot(fixture.testProjectId)
     expect(snap.ready).toBe(false)
   })
 
   it('summarizes symbols, kinds, and packages after index', async () => {
-    await fs.mkdir(path.join(testDir, 'core'), { recursive: true })
+    await fs.mkdir(path.join(fixture.testDir, 'core'), { recursive: true })
     await fs.writeFile(
-      path.join(testDir, 'core', 'main.ts'),
+      path.join(fixture.testDir, 'core', 'main.ts'),
       `import { handler } from './router'\nexport function main() { return handler() }\nexport class App {}\n`
     )
     await fs.writeFile(
-      path.join(testDir, 'core', 'router.ts'),
+      path.join(fixture.testDir, 'core', 'router.ts'),
       `app.get('/api/users', handler)\nexport function handler() {}\n`
     )
-    await indexSymbols(testDir, testProjectId)
-    const snap = buildArchitectureSnapshot(testProjectId)
+    await indexSymbols(fixture.testDir, fixture.testProjectId)
+    const snap = buildArchitectureSnapshot(fixture.testProjectId)
     expect(snap.ready).toBe(true)
     expect(snap.symbols).toBeGreaterThan(0)
     expect(snap.kinds.some((k) => k.kind === 'function')).toBe(true)

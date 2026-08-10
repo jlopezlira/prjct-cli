@@ -92,15 +92,12 @@ export function getDaysFromNow(days: number): Date {
  * Get date range between two dates
  */
 export function getDateRange(fromDate: Date, toDate: Date): Date[] {
-  const dates: Date[] = []
-  let current = new Date(fromDate)
-
-  while (current <= toDate) {
-    dates.push(new Date(current))
-    current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1)
-  }
-
-  return dates
+  const dayCount = Math.max(0, Math.floor((toDate.getTime() - fromDate.getTime()) / 86_400_000) + 1)
+  return Array.from({ length: dayCount }, (_, offset) => {
+    const date = new Date(fromDate)
+    date.setDate(date.getDate() + offset)
+    return date
+  }).filter((date) => date <= toDate)
 }
 
 /**
@@ -206,23 +203,11 @@ export function toRelative(date: string | Date): string {
  * Supports: "2h", "30m", "1h 30m", "2h30m", "90m", "45s" (rounds up to 1m)
  */
 export function parseDurationMinutes(duration: string): number {
-  let minutes = 0
-
   const hourMatch = duration.match(/(\d+)h/)
-  if (hourMatch) {
-    minutes += Number.parseInt(hourMatch[1], 10) * 60
-  }
-
   const minMatch = duration.match(/(\d+)m/)
-  if (minMatch) {
-    minutes += Number.parseInt(minMatch[1], 10)
-  }
-
   const secMatch = duration.match(/(\d+)s/)
-  if (secMatch && minutes === 0) {
-    // Only count seconds if no hours/minutes (round up to 1 min)
-    minutes = 1
-  }
-
-  return minutes
+  const minutes =
+    (hourMatch ? Number.parseInt(hourMatch[1], 10) * 60 : 0) +
+    (minMatch ? Number.parseInt(minMatch[1], 10) : 0)
+  return secMatch && minutes === 0 ? 1 : minutes
 }

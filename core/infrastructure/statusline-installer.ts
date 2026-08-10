@@ -22,17 +22,12 @@ async function ensureStatusLineSettings(
   settingsPath: string,
   statusLinePath: string
 ): Promise<void> {
-  let settings: Record<string, unknown> = {}
-  if (await fileExists(settingsPath)) {
-    try {
-      settings = (await readJson<Record<string, unknown>>(settingsPath)) ?? {}
-    } catch (error) {
-      // Invalid JSON, start fresh - but propagate unexpected errors
-      if (!(error instanceof SyntaxError)) {
-        throw error
-      }
-    }
-  }
+  const settings: Record<string, unknown> = (await fileExists(settingsPath))
+    ? ((await readJson<Record<string, unknown>>(settingsPath).catch((error) => {
+        if (!(error instanceof SyntaxError)) throw error
+        return null
+      })) ?? {})
+    : {}
   settings.statusLine = { type: 'command', command: statusLinePath }
   await writeJson(settingsPath, settings)
 }
@@ -112,8 +107,10 @@ export async function installStatusLine(): Promise<void> {
     // Install fresh from assets if source exists
     if (await fileExists(sourceScript)) {
       // Copy script and update version
-      let scriptContent = await fs.readFile(sourceScript, 'utf8')
-      scriptContent = scriptContent.replace(/CLI_VERSION="[^"]*"/, `CLI_VERSION="${VERSION}"`)
+      const scriptContent = (await fs.readFile(sourceScript, 'utf8')).replace(
+        /CLI_VERSION="[^"]*"/,
+        `CLI_VERSION="${VERSION}"`
+      )
       await fs.writeFile(prjctStatusLinePath, scriptContent, { mode: 0o755 })
 
       // Copy lib/ modules

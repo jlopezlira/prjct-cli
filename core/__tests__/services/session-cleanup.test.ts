@@ -19,26 +19,31 @@ import {
 } from '../../services/session-cleanup'
 import prjctDb from '../../storage/database'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 const originalGetStoragePath = pathManager.getStoragePath.bind(pathManager)
 
 beforeEach(async () => {
   prjctDb.close()
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cleanup-test-'))
-  projectId = `cleanup-${crypto.randomUUID()}`
-  pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cleanup-test-'))
+  fixture.projectId = `cleanup-${crypto.randomUUID()}`
+  pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
   pathManager.getStoragePath = (id: string, filename: string) =>
-    path.join(tmpRoot, id, 'storage', filename)
+    path.join(fixture.tmpRoot, id, 'storage', filename)
 })
 
 afterEach(async () => {
   pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
   pathManager.getStoragePath = originalGetStoragePath
   prjctDb.close()
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('resolveProfile', () => {
@@ -69,7 +74,7 @@ describe('resolveProfile', () => {
 
 describe('runSessionCleanup', () => {
   it('returns a zero report on a fresh project', async () => {
-    const r = await runSessionCleanup(projectId)
+    const r = await runSessionCleanup(fixture.projectId)
     expect(r.inboxArchived).toBe(0)
     expect(r.archivesPruned).toBe(0)
     expect(r.checkpointsRemoved).toBe(0)
@@ -80,28 +85,28 @@ describe('runSessionCleanup', () => {
     // so we don't depend on remembering with custom timestamps.
     const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       "INSERT INTO events (type, data, timestamp) VALUES ('memory.remember.inbox', ?, ?)",
       JSON.stringify({ content: 'stale note', tags: {}, provenance: 'declared' }),
       old
     )
-    prjctDb.appendEvent(projectId, 'memory.remember.inbox', {
+    prjctDb.appendEvent(fixture.projectId, 'memory.remember.inbox', {
       content: 'fresh note',
       tags: {},
       provenance: 'declared',
     })
 
-    const r = await runSessionCleanup(projectId)
+    const r = await runSessionCleanup(fixture.projectId)
     expect(r.inboxArchived).toBe(1)
 
     // The fresh one is still recallable; the stale one is gone.
-    const remaining = projectMemory.recall(projectId, { types: ['inbox'], limit: 50 })
+    const remaining = projectMemory.recall(fixture.projectId, { types: ['inbox'], limit: 50 })
     expect(remaining.length).toBe(1)
     expect(remaining[0]?.content).toBe('fresh note')
   })
 
   it('removes checkpoint files older than the threshold', async () => {
-    const dir = path.join(pathManager.getGlobalProjectPath(projectId), 'checkpoints')
+    const dir = path.join(pathManager.getGlobalProjectPath(fixture.projectId), 'checkpoints')
     await fs.mkdir(dir, { recursive: true })
     const oldFile = path.join(dir, '2025-01-01T00-00-00--ancient.json')
     const freshFile = path.join(dir, '2026-05-01T00-00-00--fresh.json')
@@ -111,7 +116,7 @@ describe('runSessionCleanup', () => {
     const oldTime = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
     await fs.utimes(oldFile, oldTime, oldTime)
 
-    const r = await runSessionCleanup(projectId)
+    const r = await runSessionCleanup(fixture.projectId)
     expect(r.checkpointsRemoved).toBe(1)
     const remaining = await fs.readdir(dir)
     expect(remaining).toEqual(['2026-05-01T00-00-00--fresh.json'])
@@ -119,14 +124,14 @@ describe('runSessionCleanup', () => {
 
   it('skips checkpoint pruning when profile says null', async () => {
     process.env.PRJCT_CLEANUP_AGGRESSIVENESS = 'conservative'
-    const dir = path.join(pathManager.getGlobalProjectPath(projectId), 'checkpoints')
+    const dir = path.join(pathManager.getGlobalProjectPath(fixture.projectId), 'checkpoints')
     await fs.mkdir(dir, { recursive: true })
     const oldFile = path.join(dir, 'ancient.json')
     await fs.writeFile(oldFile, '{}')
     const oldTime = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)
     await fs.utimes(oldFile, oldTime, oldTime)
 
-    const r = await runSessionCleanup(projectId)
+    const r = await runSessionCleanup(fixture.projectId)
     expect(r.checkpointsRemoved).toBe(0)
     const remaining = await fs.readdir(dir)
     expect(remaining).toEqual(['ancient.json'])
@@ -136,28 +141,28 @@ describe('runSessionCleanup', () => {
 
 describe('recordCleanupReport', () => {
   it('skips persisting when nothing was cleaned', async () => {
-    await recordCleanupReport(projectId, {
+    await recordCleanupReport(fixture.projectId, {
       inboxArchived: 0,
       archivesPruned: 0,
       checkpointsRemoved: 0,
       context7CacheRotated: false,
     })
     const events = prjctDb.query<{ type: string }>(
-      projectId,
+      fixture.projectId,
       "SELECT type FROM events WHERE type LIKE 'memory.remember.system-event'"
     )
     expect(events.length).toBe(0)
   })
 
   it('persists a system-event entry when something was cleaned', async () => {
-    await recordCleanupReport(projectId, {
+    await recordCleanupReport(fixture.projectId, {
       inboxArchived: 3,
       archivesPruned: 1,
       checkpointsRemoved: 0,
       context7CacheRotated: false,
     })
     const events = prjctDb.query<{ type: string; data: string }>(
-      projectId,
+      fixture.projectId,
       "SELECT type, data FROM events WHERE type = 'memory.remember.system-event'"
     )
     expect(events.length).toBe(1)

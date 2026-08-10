@@ -160,16 +160,16 @@ export function extractKeyEntities(text: string): Set<string> {
   for (const m of s.matchAll(/\b(?:[\w@.-]+\/)+[\w.-]+\.\w{1,8}\b/g)) {
     out.add(m[0]!.toLowerCase())
   }
-  for (const m of s.matchAll(/\b[\w-]+\.(ts|tsx|js|jsx|mjs|cjs|py|sql|go|rs|md|json)\b/gi)) {
-    out.add(m[0]!.toLowerCase())
+  for (const m2 of s.matchAll(/\b[\w-]+\.(ts|tsx|js|jsx|mjs|cjs|py|sql|go|rs|md|json)\b/gi)) {
+    out.add(m2[0]!.toLowerCase())
   }
   // snake_case / long identifiers (RPC, helpers)
-  for (const m of s.matchAll(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\b/gi)) {
-    if (m[0]!.length >= 6) out.add(m[0]!.toLowerCase())
+  for (const m3 of s.matchAll(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,}\b/gi)) {
+    if (m3[0]!.length >= 6) out.add(m3[0]!.toLowerCase())
   }
   // camelCase long
-  for (const m of s.matchAll(/\b[a-z]+[A-Z][a-zA-Z0-9]{3,}\b/g)) {
-    out.add(m[0]!.toLowerCase())
+  for (const m4 of s.matchAll(/\b[a-z]+[A-Z][a-zA-Z0-9]{3,}\b/g)) {
+    out.add(m4[0]!.toLowerCase())
   }
   // ALLCAPS codes (RLS, JWT, RPC…) — skip English function words in ALLCAPS
   const allcapsNoise = new Set([
@@ -186,13 +186,13 @@ export function extractKeyEntities(text: string): Set<string> {
     'was',
     'were',
   ])
-  for (const m of s.matchAll(/\b[A-Z]{2,8}\b/g)) {
-    const low = m[0]!.toLowerCase()
+  for (const m5 of s.matchAll(/\b[A-Z]{2,8}\b/g)) {
+    const low = m5[0]!.toLowerCase()
     if (!allcapsNoise.has(low)) out.add(low)
   }
   // PascalCase components (CompanySwitcher, Listbox)
-  for (const m of s.matchAll(/\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]+)+\b/g)) {
-    out.add(m[0]!.toLowerCase())
+  for (const m6 of s.matchAll(/\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]+)+\b/g)) {
+    out.add(m6[0]!.toLowerCase())
   }
   // Fix/API discriminators that separate near-dup bugs on the same UI surface
   for (const anchor of [
@@ -209,23 +209,23 @@ export function extractKeyEntities(text: string): Set<string> {
     }
   }
   // UUIDs
-  for (const m of s.matchAll(
+  for (const m7 of s.matchAll(
     /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
   )) {
-    out.add(m[0]!.toLowerCase())
+    out.add(m7[0]!.toLowerCase())
   }
   // mem_N cross-refs
-  for (const m of s.matchAll(/\bmem[_-]\d+\b/gi)) {
-    out.add(m[0]!.toLowerCase().replace('-', '_'))
+  for (const m8 of s.matchAll(/\bmem[_-]\d+\b/gi)) {
+    out.add(m8[0]!.toLowerCase().replace('-', '_'))
   }
   // Security / product anchors that appear in multi-language traps
-  for (const anchor of [
+  for (const anchor2 of [
     'security definer',
     'security invoker',
     'row level security',
     'router.refresh',
   ]) {
-    if (s.toLowerCase().includes(anchor)) out.add(anchor)
+    if (s.toLowerCase().includes(anchor2)) out.add(anchor2)
   }
 
   // Drop ultra-generic tokens (including ALLCAPS English noise)
@@ -275,17 +275,12 @@ export function fullnessScore(e: Pick<MemoryEntry, 'content' | 'provenance'>): n
 }
 
 function pickPrimary(members: MemoryEntry[]): MemoryEntry {
-  let best = members[0]!
-  let bestScore = fullnessScore(best)
-  for (let i = 1; i < members.length; i++) {
-    const m = members[i]!
-    const s = fullnessScore(m)
-    if (s > bestScore) {
-      best = m
-      bestScore = s
-    }
-  }
-  return best
+  return members
+    .slice(1)
+    .reduce(
+      (best, member) => (fullnessScore(member) > fullnessScore(best) ? member : best),
+      members[0]!
+    )
 }
 
 /**
@@ -331,8 +326,7 @@ export function shouldClusterPair(
   const fixA = new Set(fixTokens(entA))
   const fixB = new Set(fixTokens(entB))
   if (fixA.size > 0 && fixB.size > 0) {
-    let fixOverlap = 0
-    for (const t of fixA) if (fixB.has(t)) fixOverlap++
+    const fixOverlap = [...fixA].filter((token) => fixB.has(token)).length
     if (fixOverlap === 0) {
       // Distinct fix paths → never cluster (CompanySwitcher onAction vs router.refresh)
       return { cluster: false, sim, entities: shared }
@@ -361,8 +355,7 @@ export function shouldClusterPair(
         .split(/[^a-z0-9áéíóúñü]+/i)
         .filter((t) => t.length >= 4)
     )
-    let inter = 0
-    for (const t of ja) if (jb.has(t)) inter++
+    const inter = [...ja].filter((token) => jb.has(token)).length
     const union = ja.size + jb.size - inter || 1
     const jaccard = inter / union
     if (jaccard >= 0.45) return { cluster: true, sim, entities: [] }
@@ -392,15 +385,11 @@ export function clusterMemoryEntries(entries: MemoryEntry[]): MemoryCluster[] {
   const n = entries.length
   const parent = Array.from({ length: n }, (_, i) => i)
   const find = (i: number): number => {
-    let p = i
-    while (parent[p] !== p) p = parent[p]!
-    let x = i
-    while (parent[x] !== x) {
-      const next = parent[x]!
-      parent[x] = p
-      x = next
-    }
-    return p
+    const directParent = parent[i]!
+    if (directParent === i) return i
+    const root = find(directParent)
+    parent[i] = root
+    return root
   }
   const union = (i: number, j: number) => {
     const ri = find(i)
@@ -412,8 +401,8 @@ export function clusterMemoryEntries(entries: MemoryEntry[]): MemoryCluster[] {
   const vectors = entries.map((e) => embedLocalText(e.content))
   const pairEntities = new Map<string, string[]>()
 
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
+  for (const i of entries.keys()) {
+    for (const j of Array.from({ length: n - i - 1 }, (_, offset) => i + offset + 1)) {
       const sim = cosineSimilarity(vectors[i]!, vectors[j]!)
       const r = shouldClusterPair(entries[i]!, entries[j]!, {
         sim,
@@ -428,10 +417,10 @@ export function clusterMemoryEntries(entries: MemoryEntry[]): MemoryCluster[] {
   }
 
   const groups = new Map<number, number[]>()
-  for (let i = 0; i < n; i++) {
-    const r = find(i)
+  for (const i2 of entries.keys()) {
+    const r = find(i2)
     const g = groups.get(r) ?? []
-    g.push(i)
+    g.push(i2)
     groups.set(r, g)
   }
 
@@ -441,8 +430,8 @@ export function clusterMemoryEntries(entries: MemoryEntry[]): MemoryCluster[] {
     const primary = pickPrimary(members)
     // Union of shared entities seen on any merged pair in the group
     const ent = new Set<string>()
-    for (let a = 0; a < idxs.length; a++) {
-      for (let b = a + 1; b < idxs.length; b++) {
+    for (const a of idxs.keys()) {
+      for (const b of Array.from({ length: idxs.length - a - 1 }, (_, offset) => a + offset + 1)) {
         const key = `${Math.min(idxs[a]!, idxs[b]!)}:${Math.max(idxs[a]!, idxs[b]!)}`
         for (const e of pairEntities.get(key) ?? []) {
           if (e !== '*fingerprint*') ent.add(e)
@@ -488,35 +477,28 @@ export function collapseEntriesForSurface(entries: MemoryEntry[]): {
     byType.set(e.type, list)
   }
 
-  const out: MemoryEntry[] = []
-  const allClusters: MemoryCluster[] = []
-  let collapsedCount = 0
-  let multiLangSurvivors = 0
-
   // Preserve first-seen type order from original list
   const typeOrder: string[] = []
-  for (const e of entries) {
-    if (!typeOrder.includes(e.type)) typeOrder.push(e.type)
+  for (const e2 of entries) {
+    if (!typeOrder.includes(e2.type)) typeOrder.push(e2.type)
   }
 
-  for (const type of typeOrder) {
-    const group = byType.get(type) ?? []
-    const clusters = clusterMemoryEntries(group)
-    for (const c of clusters) {
-      allClusters.push(c)
-      if (c.seenInN > 1) collapsedCount += c.seenInN - 1
-      const clusterTags = buildClusterSurfaceTags(c)
-      if ((clusterTags.cluster_langs ?? '').includes(',')) multiLangSurvivors++
-      const tagged: MemoryEntry = {
-        ...c.primary,
-        tags: {
-          ...c.primary.tags,
-          ...clusterTags,
-        },
-      }
-      out.push(tagged)
-    }
-  }
+  const allClusters = typeOrder.flatMap((type) => clusterMemoryEntries(byType.get(type) ?? []))
+  const surfaced = allClusters.map((cluster) => ({
+    cluster,
+    tags: buildClusterSurfaceTags(cluster),
+  }))
+  const out = surfaced.map<MemoryEntry>(({ cluster, tags }) => ({
+    ...cluster.primary,
+    tags: { ...cluster.primary.tags, ...tags },
+  }))
+  const collapsedCount = allClusters.reduce(
+    (count, cluster) => count + Math.max(0, cluster.seenInN - 1),
+    0
+  )
+  const multiLangSurvivors = surfaced.filter(({ tags }) =>
+    (tags.cluster_langs ?? '').includes(',')
+  ).length
 
   return { entries: out, collapsedCount, clusters: allClusters, multiLangSurvivors }
 }

@@ -13,16 +13,21 @@ import {
   uninstallCursorHooks,
 } from '../../utils/cursor-hooks'
 
-let dir: string
-let hooksPath: string
+const fixture: {
+  dir: string
+  hooksPath: string
+} = {
+  dir: '',
+  hooksPath: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cursor-hooks-'))
-  hooksPath = path.join(dir, 'hooks.json')
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cursor-hooks-'))
+  fixture.hooksPath = path.join(fixture.dir, 'hooks.json')
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('cursorHookMaps', () => {
@@ -45,9 +50,9 @@ describe('cursorHookMaps', () => {
 
 describe('installCursorHooks', () => {
   it('writes version 1 flat handlers with PRJCT_HOOK_HOST=cursor', async () => {
-    const r = await installCursorHooks(hooksPath)
+    const r = await installCursorHooks(fixture.hooksPath)
     expect(r.hooksWritten).toBeGreaterThan(0)
-    const body = JSON.parse(await fs.readFile(hooksPath, 'utf-8')) as {
+    const body = JSON.parse(await fs.readFile(fixture.hooksPath, 'utf-8')) as {
       version: number
       hooks: Record<string, Array<Record<string, unknown>>>
     }
@@ -63,15 +68,15 @@ describe('installCursorHooks', () => {
   })
 
   it('is idempotent', async () => {
-    await installCursorHooks(hooksPath)
-    const r2 = await installCursorHooks(hooksPath)
+    await installCursorHooks(fixture.hooksPath)
+    const r2 = await installCursorHooks(fixture.hooksPath)
     expect(r2.hooksWritten).toBe(0)
     expect(r2.alreadyPresent).toBe(cursorHookMaps().length)
   })
 
   it('preserves foreign handlers', async () => {
     await fs.writeFile(
-      hooksPath,
+      fixture.hooksPath,
       JSON.stringify({
         version: 1,
         hooks: {
@@ -80,8 +85,8 @@ describe('installCursorHooks', () => {
       }),
       'utf-8'
     )
-    await installCursorHooks(hooksPath)
-    const body = JSON.parse(await fs.readFile(hooksPath, 'utf-8')) as {
+    await installCursorHooks(fixture.hooksPath)
+    const body = JSON.parse(await fs.readFile(fixture.hooksPath, 'utf-8')) as {
       hooks: Record<string, Array<{ command: string }>>
     }
     const cmds = body.hooks.stop.map((h) => h.command)
@@ -92,16 +97,16 @@ describe('installCursorHooks', () => {
 
 describe('uninstallCursorHooks', () => {
   it('removes only prjct handlers', async () => {
-    await installCursorHooks(hooksPath)
-    const body = JSON.parse(await fs.readFile(hooksPath, 'utf-8')) as {
+    await installCursorHooks(fixture.hooksPath)
+    const body = JSON.parse(await fs.readFile(fixture.hooksPath, 'utf-8')) as {
       hooks: Record<string, Array<Record<string, unknown>>>
     }
     body.hooks.stop.push({ command: 'echo keep' })
-    await fs.writeFile(hooksPath, JSON.stringify(body, null, 2), 'utf-8')
+    await fs.writeFile(fixture.hooksPath, JSON.stringify(body, null, 2), 'utf-8')
 
-    const r = await uninstallCursorHooks(hooksPath)
+    const r = await uninstallCursorHooks(fixture.hooksPath)
     expect(r.hooksRemoved).toBeGreaterThan(0)
-    const after = JSON.parse(await fs.readFile(hooksPath, 'utf-8')) as {
+    const after = JSON.parse(await fs.readFile(fixture.hooksPath, 'utf-8')) as {
       hooks: Record<string, Array<{ command: string }>>
     }
     const all = Object.values(after.hooks ?? {}).flatMap((list) => list.map((h) => h.command))
@@ -112,9 +117,9 @@ describe('uninstallCursorHooks', () => {
 
 describe('cursorHooksStatus', () => {
   it('counts managed handlers', async () => {
-    expect((await cursorHooksStatus(hooksPath)).installed).toBe(0)
-    await installCursorHooks(hooksPath)
-    const st = await cursorHooksStatus(hooksPath)
+    expect((await cursorHooksStatus(fixture.hooksPath)).installed).toBe(0)
+    await installCursorHooks(fixture.hooksPath)
+    const st = await cursorHooksStatus(fixture.hooksPath)
     expect(st.installed).toBe(st.expected)
   })
 })

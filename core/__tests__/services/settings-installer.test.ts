@@ -21,14 +21,18 @@ async function freshHome(): Promise<string> {
 }
 
 describe('settings-installer', () => {
-  let home: string
+  const fixture: {
+    home: string
+  } = {
+    home: '',
+  }
 
   beforeEach(async () => {
-    home = await freshHome()
+    fixture.home = await freshHome()
   })
 
   afterEach(async () => {
-    await fs.rm(home, { recursive: true, force: true })
+    await fs.rm(fixture.home, { recursive: true, force: true })
     if (ORIGINAL_HOME) process.env.HOME = ORIGINAL_HOME
     else delete process.env.HOME
   })
@@ -38,7 +42,7 @@ describe('settings-installer', () => {
     expect(result.hooksWritten).toBe(PRJCT_HOOKS.length)
     expect(result.alreadyPresent).toBe(0)
 
-    const raw = await fs.readFile(path.join(home, '.claude', 'settings.json'), 'utf-8')
+    const raw = await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
     const parsed = JSON.parse(raw)
     expect(parsed.hooks).toBeDefined()
     expect(parsed.hooks.SessionStart).toBeDefined()
@@ -54,7 +58,7 @@ describe('settings-installer', () => {
   })
 
   test('install prunes a retired managed hook from existing settings', async () => {
-    const settingsPath = path.join(home, '.claude', 'settings.json')
+    const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
     await fs.mkdir(path.dirname(settingsPath), { recursive: true })
     // Simulate a settings file from an older prjct that installed a hook
     // whose subcommand has since left PRJCT_HOOKS. Use a fictional retired
@@ -92,7 +96,7 @@ describe('settings-installer', () => {
   })
 
   test('prune leaves foreign (non-prjct) hooks with unknown subcommands untouched', async () => {
-    const settingsPath = path.join(home, '.claude', 'settings.json')
+    const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
     await fs.mkdir(path.dirname(settingsPath), { recursive: true })
     await fs.writeFile(
       settingsPath,
@@ -118,7 +122,7 @@ describe('settings-installer', () => {
   })
 
   test('install preserves foreign (non-prjct) hooks under the same event', async () => {
-    const settingsPath = path.join(home, '.claude', 'settings.json')
+    const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
     await fs.mkdir(path.dirname(settingsPath), { recursive: true })
     await fs.writeFile(
       settingsPath,
@@ -153,7 +157,7 @@ describe('settings-installer', () => {
     await install()
 
     // Inject a foreign hook under the same event
-    const settingsPath = path.join(home, '.claude', 'settings.json')
+    const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
     const parsed = JSON.parse(await fs.readFile(settingsPath, 'utf-8'))
     parsed.hooks.SessionStart[0].hooks.push({
       type: 'command',
@@ -176,7 +180,7 @@ describe('settings-installer', () => {
   test('install collapses legacy unmanaged prjct duplicates into the marked entry', async () => {
     // Simulate JJ's machine 2026-05-01: 3 unmanaged + 1 managed copies
     // accumulated from older installs that didn't tag entries.
-    const settingsPath = path.join(home, '.claude', 'settings.json')
+    const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
     await fs.mkdir(path.dirname(settingsPath), { recursive: true })
     await fs.writeFile(
       settingsPath,
@@ -236,7 +240,7 @@ describe('settings-installer', () => {
   describe('hook command resilience (missing prjct binary)', () => {
     test('every installed hook command starts with a command -v guard', async () => {
       await install()
-      const raw = await fs.readFile(path.join(home, '.claude', 'settings.json'), 'utf-8')
+      const raw = await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
       const parsed = JSON.parse(raw)
       for (const event of Object.keys(parsed.hooks)) {
         for (const block of parsed.hooks[event]) {
@@ -252,21 +256,23 @@ describe('settings-installer', () => {
 
     test('the guard actually exits 0 when prjct is missing (live shell smoke test)', async () => {
       await install()
-      const raw = await fs.readFile(path.join(home, '.claude', 'settings.json'), 'utf-8')
+      const raw = await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
       const parsed = JSON.parse(raw)
       // Pull the Stop hook command (the one that surfaced the bug).
       const stopCommand = parsed.hooks.Stop[0].hooks[0].command
       // Run it with an empty PATH so prjct truly cannot be found.
       const { execSync } = await import('node:child_process')
-      let exitCode = 0
-      try {
-        execSync(stopCommand, {
-          env: { ...process.env, PATH: '/usr/bin:/bin' },
-          stdio: 'ignore',
-        })
-      } catch (err) {
-        exitCode = (err as { status?: number }).status ?? -1
-      }
+      const exitCode = (() => {
+        try {
+          execSync(stopCommand, {
+            env: { ...process.env, PATH: '/usr/bin:/bin' },
+            stdio: 'ignore',
+          })
+          return 0
+        } catch (error) {
+          return (error as { status?: number }).status ?? -1
+        }
+      })()
       expect(exitCode).toBe(0)
     })
 
@@ -275,7 +281,7 @@ describe('settings-installer', () => {
       try {
         const m = await import(`../../services/settings-installer?t=${Date.now()}`)
         await m.install()
-        const raw = await fs.readFile(path.join(home, '.claude', 'settings.json'), 'utf-8')
+        const raw = await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
         const parsed = JSON.parse(raw)
         const stop = parsed.hooks.Stop[0].hooks[0]
         expect(stop.command).toContain('/custom/path/prjct')

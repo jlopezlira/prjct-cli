@@ -174,7 +174,7 @@ It reports concrete support levels:
 
 Run `prjct agents doctor --md` to see the current machine/project matrix for
 Claude Code, Codex, Gemini CLI, OpenCode, Qwen Code, Kimi CLI, Grok Build,
-Cursor, Windsurf, Cline/Roo-family agents, hosted agents, and future
+Cursor, Pi, Cline/Roo-family agents, hosted agents, and future
 AGENTS.md/MCP clients.
 
 Use `prjct agents doctor --fix` inside a prjct project to refresh the portable
@@ -272,7 +272,7 @@ p. performance 7                              # inspect dev+LLM efficiency
 p. ship                                       # commit, push, open PR
 ```
 
-Cursor and Windsurf use their installed prjct router files; otherwise run `prjct <command> --md` and follow the output.
+Cursor uses its installed prjct router file; other agents use AGENTS.md, a native skill/MCP adapter, or `prjct <command> --md`.
 
 ### Harness verbs
 
@@ -517,15 +517,14 @@ prjct-cli/
     workflow-engine/     Rule state-machine + when-evaluator
     workflows/           Onboarding wizard
   templates/
-    codex/ crew/ cursor/ windsurf/ antigravity/   Per-agent surfaces
-    global/              Per-editor router templates
-    skills/              Skill templates
+    crew/                Native crew roles and checkpoints
+    skills/              Required disk-backed skill template
 ```
 
 ## Requirements
 
 - Node.js 22.5+ (ships `node:sqlite`) or Bun 1.0+
-- One of: Claude Code, Gemini CLI, Cursor IDE, Windsurf, OpenAI Codex, Antigravity
+- One of: Claude Code, OpenAI Codex, Gemini CLI, Cursor, OpenCode, Cline, Grok Build, Pi, Kimi CLI, or Antigravity
 
 ## Common questions
 

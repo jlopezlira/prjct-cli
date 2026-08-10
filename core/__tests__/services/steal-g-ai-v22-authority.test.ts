@@ -35,31 +35,38 @@ describe('A1 content-bound no-stamp', () => {
 })
 
 describe('B1 delivery kill switch', () => {
-  let projectPath: string
-  let projectId: string
-  let cmd: ShippingCommands
+  const fixture: {
+    projectPath: string
+    projectId: string
+    cmd: ShippingCommands
+  } = {
+    projectPath: '',
+    projectId: '',
+    cmd: undefined as unknown as ShippingCommands,
+  }
 
   beforeEach(async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-kill-'))
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-    projectId = `kill-${Math.random().toString(36).slice(2, 10)}`
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(projectPath, '.prjct-data'),
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-kill-'))
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+    fixture.projectId = `kill-${Math.random().toString(36).slice(2, 10)}`
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
       delivery: { killSwitch: 'on' },
     })
-    patchPathManager(projectPath)
-    prjctDb.get(projectId, 'SELECT 1')
-    cmd = new ShippingCommands()
+    patchPathManager(fixture.projectPath)
+    prjctDb.get(fixture.projectId, 'SELECT 1')
+    fixture.cmd = new ShippingCommands()
   })
 
   afterEach(async () => {
     restorePathManager()
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+    if (fixture.projectPath)
+      await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   })
 
   it('blocks ship before mutation and outranks --no-judgment-gate', async () => {
-    const result = await cmd.ship('feat x', projectPath, {
+    const result = await fixture.cmd.ship('feat x', fixture.projectPath, {
       noJudgmentGate: true,
       noSpecGate: true,
       forcePressure: true,
@@ -70,14 +77,14 @@ describe('B1 delivery kill switch', () => {
   })
 
   it('allows ship path past kill when off', async () => {
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(projectPath, '.prjct-data'),
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
       delivery: { killSwitch: 'off' },
     })
     // Without active task / workflow the ship may still fail later — but
     // must NOT fail on kill-switch.
-    const result = await cmd.ship('feat y', projectPath, { noJudgmentGate: true })
+    const result = await fixture.cmd.ship('feat y', fixture.projectPath, { noJudgmentGate: true })
     if (!result.success) {
       expect(String(result.error)).not.toMatch(/kill-switch/i)
     }
@@ -85,24 +92,30 @@ describe('B1 delivery kill switch', () => {
 })
 
 describe('C1 audit candidate hash admission', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture: {
+    projectPath: string
+    projectId: string
+  } = {
+    projectPath: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cand-'))
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-    projectId = `cand-${Math.random().toString(36).slice(2, 10)}`
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(projectPath, '.prjct-data'),
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cand-'))
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+    fixture.projectId = `cand-${Math.random().toString(36).slice(2, 10)}`
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
     })
-    patchPathManager(projectPath)
-    prjctDb.get(projectId, 'SELECT 1')
+    patchPathManager(fixture.projectPath)
+    prjctDb.get(fixture.projectId, 'SELECT 1')
   })
 
   afterEach(async () => {
     restorePathManager()
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+    if (fixture.projectPath)
+      await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   })
 
   function body(goal: string): SpecContent {
@@ -131,8 +144,8 @@ describe('C1 audit candidate hash admission', () => {
       strategic: { verdict: 'pass', notes: 'ok', ts: 't0', candidateHash: hash },
       design: { verdict: 'pass', notes: 'ok', ts: 't0', candidateHash: hash },
     }
-    const spec = specStorage.create(projectId, { title: 't', content })
-    expect(reviewsGatePassedRelational(projectId, spec.id)).toBe(true)
+    const spec = specStorage.create(fixture.projectId, { title: 't', content })
+    expect(reviewsGatePassedRelational(fixture.projectId, spec.id)).toBe(true)
 
     // Mutate body in storage without re-audit (simulates failed invalidation or race)
     const drifted = {
@@ -140,8 +153,8 @@ describe('C1 audit candidate hash admission', () => {
       acceptance_criteria: ['A', 'B new'],
       // keep old reviews + old frozen hash → gate must fail
     }
-    specStorage.updateContent(projectId, spec.id, drifted)
-    expect(reviewsGatePassedRelational(projectId, spec.id)).toBe(false)
+    specStorage.updateContent(fixture.projectId, spec.id, drifted)
+    expect(reviewsGatePassedRelational(fixture.projectId, spec.id)).toBe(false)
   })
 
   it('legacy specs without audit_candidate_hash keep lens-only gate', () => {
@@ -153,7 +166,7 @@ describe('C1 audit candidate hash admission', () => {
       strategic: { verdict: 'pass', notes: 'ok', ts: 't0' },
       design: { verdict: 'pass', notes: 'ok', ts: 't0' },
     }
-    const spec = specStorage.create(projectId, { title: 'legacy', content })
-    expect(reviewsGatePassedRelational(projectId, spec.id)).toBe(true)
+    const spec = specStorage.create(fixture.projectId, { title: 'legacy', content })
+    expect(reviewsGatePassedRelational(fixture.projectId, spec.id)).toBe(true)
   })
 })

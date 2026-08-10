@@ -69,9 +69,9 @@ async function buildEvidence(
   const loop = loopGuardVerdict(cfg, task)
   const pressure = contextPressureVerdict(cfg, task)
 
-  let files: string[] = []
-  try {
-    if (startedAt) {
+  const files: string[] = (() => {
+    try {
+      if (!startedAt) return []
       const rows = prjctDb.query<{ file: string }>(
         projectId,
         `SELECT DISTINCT json_extract(data, '$.file') AS file
@@ -80,23 +80,24 @@ async function buildEvidence(
          LIMIT 20`,
         startedAt
       )
-      files = rows.map((r) => r.file).filter(Boolean)
+      return rows.map((r) => r.file).filter(Boolean)
+    } catch {
+      return []
     }
-  } catch {
-    /* best-effort */
-  }
+  })()
 
-  let journal: string[] = []
-  try {
-    const rows = prjctDb.query<{ content: string }>(
-      projectId,
-      `SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 5`,
-      taskId
-    )
-    journal = rows.map((r) => r.content).filter(Boolean)
-  } catch {
-    /* task_log may be empty */
-  }
+  const journal: string[] = (() => {
+    try {
+      const rows = prjctDb.query<{ content: string }>(
+        projectId,
+        `SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 5`,
+        taskId
+      )
+      return rows.map((r) => r.content).filter(Boolean)
+    } catch {
+      return []
+    }
+  })()
 
   return {
     turns,
@@ -310,16 +311,12 @@ export async function switchAgent(
   }
 
   const resumeCard = formatResumeCard(handoff)
-  let launched = false
-  let launchError: string | undefined
   const wantLaunch = options.launch === true || cfg?.multiAgent?.switchLaunch === true
-  if (wantLaunch) {
-    const launch = await launchTargetAgent(toAgent, handoff, ws.worktreePath)
-    launched = launch.ok
-    launchError = launch.error
-  }
+  const launch = wantLaunch
+    ? await launchTargetAgent(toAgent, handoff, ws.worktreePath)
+    : { ok: false, error: undefined }
 
-  return { ok: true, handoff, resumeCard, launched, launchError }
+  return { ok: true, handoff, resumeCard, launched: launch.ok, launchError: launch.error }
 }
 
 /**
@@ -331,17 +328,12 @@ export async function acceptAgentHandoff(
   handoffId?: string | null
 ): Promise<AcceptResult> {
   const caller = resolveCallerIdentity(projectPath)
-  let id = handoffId?.trim() || ''
-
+  const pending = handoffId?.trim() ? [] : listPendingForAgent(projectId, caller.agent)
+  const fallback =
+    pending.length > 0 ? pending : listHandoffs(projectId, { status: 'pending', limit: 5 })
+  const id = handoffId?.trim() || fallback[0]?.id || ''
   if (!id) {
-    const pending = listPendingForAgent(projectId, caller.agent)
-    // Also match unknown callers against any pending (dev convenience)
-    const fallback =
-      pending.length > 0 ? pending : listHandoffs(projectId, { status: 'pending', limit: 5 })
-    if (fallback.length === 0) {
-      return { ok: false, error: 'No pending handoff for this agent. List with `prjct handoffs`.' }
-    }
-    id = fallback[0]!.id
+    return { ok: false, error: 'No pending handoff for this agent. List with `prjct handoffs`.' }
   }
 
   // Peek before accept for task rebinding

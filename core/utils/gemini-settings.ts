@@ -179,7 +179,7 @@ function handlerFor(map: GeminiHookMap): GeminiHookHandler {
 
 function pruneOrphans(hooks: Record<string, GeminiMatcherGroup[]>): number {
   const validNames = new Set(geminiHookMaps().map((m) => m.name))
-  let pruned = 0
+  const pruned: GeminiHookHandler[] = []
   for (const event of Object.keys(hooks)) {
     const kept: GeminiMatcherGroup[] = []
     for (const block of hooks[event] ?? []) {
@@ -188,11 +188,11 @@ function pruneOrphans(hooks: Record<string, GeminiMatcherGroup[]>): number {
         if (h.name && validNames.has(h.name)) return true
         // legacy without name or retired name
         if (h.name && !validNames.has(h.name)) {
-          pruned++
+          pruned.push(h)
           return false
         }
         if (!h.name && isLegacyPrjctHandler(h)) {
-          pruned++
+          pruned.push(h)
           return false
         }
         return true
@@ -202,7 +202,7 @@ function pruneOrphans(hooks: Record<string, GeminiMatcherGroup[]>): number {
     if (kept.length > 0) hooks[event] = kept
     else delete hooks[event]
   }
-  return pruned
+  return pruned.length
 }
 
 /** Upsert mcpServers.prjct (and leave other servers untouched). */
@@ -231,15 +231,15 @@ export async function installGeminiHooks(settingsPath = getGeminiSettingsPath())
 }> {
   const settings = await readSettings(settingsPath)
   const hooks: Record<string, GeminiMatcherGroup[]> = settings.hooks ?? {}
-  let hooksWritten = 0
-  let alreadyPresent = 0
+  const written: GeminiHookMap[] = []
+  const present: GeminiHookMap[] = []
 
   for (const map of geminiHookMaps()) {
     const eventEntries: GeminiMatcherGroup[] = hooks[map.geminiEvent] ?? []
     const wantMatcher = map.matcher ?? ''
-    let block = eventEntries.find((b) => (b.matcher ?? '') === wantMatcher)
-    if (!block) {
-      block = { matcher: map.matcher, hooks: [] }
+    const existingBlock = eventEntries.find((b) => (b.matcher ?? '') === wantMatcher)
+    const block = existingBlock ?? { matcher: map.matcher, hooks: [] }
+    if (!existingBlock) {
       eventEntries.push(block)
     }
 
@@ -256,18 +256,18 @@ export async function installGeminiHooks(settingsPath = getGeminiSettingsPath())
     )
     if (existing) {
       if (existing.command === desired.command && existing.timeout === desired.timeout) {
-        alreadyPresent++
+        present.push(map)
       } else {
         existing.command = desired.command
         existing.timeout = desired.timeout
         existing.name = desired.name
         existing.description = desired.description
         existing[MANAGED_MARKER] = true
-        hooksWritten++
+        written.push(map)
       }
     } else {
       block.hooks.push(desired)
-      hooksWritten++
+      written.push(map)
     }
 
     if (!block.matcher) delete block.matcher
@@ -277,7 +277,12 @@ export async function installGeminiHooks(settingsPath = getGeminiSettingsPath())
   const hooksPruned = pruneOrphans(hooks)
   settings.hooks = hooks
   await writeSettings(settingsPath, settings)
-  return { path: settingsPath, hooksWritten, alreadyPresent, hooksPruned }
+  return {
+    path: settingsPath,
+    hooksWritten: written.length,
+    alreadyPresent: present.length,
+    hooksPruned,
+  }
 }
 
 /** Full Gemini surface: MCP + hooks. */
@@ -299,14 +304,14 @@ export async function uninstallGeminiSettings(
   settingsPath = getGeminiSettingsPath()
 ): Promise<GeminiUninstallResult> {
   const settings = await readSettings(settingsPath)
-  let hooksRemoved = 0
+  const removedHooks: GeminiHookHandler[] = []
   if (settings.hooks) {
     for (const [event, blocks] of Object.entries(settings.hooks)) {
       const cleaned: GeminiMatcherGroup[] = []
       for (const block of blocks) {
         const remaining = block.hooks.filter((h) => {
           if (isPrjctHandler(h) || isLegacyPrjctHandler(h)) {
-            hooksRemoved++
+            removedHooks.push(h)
             return false
           }
           return true
@@ -319,13 +324,12 @@ export async function uninstallGeminiSettings(
     if (Object.keys(settings.hooks).length === 0) delete settings.hooks
   }
 
-  let mcpRemoved = false
-  if (settings.mcpServers?.prjct) {
+  const mcpRemoved = Boolean(settings.mcpServers?.prjct)
+  if (mcpRemoved && settings.mcpServers) {
     delete settings.mcpServers.prjct
-    mcpRemoved = true
     if (Object.keys(settings.mcpServers).length === 0) delete settings.mcpServers
   }
 
   await writeSettings(settingsPath, settings)
-  return { settingsPath, hooksRemoved, mcpRemoved }
+  return { settingsPath, hooksRemoved: removedHooks.length, mcpRemoved }
 }

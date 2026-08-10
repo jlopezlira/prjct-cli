@@ -81,8 +81,9 @@ describe('scanHookToolInput', () => {
 
   it('scans deeply nested tool input without a depth bypass', () => {
     const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
-    let nested: unknown = { content: syntheticKey }
-    for (let depth = 0; depth < 12; depth++) nested = { nested }
+    const nested = Array.from({ length: 12 }).reduce<unknown>((value) => ({ nested: value }), {
+      content: syntheticKey,
+    })
 
     expect(scanHookToolInput({ tool_name: 'custom', tool_input: nested })).toContain(
       'OpenAI project key'

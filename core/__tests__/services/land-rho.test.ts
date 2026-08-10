@@ -12,28 +12,34 @@ import { prjctDb } from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
 describe('land-rho', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture: {
+    projectPath: string
+    projectId: string
+  } = {
+    projectPath: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-land-rho-'))
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-    projectId = `land-rho-${Math.random().toString(36).slice(2, 10)}`
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(projectPath, '.prjct-data'),
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-land-rho-'))
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+    fixture.projectId = `land-rho-${Math.random().toString(36).slice(2, 10)}`
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
     })
-    patchPathManager(projectPath)
-    prjctDb.get(projectId, 'SELECT 1')
+    patchPathManager(fixture.projectPath)
+    prjctDb.get(fixture.projectId, 'SELECT 1')
   })
 
   afterEach(async () => {
     restorePathManager()
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+    if (fixture.projectPath)
+      await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   })
 
   it('returns a scannable mass line on fresh project', () => {
-    const r = runLandRhoDryRun(projectId)
+    const r = runLandRhoDryRun(fixture.projectId)
     expect(r).not.toBeNull()
     expect(r!.line).toMatch(/Memory mass|Rho dry-run/i)
     expect(r!.live).toBeGreaterThanOrEqual(0)

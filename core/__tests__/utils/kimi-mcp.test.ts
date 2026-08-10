@@ -17,24 +17,29 @@ interface KimiMcpJson {
   mcpServers?: Record<string, { command?: string; args?: string[] }>
 }
 
-let dir: string
-let configPath: string
+const fixture: {
+  dir: string
+  configPath: string
+} = {
+  dir: '',
+  configPath: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-kimi-mcp-test-'))
-  configPath = path.join(dir, 'mcp.json')
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-kimi-mcp-test-'))
+  fixture.configPath = path.join(fixture.dir, 'mcp.json')
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('ensureKimiMcpServer', () => {
   it('creates mcp.json with prjct and context7 servers when missing', async () => {
-    const r = await ensureKimiMcpServer(configPath)
+    const r = await ensureKimiMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
 
-    const config = JSON.parse(await fs.readFile(configPath, 'utf-8')) as KimiMcpJson
+    const config = JSON.parse(await fs.readFile(fixture.configPath, 'utf-8')) as KimiMcpJson
     expect(config.mcpServers?.prjct?.command).toBeTruthy()
     expect(config.mcpServers?.prjct?.args).toContain('mcp-server')
     expect(config.mcpServers?.context7?.command).toBe('npx')
@@ -43,22 +48,22 @@ describe('ensureKimiMcpServer', () => {
 
   it('preserves user-defined servers while upserting prjct', async () => {
     await fs.writeFile(
-      configPath,
+      fixture.configPath,
       `${JSON.stringify({ mcpServers: { mine: { command: 'foo', args: ['bar'] } } }, null, 2)}\n`,
       'utf-8'
     )
 
-    const r = await ensureKimiMcpServer(configPath)
+    const r = await ensureKimiMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
 
-    const config = JSON.parse(await fs.readFile(configPath, 'utf-8')) as KimiMcpJson
+    const config = JSON.parse(await fs.readFile(fixture.configPath, 'utf-8')) as KimiMcpJson
     expect(config.mcpServers?.mine?.command).toBe('foo')
     expect(config.mcpServers?.prjct?.command).toBeTruthy()
   })
 
   it('is idempotent on re-run', async () => {
-    await ensureKimiMcpServer(configPath)
-    const second = await ensureKimiMcpServer(configPath)
+    await ensureKimiMcpServer(fixture.configPath)
+    const second = await ensureKimiMcpServer(fixture.configPath)
     expect(second.changed).toBe(false)
   })
 })

@@ -31,12 +31,8 @@ export async function scanForNestedFiles(
   const scan = async (currentDir: string, depth: number): Promise<void> => {
     if (depth > MAX_SCAN_DEPTH) return
 
-    let entries: import('node:fs').Dirent[]
-    try {
-      entries = await fs.readdir(currentDir, { withFileTypes: true })
-    } catch {
-      return
-    }
+    const entries = await fs.readdir(currentDir, { withFileTypes: true }).catch(() => null)
+    if (!entries) return
 
     for (const entry of entries) {
       if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
@@ -76,28 +72,18 @@ export function findParentByDir<T extends NodeBase>(filePath: string, items: T[]
  */
 export function pickBestMatchForPath<T extends NodeBase>(targetPath: string, items: T[]): T | null {
   const targetDir = path.resolve(targetPath)
-  let best: T | null = null
-
-  for (const item of items) {
+  return items.reduce<T | null>((best, item) => {
     const itemDir = path.dirname(item.path)
-    if (targetDir.startsWith(itemDir)) {
-      if (!best || item.depth > best.depth) best = item
-    }
-  }
-  return best
+    return targetDir.startsWith(itemDir) && (!best || item.depth > best.depth) ? item : best
+  }, null)
 }
 
 /**
  * Build inheritance chain (root → leaf) by walking `parent` links.
  */
 export function buildInheritanceChain<T extends { parent: T | null }>(node: T): T[] {
-  const chain: T[] = []
-  let cur: T | null = node
-  while (cur) {
-    chain.unshift(cur)
-    cur = cur.parent
-  }
-  return chain
+  const ascend = (current: T | null): T[] => (current ? [...ascend(current.parent), current] : [])
+  return ascend(node)
 }
 
 /**

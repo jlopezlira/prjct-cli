@@ -103,7 +103,7 @@ function median(xs: number[]): number {
 async function medians(a: Side, b: Side, args: string[]): Promise<[number, number]> {
   const xa: number[] = []
   const xb: number[] = []
-  for (let i = 0; i < REPS; i++) {
+  for (const _iteration of Array.from({ length: REPS })) {
     xa.push(await once(a, args))
     xb.push(await once(b, args))
   }
@@ -127,38 +127,39 @@ if (!a) {
 console.log(`Fetching baseline prjct-cli@${a}…`)
 const baseFetched = fetchVersion(a)
 const baseline = makeSide(`v${a}`, baseFetched.runner, baseFetched.bin)
-let candidate: Side
-if (b) {
-  console.log(`Fetching candidate prjct-cli@${b}…`)
-  const candFetched = fetchVersion(b)
-  candidate = makeSide(`v${b}`, candFetched.runner, candFetched.bin)
-} else {
-  candidate = makeSide('dev', 'bun', path.join(REPO, 'bin', 'prjct.ts'))
-}
+const candidate: Side = b
+  ? (() => {
+      console.log(`Fetching candidate prjct-cli@${b}…`)
+      const candFetched = fetchVersion(b)
+      return makeSide(`v${b}`, candFetched.runner, candFetched.bin)
+    })()
+  : makeSide('dev', 'bun', path.join(REPO, 'bin', 'prjct.ts'))
 
 console.log(
   `\n${'command'.padEnd(18)} ${baseline.label.padStart(10)} ${candidate.label.padStart(10)}   Δ`
 )
-let regressions = 0
+const regressions: string[] = []
 for (const [label, args] of CASES) {
-  let [mA, mB] = await medians(baseline, candidate, args)
-  let pct = ((mA - mB) / mA) * 100
+  const first = await medians(baseline, candidate, args)
+  const firstPct = ((first[0] - first[1]) / first[0]) * 100
   // A >10% loss must reproduce in a second independent pass before it fails
   // the gate: interleaving spreads short bursts, but a wave outlasting the
   // whole case window can still tilt one pass. Both passes regressing is a
   // real signal; one is ambient noise (report the cleaner pass).
-  if (pct < -10) {
-    const firstPct = pct
-    const [rA, rB] = await medians(baseline, candidate, args)
-    const rPct = ((rA - rB) / rA) * 100
-    if (rPct >= -10) {
-      ;[mA, mB, pct] = [rA, rB, rPct]
-      console.log(
-        `${label.padEnd(18)} first pass ${firstPct.toFixed(0)}% — not reproduced, keeping re-run`
-      )
+  const [mA, mB, pct] = await (async (): Promise<[number, number, number]> => {
+    if (firstPct < -10) {
+      const rerun = await medians(baseline, candidate, args)
+      const rerunPct = ((rerun[0] - rerun[1]) / rerun[0]) * 100
+      if (rerunPct >= -10) {
+        console.log(
+          `${label.padEnd(18)} first pass ${firstPct.toFixed(0)}% — not reproduced, keeping re-run`
+        )
+        return [rerun[0], rerun[1], rerunPct]
+      }
     }
-  }
-  if (pct < -10) regressions++
+    return [first[0], first[1], firstPct]
+  })()
+  if (pct < -10) regressions.push(label)
   console.log(
     `${label.padEnd(18)} ${`${mA.toFixed(1)}ms`.padStart(10)} ${`${mB.toFixed(1)}ms`.padStart(10)}   ${pct >= 0 ? '-' : '+'}${Math.abs(pct).toFixed(0)}%${pct < -10 ? '  ⚠ REGRESSION' : ''}`
   )
@@ -168,8 +169,8 @@ for (const s of [baseline, candidate]) {
   fs.rmSync(s.home, { recursive: true, force: true })
   fs.rmSync(s.proj, { recursive: true, force: true })
 }
-if (regressions > 0) {
-  console.error(`\n${regressions} command(s) regressed >10% vs ${baseline.label}.`)
+if (regressions.length > 0) {
+  console.error(`\n${regressions.length} command(s) regressed >10% vs ${baseline.label}.`)
   process.exit(1)
 }
 console.log('\nNo regressions >10%.')

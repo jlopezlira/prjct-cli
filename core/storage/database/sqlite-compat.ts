@@ -102,22 +102,24 @@ function openRaw(dbPath: string): SqliteDatabase {
     return new Database(dbPath, { create: true }) as SqliteDatabase
   }
   // node:sqlite — built into Node, no native addon, no postinstall.
-  let DatabaseSync: new (path: string) => NodeSqliteDatabase
-  try {
-    ;({ DatabaseSync } = require('node:sqlite'))
-  } catch (err) {
-    // Node < 22.5 (no node:sqlite at all), or 22.5–23.x launched WITHOUT
-    // `--experimental-sqlite`. The bin/prjct shim sets that flag; a bare
-    // `node dist/bin/prjct.mjs` won't. Fail with an actionable message
-    // instead of a cryptic ERR_UNKNOWN_BUILTIN_MODULE.
-    throw new Error(
-      'prjct needs SQLite: run on Bun, or Node >=22.5 with --experimental-sqlite ' +
-        '(the `prjct` launcher sets this automatically — invoke `prjct`, not ' +
-        `\`node dist/bin/prjct.mjs\` directly). Underlying error: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-    )
-  }
+  const DatabaseSync = (() => {
+    try {
+      return (require('node:sqlite') as { DatabaseSync: new (path: string) => NodeSqliteDatabase })
+        .DatabaseSync
+    } catch (err) {
+      // Node < 22.5 (no node:sqlite at all), or 22.5–23.x launched WITHOUT
+      // `--experimental-sqlite`. The bin/prjct shim sets that flag; a bare
+      // `node dist/bin/prjct.mjs` won't. Fail with an actionable message
+      // instead of a cryptic ERR_UNKNOWN_BUILTIN_MODULE.
+      throw new Error(
+        'prjct needs SQLite: run on Bun, or Node >=22.5 with --experimental-sqlite ' +
+          '(the `prjct` launcher sets this automatically — invoke `prjct`, not ' +
+          `\`node dist/bin/prjct.mjs\` directly). Underlying error: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+      )
+    }
+  })()
   const raw = new DatabaseSync(dbPath)
   return adaptNodeSqlite(raw)
 }
@@ -130,8 +132,7 @@ function openRaw(dbPath: string): SqliteDatabase {
  */
 function adaptNodeSqlite(raw: NodeSqliteDatabase): SqliteDatabase {
   // Per-connection transaction state (node:sqlite exposes none of its own).
-  let txDepth = 0
-  let savepointSeq = 0
+  const transactionState = { depth: 0, savepointSequence: 0 }
 
   const wrapper: SqliteDatabase = {
     prepare: (sql: string) => raw.prepare(sql) as unknown as SqliteStatement,
@@ -145,10 +146,11 @@ function adaptNodeSqlite(raw: NodeSqliteDatabase): SqliteDatabase {
       const make =
         (begin: string) =>
         (...args: SqliteDatabase[]): T => {
-          if (txDepth > 0) {
-            const sp = `prjct_sp_${++savepointSeq}`
+          if (transactionState.depth > 0) {
+            transactionState.savepointSequence++
+            const sp = `prjct_sp_${transactionState.savepointSequence}`
             raw.exec(`SAVEPOINT ${sp}`)
-            txDepth++
+            transactionState.depth++
             try {
               const result = fn(...(args.length ? args : [wrapper]))
               raw.exec(`RELEASE ${sp}`)
@@ -158,11 +160,11 @@ function adaptNodeSqlite(raw: NodeSqliteDatabase): SqliteDatabase {
               raw.exec(`RELEASE ${sp}`)
               throw err
             } finally {
-              txDepth--
+              transactionState.depth--
             }
           }
           raw.exec(begin)
-          txDepth++
+          transactionState.depth++
           try {
             const result = fn(...(args.length ? args : [wrapper]))
             raw.exec('COMMIT')
@@ -171,7 +173,7 @@ function adaptNodeSqlite(raw: NodeSqliteDatabase): SqliteDatabase {
             raw.exec('ROLLBACK')
             throw err
           } finally {
-            txDepth--
+            transactionState.depth--
           }
         }
 

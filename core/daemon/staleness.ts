@@ -13,6 +13,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { DAEMON_PATHS } from './protocol'
 
+function ancestorDirectories(start: string, limit: number): string[] {
+  return Array.from({ length: Math.max(0, limit - 1) }).reduce<string[]>(
+    (directories) => {
+      const current = directories.at(-1)!
+      const parent = path.dirname(current)
+      return parent === current ? directories : [...directories, parent]
+    },
+    [start]
+  )
+}
+
 /**
  * Resolve a build artifact path for stale-code detection.
  * Always uses dist/daemon/entry.mjs as the sentinel file since it gets
@@ -21,14 +32,12 @@ import { DAEMON_PATHS } from './protocol'
  */
 export function resolveEntryPath(): string | null {
   // Find the project root by looking for package.json
-  let dir = __dirname
-  for (let i = 0; i < 5; i++) {
+  for (const dir of ancestorDirectories(__dirname, 5)) {
     if (fs.existsSync(path.join(dir, 'package.json'))) {
       const sentinel = path.join(dir, 'dist', 'daemon', 'entry.mjs')
       if (fs.existsSync(sentinel)) return sentinel
       break
     }
-    dir = path.dirname(dir)
   }
 
   // Fallback: check paths relative to this file
@@ -93,8 +102,7 @@ export function isCodeStale(entryPath: string | null, originalMtime: number | nu
  * its `version`. Cached at startup; null if not found.
  */
 export function readOwnPackageVersion(): string | null {
-  let dir = __dirname
-  for (let i = 0; i < 6; i++) {
+  for (const dir of ancestorDirectories(__dirname, 6)) {
     const pkgPath = path.join(dir, 'package.json')
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
@@ -102,9 +110,6 @@ export function readOwnPackageVersion(): string | null {
     } catch {
       /* not here — keep walking */
     }
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
   }
   return null
 }
@@ -119,17 +124,13 @@ export function isStrictlyNewerVersion(candidate: string, baseline: string): boo
     const core = v.trim().replace(/^v/i, '').split('-')[0].split('+')[0]
     const parts = core.split('.').map((p) => Number.parseInt(p, 10))
     if (parts.length < 1 || parts.some((n) => Number.isNaN(n))) return null
-    while (parts.length < 3) parts.push(0)
-    return parts.slice(0, 3)
+    return [...parts, 0, 0].slice(0, 3)
   }
   const a = parse(candidate)
   const b = parse(baseline)
   if (!a || !b) return false
-  for (let i = 0; i < 3; i++) {
-    if (a[i] > b[i]) return true
-    if (a[i] < b[i]) return false
-  }
-  return false
+  const difference = a.map((value, index) => value - b[index]).find((value) => value !== 0)
+  return difference !== undefined && difference > 0
 }
 
 /**
@@ -157,16 +158,17 @@ export function isGlobalVersionDrifted(ownVersion: string | null): boolean {
   ]
 
   for (const symlink of candidates) {
-    let realPath: string
-    try {
-      realPath = fs.realpathSync(symlink)
-    } catch {
-      continue // not installed here
-    }
+    const realPath = (() => {
+      try {
+        return fs.realpathSync(symlink)
+      } catch {
+        return null
+      }
+    })()
+    if (!realPath) continue
 
     // Walk up from the resolved binary to find its package.json
-    let dir = path.dirname(realPath)
-    for (let i = 0; i < 6; i++) {
+    for (const dir of ancestorDirectories(path.dirname(realPath), 6)) {
       const pkgPath = path.join(dir, 'package.json')
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
@@ -176,9 +178,6 @@ export function isGlobalVersionDrifted(ownVersion: string | null): boolean {
       } catch {
         /* keep walking */
       }
-      const parent = path.dirname(dir)
-      if (parent === dir) break
-      dir = parent
     }
   }
 

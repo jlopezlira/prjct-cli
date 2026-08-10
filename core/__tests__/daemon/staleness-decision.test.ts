@@ -26,7 +26,7 @@ const ALWAYS = () => true
 
 describe('decideRestart', () => {
   test('a rebuilt entry file (codeStale) restarts immediately, no drift probe', () => {
-    let probed = false
+    const probes: true[] = []
     const d = decideRestart({
       codeStale: true,
       command: 'status',
@@ -35,12 +35,12 @@ describe('decideRestart', () => {
       lastDriftCheckMs: 0,
       driftMinIntervalMs: 1000,
       checkDrift: () => {
-        probed = true
+        probes.push(true)
         return false
       },
     })
     expect(d.restart).toBe(true)
-    expect(probed).toBe(false) // mtime wins; never pays for the drift probe
+    expect(probes).toHaveLength(0) // mtime wins; never pays for the drift probe
   })
 
   test('global-install drift restarts and advances the throttle timestamp', () => {
@@ -72,7 +72,7 @@ describe('decideRestart', () => {
   })
 
   test('drift probe is throttled — skipped when within the min interval', () => {
-    let probes = 0
+    const probes: true[] = []
     const d = decideRestart({
       codeStale: false,
       command: 'status',
@@ -81,17 +81,17 @@ describe('decideRestart', () => {
       lastDriftCheckMs: 1000,
       driftMinIntervalMs: 1000,
       checkDrift: () => {
-        probes++
+        probes.push(true)
         return true
       },
     })
-    expect(probes).toBe(0) // throttled — no probe, no restart
+    expect(probes).toHaveLength(0) // throttled — no probe, no restart
     expect(d.restart).toBe(false)
     expect(d.lastDriftCheckMs).toBe(1000) // unchanged
   })
 
   test('drift probe fires once the min interval has elapsed', () => {
-    let probes = 0
+    const probes: true[] = []
     const d = decideRestart({
       codeStale: false,
       command: 'status',
@@ -100,16 +100,16 @@ describe('decideRestart', () => {
       lastDriftCheckMs: 1000,
       driftMinIntervalMs: 1000,
       checkDrift: () => {
-        probes++
+        probes.push(true)
         return false
       },
     })
-    expect(probes).toBe(1)
+    expect(probes).toHaveLength(1)
     expect(d.lastDriftCheckMs).toBe(2000)
   })
 
   test('health pings (__ping) never trigger the drift probe', () => {
-    let probed = false
+    const probes: true[] = []
     const d = decideRestart({
       codeStale: false,
       command: '__ping',
@@ -118,16 +118,16 @@ describe('decideRestart', () => {
       lastDriftCheckMs: 0,
       driftMinIntervalMs: 1000,
       checkDrift: () => {
-        probed = true
+        probes.push(true)
         return true
       },
     })
-    expect(probed).toBe(false)
+    expect(probes).toHaveLength(0)
     expect(d.restart).toBe(false)
   })
 
   test('no ownVersion → drift probe is skipped (nothing to compare)', () => {
-    let probed = false
+    const probes: true[] = []
     const d = decideRestart({
       codeStale: false,
       command: 'status',
@@ -136,11 +136,11 @@ describe('decideRestart', () => {
       lastDriftCheckMs: 0,
       driftMinIntervalMs: 1000,
       checkDrift: () => {
-        probed = true
+        probes.push(true)
         return true
       },
     })
-    expect(probed).toBe(false)
+    expect(probes).toHaveLength(0)
     expect(d.restart).toBe(false)
   })
 })

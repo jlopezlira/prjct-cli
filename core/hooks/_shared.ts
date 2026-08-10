@@ -380,9 +380,9 @@ export function stripLoneSurrogates(s: string): string {
  */
 export function safeTruncate(s: string, max: number, marker = '\n… [truncated]'): string {
   if (s.length <= max) return s
-  let end = Math.max(0, max - marker.length)
-  const last = s.charCodeAt(end - 1)
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1 // trailing high surrogate → drop it
+  const candidateEnd = Math.max(0, max - marker.length)
+  const last = s.charCodeAt(candidateEnd - 1)
+  const end = last >= 0xd800 && last <= 0xdbff ? candidateEnd - 1 : candidateEnd
   return s.slice(0, Math.max(0, end)) + marker
 }
 

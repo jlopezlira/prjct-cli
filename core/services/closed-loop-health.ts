@@ -21,20 +21,22 @@ export function buildClosedLoopHealth(projectId: string): ClosedLoopHealth {
   const receipts7d = countReceiptsWritten(projectId, since)
   const conflictWarns7d = countConflictEvents(projectId, 'warn', since)
   const conflictDenies7d = countConflictEvents(projectId, 'deny', since)
-  let preventiveSurfaces7d = 0
-  try {
-    const row = prjctDb.get<{ c: number }>(
-      projectId,
-      `SELECT COUNT(*) AS c FROM memory_entries
-       WHERE deleted_at IS NULL
-         AND created_at >= ?
-         AND type IN ('gotcha', 'anti-pattern', 'decision')`,
-      since
-    )
-    preventiveSurfaces7d = row?.c ?? 0
-  } catch {
-    preventiveSurfaces7d = 0
-  }
+  const preventiveSurfaces7d = (() => {
+    try {
+      return (
+        prjctDb.get<{ c: number }>(
+          projectId,
+          `SELECT COUNT(*) AS c FROM memory_entries
+           WHERE deleted_at IS NULL
+             AND created_at >= ?
+             AND type IN ('gotcha', 'anti-pattern', 'decision')`,
+          since
+        )?.c ?? 0
+      )
+    } catch {
+      return 0
+    }
+  })()
 
   const line = `Closed-loop judgment (7d): receipts=${receipts7d} · conflict warn/deny=${conflictWarns7d}/${conflictDenies7d} · preventive memories=${preventiveSurfaces7d}`
   return {

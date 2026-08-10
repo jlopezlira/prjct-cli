@@ -306,14 +306,17 @@ export class JudgmentCommands extends PrjctCommandsBase {
       )
     }
 
-    let redFindings: unknown
-    let blueFindings: unknown
-    try {
-      redFindings = JSON.parse(redRaw)
-      blueFindings = JSON.parse(blueRaw)
-    } catch {
+    const parsedFindings = (() => {
+      try {
+        return { red: JSON.parse(redRaw) as unknown, blue: JSON.parse(blueRaw) as unknown }
+      } catch {
+        return null
+      }
+    })()
+    if (!parsedFindings) {
       return failWith('merge: --red and --blue must be valid JSON arrays', options)
     }
+    const { red: redFindings, blue: blueFindings } = parsedFindings
     if (!Array.isArray(redFindings) || !Array.isArray(blueFindings)) {
       return failWith('merge: --red and --blue must be JSON arrays', options)
     }
@@ -351,15 +354,14 @@ export class JudgmentCommands extends PrjctCommandsBase {
     )
 
     const book = judgmentLedgerStorage.getGhosts(proj.value)
-    let findings = applyGhostFilter(merged.findings, book).map((f) =>
+    const findings = applyGhostFilter(merged.findings, book).map((f) =>
       applyScopeFreeze(applyMechanicalStyleRefute(applyEvidenceTax(f)), ledger.scopePaths)
     )
     // Fold into existing ledger via DNA upsert
-    for (const f of findings) {
-      const r = upsertFinding(ledger.findings, f)
-      ledger.findings = r.findings
-    }
-    findings = ledger.findings
+    ledger.findings = findings.reduce(
+      (current, finding) => upsertFinding(current, finding).findings,
+      ledger.findings
+    )
 
     ledger.merge = {
       agreed: merged.agreed,
@@ -392,7 +394,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
       options,
       '## Judgment merge',
       [
-        `Merged RED+BLUE → ${findings.length} unique DNA findings`,
+        `Merged RED+BLUE → ${ledger.findings.length} unique DNA findings`,
         `agreed=${merged.agreed} onlyRed=${merged.onlyRed} onlyBlue=${merged.onlyBlue} contradicted=${merged.contradicted}`,
         '',
         `### Next → \`${next.kind}\``,
@@ -573,15 +575,16 @@ export class JudgmentCommands extends PrjctCommandsBase {
     if (!proj.ok) return proj.result
 
     const ledger = judgmentLedgerStorage.get(proj.value)
-    let intensity = ledger?.intensity
-    if (!intensity) {
-      const cs = await computeCommittedChangeset(projectPath)
-      const signals = await loadSignals(projectPath)
-      intensity = intensityFromChangeset(
-        { files: cs?.files ?? 0, loc: cs?.loc ?? 0 },
-        { ...signals, paths: await changesetPaths(projectPath, cs?.dirs) }
-      ).intensity
-    }
+    const intensity =
+      ledger?.intensity ??
+      (await (async () => {
+        const cs = await computeCommittedChangeset(projectPath)
+        const signals = await loadSignals(projectPath)
+        return intensityFromChangeset(
+          { files: cs?.files ?? 0, loc: cs?.loc ?? 0 },
+          { ...signals, paths: await changesetPaths(projectPath, cs?.dirs) }
+        ).intensity
+      })())
     const card = buildNextAction(ledger, intensity)
     const lines = [
       `**kind**: \`${card.kind}\``,
@@ -756,8 +759,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
 function tokenize(input: string): string[] {
   const out: string[] = []
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(input)) !== null) {
+  for (const m of input.matchAll(re)) {
     out.push(m[1] ?? m[2] ?? m[3] ?? '')
   }
   return out
@@ -765,14 +767,15 @@ function tokenize(input: string): string[] {
 
 function parseFlags(args: string[]): Record<string, string> {
   const flags: Record<string, string> = {}
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!
+  const consumed = new Set<number>()
+  for (const [index, a] of args.entries()) {
+    if (consumed.has(index)) continue
     if (!a.startsWith('--')) continue
     const key = a.slice(2)
-    const next = args[i + 1]
+    const next = args[index + 1]
     if (next && !next.startsWith('--')) {
       flags[key] = next
-      i++
+      consumed.add(index + 1)
     } else {
       flags[key] = 'true'
     }
@@ -815,26 +818,19 @@ async function loadSignals(projectPath: string): Promise<IntensitySignals> {
 async function changesetPaths(projectPath: string, dirs: string[] | undefined): Promise<string[]> {
   try {
     const { execFileAsync } = await import('../utils/exec')
-    let defaultRef = 'main'
-    try {
-      const { stdout: oh } = await execFileAsync(
-        'git',
-        ['rev-parse', '--abbrev-ref', 'origin/HEAD'],
-        { cwd: projectPath }
-      )
-      if (oh.trim() && oh.trim() !== 'origin/HEAD') defaultRef = oh.trim()
-    } catch {
-      /* keep main */
-    }
-    let base: string | null = null
-    try {
-      const { stdout: b } = await execFileAsync('git', ['merge-base', defaultRef, 'HEAD'], {
-        cwd: projectPath,
+    const defaultRef = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'origin/HEAD'], {
+      cwd: projectPath,
+    })
+      .then(({ stdout }) => {
+        const ref = stdout.trim()
+        return ref && ref !== 'origin/HEAD' ? ref : 'main'
       })
-      base = b.trim() || null
-    } catch {
-      base = null
-    }
+      .catch(() => 'main')
+    const base = await execFileAsync('git', ['merge-base', defaultRef, 'HEAD'], {
+      cwd: projectPath,
+    })
+      .then(({ stdout }) => stdout.trim() || null)
+      .catch(() => null)
     if (!base) return dirs ?? []
     const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${base}..HEAD`], {
       cwd: projectPath,

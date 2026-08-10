@@ -16,23 +16,29 @@ import prjctDb from '../../storage/database'
 import { ideasStorage } from '../../storage/ideas-storage'
 import { entityHandlers, SUPPORTED_ENTITY_TYPES } from '../../sync/entity-handlers'
 
-let tempDir: string
-let originalProjectsDir: string | undefined
-let projectId: string
+const fixture: {
+  tempDir: string
+  originalProjectsDir: string | undefined
+  projectId: string
+} = {
+  tempDir: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  projectId: '',
+}
 
 describe('entity-handlers registry', () => {
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-handlers-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = tempDir
-    projectId = `handlers-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+    fixture.tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-handlers-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = fixture.tempDir
+    fixture.projectId = `handlers-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
   })
 
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-    await fs.rm(tempDir, { recursive: true, force: true })
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+    await fs.rm(fixture.tempDir, { recursive: true, force: true })
   })
 
   test('exposes the canonical entity_types as keys', () => {
@@ -66,25 +72,25 @@ describe('entity-handlers registry', () => {
       status: 'active',
     }
 
-    await handler.upsert(projectId, data)
-    let all = await ideasStorage.getAll(projectId)
-    expect(all.length).toBe(1)
-    expect(all[0].id).toBe('idea-1')
+    await handler.upsert(fixture.projectId, data)
+    const initialIdeas = await ideasStorage.getAll(fixture.projectId)
+    expect(initialIdeas.length).toBe(1)
+    expect(initialIdeas[0].id).toBe('idea-1')
 
     // Re-apply: same id → still 1 row, fields stay coherent.
-    await handler.upsert(projectId, { ...data, text: 'rate limit auth (updated)' })
-    all = await ideasStorage.getAll(projectId)
-    expect(all.length).toBe(1)
-    expect(all[0].text).toBe('rate limit auth (updated)')
+    await handler.upsert(fixture.projectId, { ...data, text: 'rate limit auth (updated)' })
+    const updatedIdeas = await ideasStorage.getAll(fixture.projectId)
+    expect(updatedIdeas.length).toBe(1)
+    expect(updatedIdeas[0].text).toBe('rate limit auth (updated)')
   })
 
   test('ideas handler delete is a no-op — local is never modified by a remote delete', async () => {
     const handler = entityHandlers.ideas
-    await handler.upsert(projectId, { id: 'idea-2', text: 'keep me', status: 'active' })
-    await handler.delete(projectId, { id: 'idea-2' })
+    await handler.upsert(fixture.projectId, { id: 'idea-2', text: 'keep me', status: 'active' })
+    await handler.delete(fixture.projectId, { id: 'idea-2' })
 
     // The local idea stays exactly as it was — sync never touches it.
-    const after = await ideasStorage.getById(projectId, 'idea-2')
+    const after = await ideasStorage.getById(fixture.projectId, 'idea-2')
     expect(after).toBeTruthy()
     expect(after?.status).toBe('pending')
   })
@@ -92,6 +98,6 @@ describe('entity-handlers registry', () => {
   test('shipped handler delete is a no-op (append-only history)', async () => {
     const handler = entityHandlers.shipped_items
     // delete on append-only entity must not throw and must not error.
-    await expect(handler.delete(projectId, { id: 'whatever' })).resolves.toBeUndefined()
+    await expect(handler.delete(fixture.projectId, { id: 'whatever' })).resolves.toBeUndefined()
   })
 })

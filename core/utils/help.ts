@@ -142,9 +142,9 @@ function formatMainHelp(): string {
 
   // Core commands
   const coreCommands = COMMANDS.filter((c) => c.surface === 'ai-agile' && c.usage?.claude)
-  for (const cmd of coreCommands.slice(0, 10)) {
-    const usage = `p. ${cmd.name}`.padEnd(22)
-    lines.push(`  ${usage} ${cmd.description}`)
+  for (const cmd2 of coreCommands.slice(0, 10)) {
+    const usage = `p. ${cmd2.name}`.padEnd(22)
+    lines.push(`  ${usage} ${cmd2.description}`)
   }
   if (coreCommands.length > 10) {
     lines.push(

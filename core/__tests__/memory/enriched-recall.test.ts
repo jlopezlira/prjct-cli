@@ -16,12 +16,18 @@ import { enrichedRecall } from '../../memory/enriched-recall'
 import prjctDb from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
-let tmpRoot: string
-let projectPath: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectPath: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectPath: '',
+  projectId: '',
+}
 
 function write(type: string, content: string, tags: Record<string, string> = {}): void {
-  prjctDb.appendEvent(projectId, `memory.remember.${type}`, {
+  prjctDb.appendEvent(fixture.projectId, `memory.remember.${type}`, {
     content,
     tags,
     provenance: 'declared',
@@ -29,28 +35,28 @@ function write(type: string, content: string, tags: Record<string, string> = {})
 }
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-enriched-'))
-  projectPath = path.join(tmpRoot, 'repo')
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `test-enr-${Math.random().toString(36).slice(2, 8)}`
-  patchPathManager(path.join(tmpRoot, 'global'))
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-enriched-'))
+  fixture.projectPath = path.join(fixture.tmpRoot, 'repo')
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `test-enr-${Math.random().toString(36).slice(2, 8)}`
+  patchPathManager(path.join(fixture.tmpRoot, 'global'))
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
 })
 
 afterEach(async () => {
   prjctDb.close()
   restorePathManager()
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('enrichedRecall', () => {
   it('returns recent entries without a topic (recall backfill leg)', async () => {
     write('decision', 'use bun for everything')
     write('gotcha', 'daemon caches stale code')
-    const got = await enrichedRecall(projectPath, projectId, { limit: 10 })
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, { limit: 10 })
     expect(got.length).toBe(2)
   })
 
@@ -58,7 +64,7 @@ describe('enrichedRecall', () => {
     write('decision', 'use bun for everything')
     write('improvement-signal', 'no, not that way')
     write('learning', 'file churns a lot', { pattern: 'hot-file' })
-    const got = await enrichedRecall(projectPath, projectId, { limit: 10 })
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, { limit: 10 })
     const types = got.map((e) => e.type)
     expect(types).toContain('decision')
     expect(types).not.toContain('improvement-signal')
@@ -67,7 +73,7 @@ describe('enrichedRecall', () => {
 
   it('still returns noise when the caller EXPLICITLY asks for that type', async () => {
     write('improvement-signal', 'no, not that way')
-    const got = await enrichedRecall(projectPath, projectId, {
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, {
       types: ['improvement-signal'],
       limit: 10,
     })
@@ -77,7 +83,10 @@ describe('enrichedRecall', () => {
   it('applies a types filter across legs', async () => {
     write('decision', 'use bun for everything')
     write('gotcha', 'daemon caches stale code')
-    const got = await enrichedRecall(projectPath, projectId, { types: ['gotcha'], limit: 10 })
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, {
+      types: ['gotcha'],
+      limit: 10,
+    })
     expect(got.length).toBe(1)
     expect(got[0].type).toBe('gotcha')
   })
@@ -85,7 +94,7 @@ describe('enrichedRecall', () => {
   it('applies a tags filter across legs', async () => {
     write('decision', 'auth uses oauth', { domain: 'auth' })
     write('decision', 'billing uses stripe', { domain: 'billing' })
-    const got = await enrichedRecall(projectPath, projectId, {
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, {
       tags: { domain: 'auth' },
       limit: 10,
     })
@@ -101,7 +110,7 @@ describe('enrichedRecall', () => {
     write('gotcha', 'daemon caches stale code')
     write('decision', 'cloud sync uses three tiers')
     write('learning', 'biome handles formatting')
-    const got = await enrichedRecall(projectPath, projectId, {
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, {
       topic: 'token efficiency',
       limit: 10,
       expandLinks: false,
@@ -116,7 +125,7 @@ describe('enrichedRecall', () => {
     // 'factor' is a substring of 'refactoring' but not a separate FTS token,
     // so the FTS leg returns nothing and the backfill must still rescue it.
     write('decision', 'refactoring the recall pipeline')
-    const got = await enrichedRecall(projectPath, projectId, {
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, {
       topic: 'factor',
       limit: 10,
       expandLinks: false,
@@ -126,7 +135,7 @@ describe('enrichedRecall', () => {
 
   it('expandLinks:false returns only the direct matches', async () => {
     write('decision', 'standalone decision with no relations')
-    const got = await enrichedRecall(projectPath, projectId, {
+    const got = await enrichedRecall(fixture.projectPath, fixture.projectId, {
       topic: 'standalone',
       limit: 10,
       expandLinks: false,

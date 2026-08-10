@@ -59,28 +59,36 @@ export class SddCommands extends PrjctCommandsBase {
       return failHard('No prjct project here — run `prjct init` first.', options)
 
     const mode = effectiveSddMode(config)
-    let station = 'no active work cycle'
-    let specLine = 'Active spec: none'
-    try {
-      const active = await resolveActiveTask(config.projectId, projectPath)
-      if (active?.linkedSpecId) {
-        const { specService } = await import('../services/spec-service')
-        const spec = await specService.get(projectPath, active.linkedSpecId)
-        if (spec) {
-          specLine = `Active spec: \`${spec.title}\` (${spec.status})`
-          station = STATIONS.map((s) => `${s.reached(spec.status) ? '✓' : '○'} ${s.key}`).join('  ')
+    const status = await (async () => {
+      try {
+        const active = await resolveActiveTask(config.projectId, projectPath)
+        if (active?.linkedSpecId) {
+          const { specService } = await import('../services/spec-service')
+          const spec = await specService.get(projectPath, active.linkedSpecId)
+          if (spec) {
+            return {
+              specLine: `Active spec: \`${spec.title}\` (${spec.status})`,
+              station: STATIONS.map((s) => `${s.reached(spec.status) ? '✓' : '○'} ${s.key}`).join(
+                '  '
+              ),
+            }
+          }
+        } else if (active) {
+          return {
+            specLine: 'Active work cycle has NO linked spec',
+            station: 'no active work cycle',
+          }
         }
-      } else if (active) {
-        specLine = 'Active work cycle has NO linked spec'
+        return { specLine: 'Active spec: none', station: 'no active work cycle' }
+      } catch {
+        return { specLine: 'Active spec: none', station: 'no active work cycle' }
       }
-    } catch {
-      // best-effort — status is read-only
-    }
+    })()
 
     const lines = [
       `Mode: ${mode}${mode === 'off' ? ' (pipeline stays escalate-only)' : ''}`,
-      specLine,
-      `Pipeline: ${station}`,
+      status.specLine,
+      `Pipeline: ${status.station}`,
       'Set: prjct sdd off|advisory|strict',
     ]
     if (options.md) {

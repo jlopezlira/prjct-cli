@@ -154,9 +154,10 @@ function stripSnippet(claudeContent: string): string {
   if (!snippetPresent(claudeContent)) return claudeContent
   const startIdx = claudeContent.indexOf(SNIPPET_START)
   const endIdx = claudeContent.indexOf(SNIPPET_END) + SNIPPET_END.length
-  let result = `${claudeContent.slice(0, startIdx)}${claudeContent.slice(endIdx)}`
   // Trim leading whitespace gap left by the removal.
-  result = result.replace(/\n{3,}/g, '\n\n').trimEnd()
+  const result = `${claudeContent.slice(0, startIdx)}${claudeContent.slice(endIdx)}`
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()
   return result.length > 0 ? `${result}\n` : ''
 }
 
@@ -181,18 +182,18 @@ async function getStatus(projectPath: string): Promise<CrewStatus> {
   // `crew:checkpoints` per spec a50b32d1. "Installed" means a project
   // exists with the row present (or the bundled default is reachable —
   // which it always is, since the template is in the bundle).
-  let checkpointsInstalled = false
-  try {
-    const projectId = await configManager.getProjectId(projectPath)
-    if (projectId) {
+  const checkpointsInstalled = await (async () => {
+    try {
+      const projectId = await configManager.getProjectId(projectPath)
+      if (!projectId) return false
       // We always return SOMETHING from get() (bundled default fallback),
       // so installed == has-customization-OR-bundled-default-available.
       checkpointsStorage.get(projectId)
-      checkpointsInstalled = true
+      return true
+    } catch {
+      return false
     }
-  } catch {
-    checkpointsInstalled = false
-  }
+  })()
   const checkpoints: PieceStatus = {
     path: 'kv_store[crew:checkpoints]',
     installed: checkpointsInstalled,
@@ -270,11 +271,13 @@ export class CrewCommands extends PrjctCommandsBase {
       // checkpoints content into the marker region.
       for (const f of AGENT_FILES) {
         const dest = path.join(projectPath, f.destRelative)
-        let content = await readTemplate(f.templateKey)
-        if (f.destRelative === '.claude/agents/reviewer.md') {
-          content = spliceCheckpoints(content, checkpointsRow.content)
-        }
-        content = applyCrewModelPolicy(content, f.destRelative)
+        const template = await readTemplate(f.templateKey)
+        const content = applyCrewModelPolicy(
+          f.destRelative === '.claude/agents/reviewer.md'
+            ? spliceCheckpoints(template, checkpointsRow.content)
+            : template,
+          f.destRelative
+        )
         const exists = await fileExists(dest)
         await writeFileEnsureDir(dest, content)
         if (exists) skipped.push(`${f.destRelative} (overwritten)`)
@@ -304,14 +307,14 @@ export class CrewCommands extends PrjctCommandsBase {
 
       if (options.md) {
         const lines = ['# prjct crew installed', '', `Wrote to \`${projectPath}\`.`, '', '## Files']
-        for (const f of written) lines.push(`- written: \`${f}\``)
-        for (const f of skipped) lines.push(`- kept: \`${f}\``)
+        for (const f2 of written) lines.push(`- written: \`${f2}\``)
+        for (const f3 of skipped) lines.push(`- kept: \`${f3}\``)
         lines.push('', '## Next step', '', hookHint)
         console.log(lines.join('\n'))
       } else {
         out.done(summary)
-        for (const f of written) out.info(`written: ${f}`)
-        for (const f of skipped) out.info(`kept:    ${f}`)
+        for (const f4 of written) out.info(`written: ${f4}`)
+        for (const f5 of skipped) out.info(`kept:    ${f5}`)
         console.log('')
         console.log(hookHint)
       }
@@ -371,12 +374,12 @@ export class CrewCommands extends PrjctCommandsBase {
       const summary = `crew uninstalled (${removed.length} removed)`
       if (options.md) {
         const lines = ['# prjct crew uninstalled', '']
-        for (const f of removed) lines.push(`- removed: \`${f}\``)
-        for (const f of missing) lines.push(`- not present: \`${f}\``)
+        for (const f2 of removed) lines.push(`- removed: \`${f2}\``)
+        for (const f3 of missing) lines.push(`- not present: \`${f3}\``)
         console.log(lines.join('\n'))
       } else {
         out.done(summary)
-        for (const f of removed) out.info(`removed: ${f}`)
+        for (const f4 of removed) out.info(`removed: ${f4}`)
       }
 
       return { success: true, removed, missing }
@@ -414,7 +417,7 @@ export class CrewCommands extends PrjctCommandsBase {
       } else {
         const label = status.complete ? 'complete' : 'partial'
         out.info(`crew: ${label}`)
-        for (const a of status.agents) out.info(`  ${tag(a)}: ${a.path}`)
+        for (const a2 of status.agents) out.info(`  ${tag(a2)}: ${a2.path}`)
         out.info(`  ${tag(status.checkpoints)}: ${status.checkpoints.path}`)
         out.info(`  ${tag(status.claudeSnippet)}: ${status.claudeSnippet.path} (snippet)`)
       }
@@ -459,14 +462,15 @@ export class CrewCommands extends PrjctCommandsBase {
       }
 
       if (sub === 'set') {
-        let content: string | null = null
-        if (typeof options.content === 'string' && options.content.length > 0) {
-          content = options.content
-        } else if (typeof options.file === 'string' && options.file.length > 0) {
-          content = await fs.readFile(path.resolve(projectPath, options.file), 'utf-8')
-        } else if (!process.stdin.isTTY) {
-          content = await readAllStdin()
-        } else {
+        const content =
+          typeof options.content === 'string' && options.content.length > 0
+            ? options.content
+            : typeof options.file === 'string' && options.file.length > 0
+              ? await fs.readFile(path.resolve(projectPath, options.file), 'utf-8')
+              : !process.stdin.isTTY
+                ? await readAllStdin()
+                : null
+        if (content === null) {
           // Stdin is a TTY → no content piped, no flag given. Error fast
           // instead of blocking on a read that will never arrive. Exit 2.
           process.stderr.write(
@@ -475,7 +479,7 @@ export class CrewCommands extends PrjctCommandsBase {
           process.exitCode = 2
           return failWith('checkpoints set: no content provided', options)
         }
-        if (content === null || content.length === 0) {
+        if (content.length === 0) {
           return failWith('checkpoints set: content is empty', options)
         }
         const row = checkpointsStorage.set(projectId, content, 'user')

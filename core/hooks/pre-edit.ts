@@ -43,14 +43,15 @@ function recallPreventiveOnce(projectId: string, filePath: string): MemoryEntry[
   const key = `${projectId}\0${filePath}`
   const hit = preventiveRecallCache.get(key)
   if (hit) return hit
-  let rows: MemoryEntry[]
-  try {
-    rows = projectMemory.recallForFile(projectId, filePath, CONFLICT_RECALL_LIMIT, {
-      preventiveOnly: true,
-    })
-  } catch {
-    rows = []
-  }
+  const rows = (() => {
+    try {
+      return projectMemory.recallForFile(projectId, filePath, CONFLICT_RECALL_LIMIT, {
+        preventiveOnly: true,
+      })
+    } catch {
+      return []
+    }
+  })()
   preventiveRecallCache.set(key, rows)
   return rows
 }

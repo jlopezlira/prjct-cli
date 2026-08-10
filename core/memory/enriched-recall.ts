@@ -41,18 +41,21 @@ export async function enrichedRecall(
   const { topic, types, tags } = opts
   const limit = opts.limit ?? 30
 
-  let entries: MemoryEntry[] = []
-  if (topic) {
-    const keywords = topic.split(/\s+/).filter(Boolean)
-    try {
-      let fts = projectMemory.searchFts(projectId, keywords, limit)
-      if (types) fts = fts.filter((e) => types.includes(e.type as MemoryType))
-      if (tags) fts = fts.filter((e) => matchesTags(e, tags))
-      entries = fts
-    } catch {
-      entries = []
-    }
-  }
+  const lexicalEntries = topic
+    ? (() => {
+        const keywords = topic.split(/\s+/).filter(Boolean)
+        try {
+          const fts = projectMemory.searchFts(projectId, keywords, limit)
+          return fts.filter(
+            (entry) =>
+              (!types || types.includes(entry.type as MemoryType)) &&
+              (!tags || matchesTags(entry, tags))
+          )
+        } catch {
+          return []
+        }
+      })()
+    : []
 
   // Backfill ONLY when the topical leg found NOTHING — a fresh/unindexed DB,
   // a cross-vocabulary topic, or no topic at all (recent-memory listing).
@@ -60,82 +63,87 @@ export async function enrichedRecall(
   // matches injected off-topic noise (a "token efficiency" search dragging in
   // an unrelated recent decision). Selective beats full: relevance leads, the
   // agent pulls more by id or refines the topic (mem_1012).
-  if (entries.length === 0) {
-    const seen = new Set(entries.map((e) => e.id))
-    const pool = projectMemory.recall(projectId, { topic, types, tags, limit })
-    for (const e of pool) {
-      if (seen.has(e.id)) continue
-      entries.push(e)
-      if (entries.length >= limit) break
-    }
-  }
+  const backfilledEntries =
+    lexicalEntries.length > 0
+      ? lexicalEntries
+      : projectMemory.recall(projectId, { topic, types, tags, limit }).slice(0, limit)
 
   // Semantic layer (opt-in): blend cosine-ranked matches AHEAD of lexical
   // results so a cross-vocabulary hit ("oauth" → an entry about
   // "authentication") surfaces. Best-effort: failures leave BM25 standing.
-  if (topic) {
-    try {
-      const config = await configManager.readConfig(projectPath)
-      if (config && embeddingService.isEnabled(config)) {
-        const semantic = await embeddingService.semanticSearch(projectId, topic, config, 10)
-        if (semantic.length > 0) {
-          const seen = new Set(entries.map((e) => e.id))
-          let fresh = semantic.filter((e) => !seen.has(e.id))
-          if (types) fresh = fresh.filter((e) => types.includes(e.type as MemoryType))
-          if (tags) fresh = fresh.filter((e) => matchesTags(e, tags))
-          entries = [...fresh, ...entries].slice(0, limit)
+  const semanticEntries = topic
+    ? await (async () => {
+        try {
+          const config = await configManager.readConfig(projectPath)
+          if (config && embeddingService.isEnabled(config)) {
+            const semantic = await embeddingService.semanticSearch(projectId, topic, config, 10)
+            if (semantic.length > 0) {
+              const seen = new Set(backfilledEntries.map((entry) => entry.id))
+              const fresh = semantic.filter(
+                (entry) =>
+                  !seen.has(entry.id) &&
+                  (!types || types.includes(entry.type as MemoryType)) &&
+                  (!tags || matchesTags(entry, tags))
+              )
+              return [...fresh, ...backfilledEntries].slice(0, limit)
+            }
+          }
+          return backfilledEntries
+        } catch {
+          return backfilledEntries
         }
-      }
-    } catch {
-      /* best-effort — lexical results stand */
-    }
-  }
+      })()
+    : backfilledEntries
 
   // Clean the RAG: drop machine telemetry noise (raw friction quotes,
   // hot-file churn counters) so a recall returns project KNOWLEDGE, not basura.
   // Retrocompatible + non-destructive — the rows stay (audit / developer.md),
   // they just don't surface as context. Skipped when the caller EXPLICITLY asked
   // for one of those types (e.g. the dev-profile builder).
-  entries = entries.filter(
+  const modelEntries = semanticEntries.filter(
     (e) => isModelMemory(e) || (types?.includes(e.type as MemoryType) ?? false)
   )
 
   // Inject filter (cheap, hot-path safe): drop aged auto-source noise so
   // agents don't re-read detector history. Full Rho evaluate stays on sync.
   // Explicit improvement-signal type requests skip this.
-  if (!types?.includes('improvement-signal' as MemoryType)) {
-    try {
-      const { isAutoSource } = await import('../services/retention/purge')
-      const AUTO_INJECT_MAX_AGE_MS = 45 * 86_400_000
-      const now = Date.now()
-      const kept = entries.filter((e) => {
-        if (!isAutoSource(e.tags?.source)) return true
-        if (PROTECTED_INJECT.has(e.type) && !isAutoSource(e.tags?.source)) return true
-        const t = Date.parse(e.rememberedAt)
-        if (!Number.isFinite(t)) return true
-        return now - t < AUTO_INJECT_MAX_AGE_MS
-      })
-      // Prefer non-auto first (stable partition), then original order within
-      const nonAuto = kept.filter((e) => !isAutoSource(e.tags?.source))
-      const auto = kept.filter((e) => isAutoSource(e.tags?.source))
-      entries = [...nonAuto, ...auto].slice(0, Math.max(limit, kept.length))
-    } catch {
-      /* inject filter best-effort */
-    }
-  }
+  const ageFilteredEntries = !types?.includes('improvement-signal' as MemoryType)
+    ? await (async () => {
+        try {
+          const { isAutoSource } = await import('../services/retention/purge')
+          const AUTO_INJECT_MAX_AGE_MS = 45 * 86_400_000
+          const now = Date.now()
+          const kept = modelEntries.filter((e) => {
+            if (!isAutoSource(e.tags?.source)) return true
+            if (PROTECTED_INJECT.has(e.type) && !isAutoSource(e.tags?.source)) return true
+            const t = Date.parse(e.rememberedAt)
+            if (!Number.isFinite(t)) return true
+            return now - t < AUTO_INJECT_MAX_AGE_MS
+          })
+          // Prefer non-auto first (stable partition), then original order within
+          const nonAuto = kept.filter((e) => !isAutoSource(e.tags?.source))
+          const auto = kept.filter((e) => isAutoSource(e.tags?.source))
+          return [...nonAuto, ...auto].slice(0, Math.max(limit, kept.length))
+        } catch {
+          return modelEntries
+        }
+      })()
+    : modelEntries
 
   // Reinforcement: nudge proven-useful entries up (bounded — relevance
   // still leads). This is how recall gets smarter with use.
-  if (entries.length > 1) {
-    entries = usefulnessService.rerank(projectId, entries)
-  }
+  const rerankedEntries =
+    ageFilteredEntries.length > 1
+      ? usefulnessService.rerank(projectId, ageFilteredEntries)
+      : ageFilteredEntries
 
   // One hop of relationship-graph traversal so a recall carries its own
   // context instead of dangling `mem_N` pointers the agent must chase.
-  if (opts.expandLinks !== false && entries.length > 0) {
-    const linked = projectMemory.expandWithLinks(projectId, entries, 5)
-    if (linked.length > 0) entries = entries.concat(linked)
-  }
+  const linked =
+    opts.expandLinks !== false && rerankedEntries.length > 0
+      ? projectMemory.expandWithLinks(projectId, rerankedEntries, 5)
+      : []
+  const entries = linked.length > 0 ? rerankedEntries.concat(linked) : rerankedEntries
 
   // Attribution: surface for ship-credit; fetch for immediate usefulness
   // (a deliberate recall is already proof of use).

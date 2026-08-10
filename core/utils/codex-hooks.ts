@@ -139,7 +139,7 @@ async function writeHooksFile(hooksPath: string, data: CodexHooksFile): Promise<
 
 function pruneOrphans(hooks: Record<string, CodexMatcherGroup[]>): number {
   const valid = new Set<string>(codexHookSpecs().map((h) => h.subcommand))
-  let pruned = 0
+  const pruned: CodexHookHandler[] = []
   for (const event of Object.keys(hooks)) {
     const kept: CodexMatcherGroup[] = []
     for (const block of hooks[event] ?? []) {
@@ -147,7 +147,7 @@ function pruneOrphans(hooks: Record<string, CodexMatcherGroup[]>): number {
         if (!isPrjctHandler(h)) return true
         const sub = subcommandOf(h)
         if (sub && !valid.has(sub)) {
-          pruned++
+          pruned.push(h)
           return false
         }
         return true
@@ -157,7 +157,7 @@ function pruneOrphans(hooks: Record<string, CodexMatcherGroup[]>): number {
     if (kept.length > 0) hooks[event] = kept
     else delete hooks[event]
   }
-  return pruned
+  return pruned.length
 }
 
 /**
@@ -167,43 +167,41 @@ function pruneOrphans(hooks: Record<string, CodexMatcherGroup[]>): number {
 export async function ensureCodexHooksFeature(
   configPath = getCodexConfigTomlPath()
 ): Promise<{ path: string; changed: boolean; enabled: boolean }> {
-  let existing = ''
-  try {
-    existing = await fs.readFile(configPath, 'utf-8')
-  } catch {
-    // create below
-  }
+  const existing = await fs.readFile(configPath, 'utf-8').catch(() => '')
 
   const block = [FEATURES_START, '[features]', 'hooks = true', FEATURES_END, ''].join('\n')
 
   const startIdx = existing.indexOf(FEATURES_START)
   const endIdx = existing.indexOf(FEATURES_END)
 
-  let next = existing
-  let changed = false
-
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = existing.slice(0, startIdx)
-    let after = existing.slice(endIdx + FEATURES_END.length)
-    if (after.startsWith('\n')) after = after.slice(1)
-    next = before + block + after
-    changed = next !== existing
-  } else if (
-    /^\s*hooks\s*=\s*true\b/m.test(existing) ||
-    /^\s*codex_hooks\s*=\s*true\b/m.test(existing)
+  if (
+    startIdx === -1 &&
+    (/^\s*hooks\s*=\s*true\b/m.test(existing) || /^\s*codex_hooks\s*=\s*true\b/m.test(existing))
   ) {
-    // User already enabled hooks somewhere — leave config alone.
     return { path: configPath, changed: false, enabled: true }
-  } else if (/^\s*\[features\]/m.test(existing)) {
-    // Append hooks = true under first [features] if missing.
-    if (!/^\s*hooks\s*=/m.test(existing) && !/^\s*codex_hooks\s*=/m.test(existing)) {
-      next = existing.replace(/^(\s*\[features\]\s*)$/m, `$1\nhooks = true`)
-      changed = next !== existing
-    }
-  } else {
-    next = existing.trim().length > 0 ? `${existing.trimEnd()}\n\n${block}` : block
-    changed = true
   }
+
+  const next = (() => {
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+      const before = existing.slice(0, startIdx)
+      const rawAfter = existing.slice(endIdx + FEATURES_END.length)
+      const after = rawAfter.startsWith('\n') ? rawAfter.slice(1) : rawAfter
+      return before + block + after
+    }
+    if (
+      /^\s*hooks\s*=\s*true\b/m.test(existing) ||
+      /^\s*codex_hooks\s*=\s*true\b/m.test(existing)
+    ) {
+      return existing
+    }
+    if (/^\s*\[features\]/m.test(existing)) {
+      return !/^\s*hooks\s*=/m.test(existing) && !/^\s*codex_hooks\s*=/m.test(existing)
+        ? existing.replace(/^(\s*\[features\]\s*)$/m, `$1\nhooks = true`)
+        : existing
+    }
+    return existing.trim().length > 0 ? `${existing.trimEnd()}\n\n${block}` : block
+  })()
+  const changed = next !== existing
 
   if (changed) {
     await fs.mkdir(path.dirname(configPath), { recursive: true })
@@ -226,14 +224,13 @@ export async function installCodexHooks(opts?: {
   const file = await readHooksFile(hooksPath)
   const hooks: Record<string, CodexMatcherGroup[]> = file.hooks ?? {}
 
-  let hooksWritten = 0
-  let alreadyPresent = 0
+  const outcomes: Array<'written' | 'present'> = []
 
   for (const spec of codexHookSpecs()) {
     const eventEntries: CodexMatcherGroup[] = hooks[spec.event] ?? []
-    let block = eventEntries.find((b) => (b.matcher ?? '') === (spec.matcher ?? ''))
-    if (!block) {
-      block = { matcher: spec.matcher || undefined, hooks: [] }
+    const matchingBlock = eventEntries.find((b) => (b.matcher ?? '') === (spec.matcher ?? ''))
+    const block = matchingBlock ?? { matcher: spec.matcher || undefined, hooks: [] }
+    if (!matchingBlock) {
       eventEntries.push(block)
     }
 
@@ -252,17 +249,17 @@ export async function installCodexHooks(opts?: {
         existing.commandWindows === desired.commandWindows &&
         existing.timeout === desired.timeout
       ) {
-        alreadyPresent++
+        outcomes.push('present')
       } else {
         existing.command = desired.command
         existing.commandWindows = desired.commandWindows
         existing.timeout = desired.timeout
         existing.statusMessage = desired.statusMessage
-        hooksWritten++
+        outcomes.push('written')
       }
     } else {
       block.hooks.push(desired)
-      hooksWritten++
+      outcomes.push('written')
     }
 
     // Empty matcher → omit key (Codex treats omit/* as match-all).
@@ -279,8 +276,8 @@ export async function installCodexHooks(opts?: {
   return {
     hooksPath,
     configPath,
-    hooksWritten,
-    alreadyPresent,
+    hooksWritten: outcomes.filter((outcome) => outcome === 'written').length,
+    alreadyPresent: outcomes.filter((outcome) => outcome === 'present').length,
     hooksPruned,
     featuresEnabled: features.enabled,
     featuresChanged: features.changed,
@@ -294,13 +291,13 @@ export async function uninstallCodexHooks(
   const file = await readHooksFile(hooksPath)
   if (!file.hooks) return { hooksPath, hooksRemoved: 0 }
 
-  let hooksRemoved = 0
+  const removed: CodexHookHandler[] = []
   for (const [event, blocks] of Object.entries(file.hooks)) {
     const cleaned: CodexMatcherGroup[] = []
     for (const block of blocks) {
       const remaining = block.hooks.filter((h) => {
         if (isPrjctHandler(h) || isLegacyPrjctHandler(h)) {
-          hooksRemoved++
+          removed.push(h)
           return false
         }
         return true
@@ -315,7 +312,7 @@ export async function uninstallCodexHooks(
 
   if (Object.keys(file.hooks).length === 0) delete file.hooks
   await writeHooksFile(hooksPath, file)
-  return { hooksPath, hooksRemoved }
+  return { hooksPath, hooksRemoved: removed.length }
 }
 
 export async function codexHooksStatus(hooksPath = getCodexHooksJsonPath()): Promise<{
@@ -324,13 +321,9 @@ export async function codexHooksStatus(hooksPath = getCodexHooksJsonPath()): Pro
   path: string
 }> {
   const file = await readHooksFile(hooksPath)
-  let installed = 0
-  for (const blocks of Object.values(file.hooks ?? {})) {
-    for (const block of blocks) {
-      for (const h of block.hooks) {
-        if (isPrjctHandler(h) || isLegacyPrjctHandler(h)) installed++
-      }
-    }
-  }
+  const installed = Object.values(file.hooks ?? {})
+    .flat()
+    .flatMap((block) => block.hooks)
+    .filter((handler) => isPrjctHandler(handler) || isLegacyPrjctHandler(handler)).length
   return { installed, expected: codexHookSpecs().length, path: hooksPath }
 }

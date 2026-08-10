@@ -41,10 +41,9 @@ function hashContent(content: string): string {
   return sha256(content).slice(0, 12)
 }
 
-async function loadGrokSkillTemplate(): Promise<string | null> {
-  // Prefer Grok-specific template when present; fall back to compact Codex skill
-  // (same CONTRACT lines — multi-host parity).
-  return getTemplateContent('grok/SKILL.md') ?? getTemplateContent('codex/SKILL.md')
+/** Grok deliberately reuses the compact multi-host skill source. */
+export function getGrokSkillTemplate(): string | null {
+  return getTemplateContent('codex/SKILL.md')
 }
 
 export function buildGrokSkillContent(templateContent: string): {
@@ -74,7 +73,7 @@ export async function installGrokSkill(): Promise<{
 
     const skillExists = await fileExists(skillMdPath)
 
-    const templateContent = await loadGrokSkillTemplate()
+    const templateContent = getGrokSkillTemplate()
     if (!templateContent) {
       log.warn('Grok SKILL.md template not found')
       return { success: false, action: null }

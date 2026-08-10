@@ -20,19 +20,24 @@ function pair(anchorId: string, anchorDate: string): LabeledPair {
   }
 }
 
-let tmpRoot = ''
-let projectId = ''
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ledger-pairs-'))
-  projectId = `ledger-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  patchPathManager(tmpRoot)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0') // force migrations
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ledger-pairs-'))
+  fixture.projectId = `ledger-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  patchPathManager(fixture.tmpRoot)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0') // force migrations
 })
 
 afterEach(async () => {
   restorePathManager()
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => undefined)
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => undefined)
 })
 
 describe('toQueryText', () => {
@@ -70,14 +75,14 @@ describe('temporalSplit', () => {
 
 describe('exportLedgerPairs', () => {
   it('includes durable ship-surfaced labels when the positive exists in the corpus', () => {
-    const id = prjctDb.appendEvent(projectId, 'memory.remember.decision', {
+    const id = prjctDb.appendEvent(fixture.projectId, 'memory.remember.decision', {
       content: 'Use range predicates instead of LIKE for memory event scans.',
       tags: {},
       provenance: 'declared',
     })
     const positiveId = `mem_${id}`
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO retrieval_eval_labels
          (query_text, positive_id, source, source_task_id, created_at, metadata)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -89,7 +94,7 @@ describe('exportLedgerPairs', () => {
       '{}'
     )
 
-    const corpus = exportLedgerPairs(projectId)
+    const corpus = exportLedgerPairs(fixture.projectId)
     const label = corpus.pairs.find((p) => p.source === 'ship-surfaced')
 
     expect(label).toMatchObject({

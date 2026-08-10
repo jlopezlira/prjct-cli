@@ -14,21 +14,26 @@ import {
   removeLinkedProject,
 } from '../../sync/cloud-registry'
 
-let tempHome: string
-let originalBase: string
+const fixture: {
+  tempHome: string
+  originalBase: string
+} = {
+  tempHome: '',
+  originalBase: '',
+}
 
 describe('cloud-registry', () => {
   beforeEach(async () => {
-    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cloud-reg-'))
+    fixture.tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cloud-reg-'))
     // getStatePath() reads globalBaseDir at access time, so point it at a temp
     // dir per test and restore after (the registry file lives under <base>/state).
-    originalBase = pathManager.getGlobalBasePath()
-    pathManager.setGlobalBaseDir(tempHome)
+    fixture.originalBase = pathManager.getGlobalBasePath()
+    pathManager.setGlobalBaseDir(fixture.tempHome)
   })
 
   afterEach(async () => {
-    pathManager.setGlobalBaseDir(originalBase)
-    await fs.rm(tempHome, { recursive: true, force: true })
+    pathManager.setGlobalBaseDir(fixture.originalBase)
+    await fs.rm(fixture.tempHome, { recursive: true, force: true })
   })
 
   test('empty by default', async () => {
@@ -38,12 +43,12 @@ describe('cloud-registry', () => {
   test('add → list → remove round-trips', async () => {
     await addLinkedProject('p1', '/repo/one')
     await addLinkedProject('p2', '/repo/two')
-    let list = await listLinkedProjects()
-    expect(list.map((p) => p.projectId).sort()).toEqual(['p1', 'p2'])
+    const initialList = await listLinkedProjects()
+    expect(initialList.map((p) => p.projectId).sort()).toEqual(['p1', 'p2'])
 
     await removeLinkedProject('p1')
-    list = await listLinkedProjects()
-    expect(list).toEqual([{ projectId: 'p2', projectPath: '/repo/two' }])
+    const remainingList = await listLinkedProjects()
+    expect(remainingList).toEqual([{ projectId: 'p2', projectPath: '/repo/two' }])
   })
 
   test('add is idempotent on projectId (no duplicates)', async () => {

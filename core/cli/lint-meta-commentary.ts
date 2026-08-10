@@ -89,7 +89,7 @@ async function checkFile(filePath: string): Promise<Violation[]> {
   const content = await readFile(filePath, 'utf-8')
   const lines = content.split('\n')
 
-  for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+  for (const lineNum of lines.keys()) {
     const line = lines[lineNum]
 
     // Skip comments - we only care about string literals that become agent output
@@ -109,8 +109,7 @@ async function checkFile(filePath: string): Promise<Violation[]> {
       // Reset lastIndex for global patterns
       pattern.lastIndex = 0
 
-      let match: RegExpExecArray | null
-      while ((match = pattern.exec(line)) !== null) {
+      for (const match of line.matchAll(pattern)) {
         violations.push({
           file: filePath,
           line: lineNum + 1,
@@ -157,8 +156,8 @@ async function main() {
 
   for (const [file, violations] of byFile) {
     console.log(`  ${file}`)
-    for (const v of violations) {
-      console.log(`    ${v.line}:${v.column}  "${v.match}"`)
+    for (const v2 of violations) {
+      console.log(`    ${v2.line}:${v2.column}  "${v2.match}"`)
     }
     console.log('')
   }

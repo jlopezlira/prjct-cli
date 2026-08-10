@@ -13,38 +13,46 @@ import authConfig from '../../sync/auth-config'
 import { realtimeManager } from '../../sync/realtime-manager'
 import syncManager from '../../sync/sync-manager'
 
-let tempDir: string
-let originalProjectsDir: string | undefined
-let projectId: string
+const fixture: {
+  tempDir: string
+  originalProjectsDir: string | undefined
+  projectId: string
+} = {
+  tempDir: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  projectId: '',
+}
+
 const origRead = authConfig.read.bind(authConfig)
 
 function memoryCount(): number {
   return (
-    prjctDb.get<{ cnt: number }>(projectId, 'SELECT COUNT(*) as cnt FROM memory_entries')?.cnt ?? 0
+    prjctDb.get<{ cnt: number }>(fixture.projectId, 'SELECT COUNT(*) as cnt FROM memory_entries')
+      ?.cnt ?? 0
   )
 }
 
 describe('syncManager.applyRealtimeEvent', () => {
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-rt-apply-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = tempDir
-    projectId = `rt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+    fixture.tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-rt-apply-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = fixture.tempDir
+    fixture.projectId = `rt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
     // This device is "self"; events from it are echoes.
     authConfig.read = mock(async () => ({ deviceId: 'self', userId: 'u1', apiKey: 'k' }) as never)
   })
 
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
     authConfig.read = origRead
     authConfig.clearCache()
-    await fs.rm(tempDir, { recursive: true, force: true })
+    await fs.rm(fixture.tempDir, { recursive: true, force: true })
   })
 
   test('skips echoes from this device (origin === self)', async () => {
-    const applied = await syncManager.applyRealtimeEvent(projectId, {
+    const applied = await syncManager.applyRealtimeEvent(fixture.projectId, {
       entity_type: 'memories',
       event_type: 'upsert',
       origin_device_id: 'self',
@@ -55,7 +63,7 @@ describe('syncManager.applyRealtimeEvent', () => {
   })
 
   test('applies events from other devices', async () => {
-    const applied = await syncManager.applyRealtimeEvent(projectId, {
+    const applied = await syncManager.applyRealtimeEvent(fixture.projectId, {
       entity_type: 'memories',
       event_type: 'upsert',
       origin_device_id: 'other-machine',

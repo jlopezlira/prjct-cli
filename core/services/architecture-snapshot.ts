@@ -62,7 +62,11 @@ export function buildArchitectureSnapshot(projectId: string): ArchitectureSnapsh
     const ext = s.file.includes('.') ? s.file.slice(s.file.lastIndexOf('.')) : '(none)'
     langMap.set(ext, (langMap.get(ext) ?? 0) + 1)
     if (s.kind === 'route') {
-      routes.push({ name: s.name, file: s.file, line: s.startLine })
+      routes.push({
+        name: s.name,
+        file: s.file,
+        line: s.startLine,
+      })
     }
     if (
       s.exported &&
@@ -70,7 +74,11 @@ export function buildArchitectureSnapshot(projectId: string): ArchitectureSnapsh
       (s.kind === 'function' || s.kind === 'class') &&
       !/__tests__|\.test\.|\.spec\.|fixtures?\//i.test(s.file)
     ) {
-      entryCandidates.push({ name: s.name, file: s.file, kind: s.kind })
+      entryCandidates.push({
+        name: s.name,
+        file: s.file,
+        kind: s.kind,
+      })
     }
   }
 
@@ -83,7 +91,11 @@ export function buildArchitectureSnapshot(projectId: string): ArchitectureSnapsh
   for (const f of sample) {
     const fanIn = fanInByFile.get(f) ?? 0
     if (fanIn > 0) {
-      hotspotScores.push({ file: f, fanIn, symbolCount: fileMap.get(f) ?? 0 })
+      hotspotScores.push({
+        file: f,
+        fanIn,
+        symbolCount: fileMap.get(f) ?? 0,
+      })
     }
   }
   hotspotScores.sort((a, b) => b.fanIn - a.fanIn)
@@ -93,22 +105,26 @@ export function buildArchitectureSnapshot(projectId: string): ArchitectureSnapsh
   const packages = new Set<string>()
   const graph = loadGraph(projectId)
   if (graph) {
-    for (const f of Object.keys(graph.forward).slice(0, 2000)) {
-      const top = f.includes('/') ? f.slice(0, f.indexOf('/')) : f
+    for (const f2 of Object.keys(graph.forward).slice(0, 2000)) {
+      const top = f2.includes('/') ? f2.slice(0, f2.indexOf('/')) : f2
       if (top && !top.startsWith('.')) packages.add(top)
     }
   }
-  for (const f of files.slice(0, 2000)) {
-    const top = f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'
+  for (const f3 of files.slice(0, 2000)) {
+    const top = f3.includes('/') ? f3.slice(0, f3.indexOf('/')) : '.'
     if (top && top !== '.') packages.add(top)
   }
 
   // Also surface high-export classes as entry-ish
   if (entryCandidates.length < 8) {
-    for (const s of symbols) {
+    for (const s2 of symbols) {
       if (entryCandidates.length >= 12) break
-      if (s.exported && s.kind === 'class' && !entryCandidates.some((e) => e.file === s.file)) {
-        entryCandidates.push({ name: s.name, file: s.file, kind: s.kind })
+      if (s2.exported && s2.kind === 'class' && !entryCandidates.some((e) => e.file === s2.file)) {
+        entryCandidates.push({
+          name: s2.name,
+          file: s2.file,
+          kind: s2.kind,
+        })
       }
     }
   }

@@ -5,14 +5,11 @@ describe('RequestLanes', () => {
   test('serializes work within the same lane', async () => {
     const lanes = new RequestLanes()
     const order: string[] = []
-    let release!: () => void
-    const gate = new Promise<void>((r) => {
-      release = r
-    })
+    const gate = Promise.withResolvers<void>()
 
     const first = lanes.run('command', async () => {
       order.push('first-start')
-      await gate
+      await gate.promise
       order.push('first-end')
       return 1
     })
@@ -25,7 +22,7 @@ describe('RequestLanes', () => {
     await Promise.resolve()
     expect(order).toEqual(['first-start'])
 
-    release()
+    gate.resolve()
     expect(await first).toBe(1)
     expect(await second).toBe(2)
     expect(order).toEqual(['first-start', 'first-end', 'second'])
@@ -34,14 +31,11 @@ describe('RequestLanes', () => {
   test('hook lane does not wait for a long command', async () => {
     const lanes = new RequestLanes()
     const order: string[] = []
-    let releaseCmd!: () => void
-    const cmdGate = new Promise<void>((r) => {
-      releaseCmd = r
-    })
+    const cmdGate = Promise.withResolvers<void>()
 
     const cmd = lanes.run('command', async () => {
       order.push('cmd-start')
-      await cmdGate
+      await cmdGate.promise
       order.push('cmd-end')
     })
 
@@ -58,7 +52,7 @@ describe('RequestLanes', () => {
     expect(order).toContain('cmd-start')
     expect(order).not.toContain('cmd-end')
 
-    releaseCmd()
+    cmdGate.resolve()
     await cmd
     expect(order).toEqual(['cmd-start', 'hook', 'cmd-end'])
   })

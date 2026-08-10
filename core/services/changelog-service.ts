@@ -77,12 +77,10 @@ export class ChangelogService {
     }
     const date = entry.date || dateHelper.formatDate(new Date())
 
-    let updated: string
-    if (detection.format === 'keepachangelog') {
-      updated = this.insertKeepAChangelogEntry(content, entry, date)
-    } else {
-      updated = this.insertMarkdownEntry(content, entry, date)
-    }
+    const updated =
+      detection.format === 'keepachangelog'
+        ? this.insertKeepAChangelogEntry(content, entry, date)
+        : this.insertMarkdownEntry(content, entry, date)
 
     await fileHelper.writeFile(detection.filePath, updated)
   }
@@ -153,13 +151,8 @@ export class ChangelogService {
 
     if (unrelIdx !== -1) {
       // [Unreleased] body = everything until the next "## " heading (or EOF).
-      let endIdx = lines.length
-      for (let i = unrelIdx + 1; i < lines.length; i++) {
-        if (/^##\s/.test(lines[i])) {
-          endIdx = i
-          break
-        }
-      }
+      const nextHeadingOffset = lines.slice(unrelIdx + 1).findIndex((line) => /^##\s/.test(line))
+      const endIdx = nextHeadingOffset === -1 ? lines.length : unrelIdx + 1 + nextHeadingOffset
       const body = lines
         .slice(unrelIdx + 1, endIdx)
         .join('\n')

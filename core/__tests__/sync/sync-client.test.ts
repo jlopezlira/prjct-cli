@@ -9,29 +9,37 @@ import type { SyncEvent } from '../../types/events'
 
 type FetchCall = { url: string; init: RequestInit | undefined }
 
-let tmpDir: string
-let tmpPath: string
+const fixture: {
+  tmpDir: string
+  tmpPath: string
+  calls: FetchCall[]
+  storedToken: string | null
+} = {
+  tmpDir: '',
+  tmpPath: '',
+  calls: [],
+  storedToken: null,
+}
+
 const originalConfigPath = (authConfig as unknown as { configPath: string }).configPath
 const originalFetch = globalThis.fetch
-let calls: FetchCall[] = []
-let storedToken: string | null = null
 
 async function seedAuth(apiKey: string | null = 'sk_test_key') {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sync-client-test-'))
-  tmpPath = path.join(tmpDir, 'auth.json')
-  ;(authConfig as unknown as { configPath: string }).configPath = tmpPath
+  fixture.tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-sync-client-test-'))
+  fixture.tmpPath = path.join(fixture.tmpDir, 'auth.json')
+  ;(authConfig as unknown as { configPath: string }).configPath = fixture.tmpPath
   authConfig.clearCache()
-  storedToken = null
+  fixture.storedToken = null
   _setAuthTokenStoreForTests({
-    get: async () => storedToken,
+    get: async () => fixture.storedToken,
     set: async (value: string): Promise<AuthTokenLocation> => {
-      storedToken = value
+      fixture.storedToken = value
       return 'keychain'
     },
     clear: async () => {
-      storedToken = null
+      fixture.storedToken = null
     },
-    location: async () => (storedToken ? 'keychain' : 'none'),
+    location: async () => (fixture.storedToken ? 'keychain' : 'none'),
   })
   if (apiKey) {
     await authConfig.saveAuth(apiKey, 'user-1', 'u@x')
@@ -39,10 +47,10 @@ async function seedAuth(apiKey: string | null = 'sk_test_key') {
 }
 
 function stubFetch(impl: (url: string, init?: RequestInit) => Response | Promise<Response>): void {
-  calls = []
+  fixture.calls = []
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const urlStr = typeof url === 'string' ? url : url.toString()
-    calls.push({ url: urlStr, init })
+    fixture.calls.push({ url: urlStr, init })
     return impl(urlStr, init)
   }) as typeof fetch
 }
@@ -59,9 +67,9 @@ afterEach(async () => {
   _setAuthTokenStoreForTests(null)
   ;(authConfig as unknown as { configPath: string }).configPath = originalConfigPath
   authConfig.clearCache()
-  if (tmpDir) {
+  if (fixture.tmpDir) {
     try {
-      await fs.rm(tmpDir, { recursive: true, force: true })
+      await fs.rm(fixture.tmpDir, { recursive: true, force: true })
     } catch {
       // ignore
     }
@@ -97,13 +105,13 @@ describe('SyncClient.pushEvents', () => {
     const result = await syncClient.pushEvents('proj-1', events)
 
     expect(result).toEqual(payload)
-    expect(calls).toHaveLength(1)
-    expect(calls[0].url).toContain('/sync/batch')
-    expect(calls[0].init?.method).toBe('POST')
-    const headers = calls[0].init?.headers as Record<string, string>
+    expect(fixture.calls).toHaveLength(1)
+    expect(fixture.calls[0].url).toContain('/sync/batch')
+    expect(fixture.calls[0].init?.method).toBe('POST')
+    const headers = fixture.calls[0].init?.headers as Record<string, string>
     expect(headers['X-Api-Key']).toBe('sk_test_key')
 
-    const body = JSON.parse(calls[0].init?.body as string)
+    const body = JSON.parse(fixture.calls[0].init?.body as string)
     expect(body.projectId).toBe('proj-1')
     expect(body.events).toHaveLength(1)
     expect(body.events[0].entity_type).toBe('tasks')
@@ -116,7 +124,7 @@ describe('SyncClient.pushEvents', () => {
       status: 401,
     })
     expect(await authConfig.hasAuth()).toBe(false)
-    expect(storedToken).toBeNull()
+    expect(fixture.storedToken).toBeNull()
   })
 
   it('surfaces 400 as API_ERROR', async () => {
@@ -134,8 +142,8 @@ describe('SyncClient.pushEvents', () => {
     // non-idempotent → exactly ONE attempt, error surfaced to the caller.
     stubFetch(() => jsonResponse(503, { message: 'upstream down' }))
     await expect(syncClient.pushEvents('proj-1', [])).rejects.toBeTruthy()
-    expect(calls).toHaveLength(1)
-    expect(calls[0].init?.method).toBe('POST')
+    expect(fixture.calls).toHaveLength(1)
+    expect(fixture.calls[0].init?.method).toBe('POST')
   })
 })
 
@@ -149,8 +157,8 @@ describe('SyncClient.pullEvents', () => {
 
     await syncClient.pullEvents('proj-1', 42)
 
-    expect(calls[0].url).toContain('/sync/pull')
-    const body = JSON.parse(calls[0].init?.body as string)
+    expect(fixture.calls[0].url).toContain('/sync/pull')
+    const body = JSON.parse(fixture.calls[0].init?.body as string)
     expect(body.projectId).toBe('proj-1')
     expect(body.sinceEventId).toBe(42)
   })
@@ -162,7 +170,7 @@ describe('SyncClient.pullEvents', () => {
     // it must be silently ignored, not forwarded on the wire.
     await syncClient.pullEvents('proj-1', 42, '2026-04-01T00:00:00Z')
 
-    const body = JSON.parse(calls[0].init?.body as string)
+    const body = JSON.parse(fixture.calls[0].init?.body as string)
     expect(body.since).toBeUndefined()
     expect('since' in body).toBe(false)
     // sinceEventId still rides through.
@@ -174,7 +182,7 @@ describe('SyncClient.pullEvents', () => {
 
     await syncClient.pullEvents('proj-1')
 
-    const body = JSON.parse(calls[0].init?.body as string)
+    const body = JSON.parse(fixture.calls[0].init?.body as string)
     expect(body.projectId).toBe('proj-1')
     expect('sinceEventId' in body).toBe(false)
     expect('since' in body).toBe(false)
@@ -214,14 +222,14 @@ describe('SyncClient.publishBenchmark', () => {
     })
 
     expect(result.benchmarkId).toBe('bench-1')
-    expect(calls).toHaveLength(1)
-    expect(calls[0].url).toContain('/benchmarks/evals')
-    expect(calls[0].init?.method).toBe('POST')
-    const headers = calls[0].init?.headers as Record<string, string>
+    expect(fixture.calls).toHaveLength(1)
+    expect(fixture.calls[0].url).toContain('/benchmarks/evals')
+    expect(fixture.calls[0].init?.method).toBe('POST')
+    const headers = fixture.calls[0].init?.headers as Record<string, string>
     expect(headers['X-Api-Key']).toBe('sk_test_key')
     expect(headers['X-Device-Id']).toBeString()
 
-    const body = JSON.parse(calls[0].init?.body as string)
+    const body = JSON.parse(fixture.calls[0].init?.body as string)
     expect(body.projectId).toBe('proj-1')
     expect(body.artifactType).toBe('run')
     expect(body.artifactId).toBe('eval_1')
@@ -265,7 +273,7 @@ describe('SyncClient.testConnection', () => {
     stubFetch(() => new Response('bad key', { status: 403 }))
     expect(await syncClient.testConnection()).toBe(false)
     expect(await authConfig.hasAuth()).toBe(false)
-    expect(storedToken).toBeNull()
+    expect(fixture.storedToken).toBeNull()
   })
 
   it('returns false on network error', async () => {

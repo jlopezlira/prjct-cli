@@ -60,19 +60,18 @@ export async function backfillTaskTokens(
   if (tasks.length === 0) return result
 
   const dir = transcriptDirFor(projectPath)
-  let files: string[] = []
-  try {
-    files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl'))
-  } catch {
-    return result // no transcripts on this machine — nothing to recover
-  }
+  const files = await fs
+    .readdir(dir)
+    .then((entries) => entries.filter((file) => file.endsWith('.jsonl')))
+    .catch(() => null)
+  if (!files) return result
 
   // Load all transcripts once (they are line-independent, so concatenating
   // across sessions is safe: the window filter does the attribution).
   const allLines: TranscriptJsonlLine[] = []
-  for (const f of files) {
+  for (const f2 of files) {
     try {
-      const raw = await fs.readFile(path.join(dir, f), 'utf-8')
+      const raw = await fs.readFile(path.join(dir, f2), 'utf-8')
       allLines.push(...parseTranscriptJsonl(raw))
       result.transcriptsScanned++
     } catch {
@@ -82,7 +81,10 @@ export async function backfillTaskTokens(
   if (allLines.length === 0) return result
 
   for (const task of tasks) {
-    const window = { sinceIso: task.started_at, untilIso: task.completed_at }
+    const window = {
+      sinceIso: task.started_at,
+      untilIso: task.completed_at,
+    }
     const usage = sumTranscriptUsage(allLines, window)
     if (usage.tokensIn + usage.tokensOut <= 0) {
       result.tasksSkipped++

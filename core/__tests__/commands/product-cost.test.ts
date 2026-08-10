@@ -14,30 +14,36 @@ import {
 import { prjctDb } from '../../storage/database'
 import { syncPendingStorage } from '../../storage/sync-pending-storage'
 
-let projectPath: string
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  projectPath: string
+  tmpRoot: string
+  projectId: string
+} = {
+  projectPath: '',
+  tmpRoot: '',
+  projectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('insights cost', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cost-root-'))
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cost-project-'))
-    projectId = `cost-${Math.random().toString(36).slice(2, 10)}`
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(tmpRoot, 'data'),
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cost-root-'))
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cost-project-'))
+    fixture.projectId = `cost-${Math.random().toString(36).slice(2, 10)}`
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.tmpRoot, 'data'),
     })
-    prjctDb.getDb(projectId)
+    prjctDb.getDb(fixture.projectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
-    await fs.rm(projectPath, { recursive: true, force: true })
-    await fs.rm(tmpRoot, { recursive: true, force: true })
+    await fs.rm(fixture.projectPath, { recursive: true, force: true })
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('reports measured token burn and most expensive work cycles', async () => {
@@ -45,7 +51,7 @@ describe('insights cost', () => {
     const now = new Date().toISOString()
     try {
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         `INSERT INTO tasks
          (id, description, status, started_at, completed_at, tokens_in, tokens_out)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -58,7 +64,7 @@ describe('insights cost', () => {
         3000
       )
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         `INSERT INTO memory_surface_log (memory_id, task_id, created_at, query_text, surface)
          VALUES (?, ?, ?, ?, ?)`,
         'mem_1',
@@ -68,7 +74,7 @@ describe('insights cost', () => {
         'work'
       )
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         `INSERT INTO memory_usefulness (memory_id, score, ref_count, fetch_count, last_used_at)
          VALUES (?, ?, ?, ?, ?)`,
         'mem_1',
@@ -78,7 +84,7 @@ describe('insights cost', () => {
         now
       )
 
-      const result = await new ProductCommands().cost('30', projectPath, { md: true })
+      const result = await new ProductCommands().cost('30', fixture.projectPath, { md: true })
       const snapshot = result as typeof result & WorkCostSnapshot
 
       expect(result.success).toBe(true)
@@ -94,19 +100,19 @@ describe('insights cost', () => {
     const log = spyOn(console, 'log').mockImplementation(() => {})
     const now = new Date().toISOString()
     try {
-      prjctDb.appendEvent(projectId, 'memory.task_started', {
+      prjctDb.appendEvent(fixture.projectId, 'memory.task_started', {
         task: 'Investigate repeated agent exploration',
         taskId: 'task-historical',
       })
-      prjctDb.appendEvent(projectId, 'memory.feature_shipped', {
+      prjctDb.appendEvent(fixture.projectId, 'memory.feature_shipped', {
         feature: 'file cue rollout',
       })
-      prjctDb.appendEvent(projectId, 'memory.remember.context', {
+      prjctDb.appendEvent(fixture.projectId, 'memory.remember.context', {
         content:
           'Claude spent about 55k tokens exploring existing code because file cues were missing.',
       })
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         'UPDATE events SET timestamp = ? WHERE type IN (?, ?, ?)',
         now,
         'memory.task_started',
@@ -114,7 +120,7 @@ describe('insights cost', () => {
         'memory.remember.context'
       )
 
-      const result = await new ProductCommands().cost('30', projectPath, { md: true })
+      const result = await new ProductCommands().cost('30', fixture.projectPath, { md: true })
       const snapshot = result as typeof result & WorkCostSnapshot
 
       expect(result.success).toBe(true)
@@ -133,7 +139,7 @@ describe('insights cost', () => {
   it('keeps missing task/session/token capture visible', async () => {
     const log = spyOn(console, 'log').mockImplementation(() => {})
     try {
-      const result = await new ProductCommands().cost('30', projectPath, { md: true })
+      const result = await new ProductCommands().cost('30', fixture.projectPath, { md: true })
       const snapshot = result as typeof result & WorkCostSnapshot
 
       expect(result.success).toBe(true)
@@ -147,9 +153,9 @@ describe('insights cost', () => {
   })
 
   it('publishes retrospective snapshots as sync analytics events', async () => {
-    await publishWorkCostSnapshots(projectId, [30])
+    await publishWorkCostSnapshots(fixture.projectId, [30])
 
-    const pending = syncPendingStorage.list(projectId)
+    const pending = syncPendingStorage.list(fixture.projectId)
     expect(pending).toHaveLength(1)
     expect(pending[0]?.event.entityType).toBe('work_cost_snapshots')
     expect(pending[0]?.event.entityId).toBe('work-cost-30d')
@@ -159,27 +165,27 @@ describe('insights cost', () => {
   it('AC8: redacts free-text declared-token prose from the cloud payload', () => {
     // Seed a remembered note that mentions tokens AND carries a secret-like phrase.
     const now = new Date().toISOString()
-    prjctDb.appendEvent(projectId, 'memory.remember.learning', {
+    prjctDb.appendEvent(fixture.projectId, 'memory.remember.learning', {
       content: 'Saved ~5000 tokens by caching; key sk-live-SECRET-pii-12345',
       tags: {},
       provenance: 'declared',
     })
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       'UPDATE events SET timestamp = ? WHERE type = ?',
       now,
       'memory.remember.learning'
     )
 
     // Local snapshot keeps the prose (used by the local cost report)...
-    const local = buildWorkCostSnapshot(projectId, 30)
+    const local = buildWorkCostSnapshot(fixture.projectId, 30)
     const localMentions = local.historicalRescue.topDeclaredTokenMentions
     expect(localMentions.length).toBeGreaterThan(0)
     expect(localMentions.some((m) => m.summary.includes('SECRET'))).toBe(true)
 
     // ...but the cloud payload must NOT (only structured numeric fields).
-    return publishWorkCostSnapshots(projectId, [30]).then(() => {
-      const pending = syncPendingStorage.list(projectId)
+    return publishWorkCostSnapshots(fixture.projectId, [30]).then(() => {
+      const pending = syncPendingStorage.list(fixture.projectId)
       const published = pending.find((p) => p.event.entityId === 'work-cost-30d')
       const data = published?.event.data as WorkCostSnapshot
       const cloudMentions = data.historicalRescue.topDeclaredTokenMentions
@@ -199,16 +205,16 @@ describe('insights cost', () => {
     // description) — the same secret-leak class as the declared-token prose,
     // but carried through recordTaskTokenUsage -> token_usage.description ->
     // mostExpensive[], a path the original AC8 redaction missed entirely.
-    recordTaskTokenUsage(projectId, 'task-secret', 1000, 200, {
+    recordTaskTokenUsage(fixture.projectId, 'task-secret', 1000, 200, {
       description: 'rotate the sk-live-SECRET-pii-99999 key',
       source: 'cli',
     })
 
-    const local = buildWorkCostSnapshot(projectId, 30)
+    const local = buildWorkCostSnapshot(fixture.projectId, 30)
     expect(local.mostExpensive.some((t) => t.description.includes('SECRET'))).toBe(true)
 
-    return publishWorkCostSnapshots(projectId, [30]).then(() => {
-      const pending = syncPendingStorage.list(projectId)
+    return publishWorkCostSnapshots(fixture.projectId, [30]).then(() => {
+      const pending = syncPendingStorage.list(fixture.projectId)
       const published = pending.find((p) => p.event.entityId === 'work-cost-30d')
       const data = published?.event.data as WorkCostSnapshot
       expect(data.mostExpensive.length).toBeGreaterThan(0)
@@ -230,7 +236,7 @@ describe('insights cost', () => {
     // corrupted-value case it exists to catch.
     const now = new Date().toISOString()
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT INTO tasks (id, description, status, started_at, completed_at, tokens_in, tokens_out)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       'task-corrupt',
@@ -242,11 +248,11 @@ describe('insights cost', () => {
       100
     )
 
-    recordTaskTokenUsage(projectId, 'task-corrupt', 999_999_999, 1, { source: 'cli' })
+    recordTaskTokenUsage(fixture.projectId, 'task-corrupt', 999_999_999, 1, { source: 'cli' })
 
     // token_usage correctly rejected it (existing coverage in cost-meta.test.ts)...
     const tokenUsageRows = prjctDb.query(
-      projectId,
+      fixture.projectId,
       'SELECT id FROM token_usage WHERE work_cycle_id = ?',
       'task-corrupt'
     )
@@ -256,7 +262,7 @@ describe('insights cost', () => {
     // (same bound applied before either write) — the original legit values
     // survive untouched, not overwritten with the corrupted 999,999,999.
     const taskRow = prjctDb.query<{ tokens_in: number; tokens_out: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT tokens_in, tokens_out FROM tasks WHERE id = ?',
       'task-corrupt'
     )[0]
@@ -264,7 +270,7 @@ describe('insights cost', () => {
     expect(taskRow.tokens_out).toBe(100)
 
     // End-to-end: the snapshot reflects the legit value, never the corrupted one.
-    const snapshot = buildWorkCostSnapshot(projectId, 30)
+    const snapshot = buildWorkCostSnapshot(fixture.projectId, 30)
     const entry = snapshot.mostExpensive.find((t) => t.id === 'task-corrupt')
     expect(entry?.tokensIn).toBe(500)
   })
@@ -273,18 +279,18 @@ describe('insights cost', () => {
     const log = spyOn(console, 'log').mockImplementation(() => {})
     const now = new Date().toISOString()
     try {
-      prjctDb.appendEvent(projectId, 'memory.task_started', {
+      prjctDb.appendEvent(fixture.projectId, 'memory.task_started', {
         task: 'Improve measurement proof',
         taskId: 'task-reliability',
       })
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         'UPDATE events SET timestamp = ? WHERE type = ?',
         now,
         'memory.task_started'
       )
 
-      const result = await new ProductCommands().insights('reliability 30', projectPath, {
+      const result = await new ProductCommands().insights('reliability 30', fixture.projectPath, {
         md: true,
       })
 
@@ -307,18 +313,18 @@ describe('insights cost', () => {
     try {
       // memory-doctor reads the single-source memory_entries (epoch-ms times).
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         `INSERT INTO memory_entries
            (id, project_id, type, title, content, provenance, content_hash,
             user_triggered, revision_count, created_at, updated_at)
          VALUES (?, ?, 'inbox', 'list', 'list', 'declared', 'h_low', 0, 0, ?, ?)`,
         'mem_low_signal',
-        projectId,
+        fixture.projectId,
         oldMs,
         oldMs
       )
 
-      const result = await new ProductCommands().insights('quality fix-plan', projectPath, {
+      const result = await new ProductCommands().insights('quality fix-plan', fixture.projectPath, {
         md: true,
       })
 
@@ -334,12 +340,14 @@ describe('insights cost', () => {
   it('shows event-measured token cycles in performance output', async () => {
     const log = spyOn(console, 'log').mockImplementation(() => {})
     try {
-      recordTaskTokenUsage(projectId, 'task-event-only', 900, 100, {
+      recordTaskTokenUsage(fixture.projectId, 'task-event-only', 900, 100, {
         description: 'Event-only measured work',
         agent: 'codex',
       })
 
-      const result = await new ProductCommands().performance('30', projectPath, { md: true })
+      const result = await new ProductCommands().performance('30', fixture.projectPath, {
+        md: true,
+      })
 
       expect(result.success).toBe(true)
       expect(result.cycles).toBe(1)
@@ -357,11 +365,11 @@ describe('recordTaskTokenUsage — oversized counts clamp instead of vanishing',
     const { prjctDb } = await import('../../storage/database')
     // Marathon-session shape: input+cache beyond the 10M CHECK bound used to
     // be silently REJECTED by the constraint — token coverage read 0 forever.
-    recordTaskTokenUsage(projectId, 'clamp-task', 25_000_000, 4_000_000, {
+    recordTaskTokenUsage(fixture.projectId, 'clamp-task', 25_000_000, 4_000_000, {
       source: 'claude-transcript',
     })
     const row = prjctDb.get<{ input_tokens: number; is_estimated: number }>(
-      projectId,
+      fixture.projectId,
       "SELECT input_tokens, is_estimated FROM token_usage WHERE work_cycle_id = 'clamp-task'"
     )
     expect(row?.input_tokens).toBe(10_000_000) // clamped, not dropped

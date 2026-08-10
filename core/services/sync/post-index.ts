@@ -18,15 +18,16 @@ export function startPostIndexWork(
   const now = options.now ?? Date.now
   const startedAt = now()
 
-  let pending: Promise<{ error?: unknown }>
-  try {
-    pending = run().then(
-      () => ({}),
-      (error: unknown) => ({ error })
-    )
-  } catch (error) {
-    pending = Promise.resolve({ error })
-  }
+  const pending: Promise<{ error?: unknown }> = (() => {
+    try {
+      return run().then(
+        () => ({}),
+        (error: unknown) => ({ error })
+      )
+    } catch (error) {
+      return Promise.resolve({ error })
+    }
+  })()
 
   const completed = pending.then((outcome) => {
     try {

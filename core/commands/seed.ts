@@ -156,12 +156,12 @@ export class SeedCommands extends PrjctCommandsBase {
         lines.push('_Full catalog: `prjct seed catalog --md` · verify: `prjct seed verify --md`_')
         console.log(lines.join('\n'))
       } else {
-        for (const p of active) {
+        for (const p2 of active) {
           out.info(
-            `${p.name}${p.version ? `@${p.version}` : ''}: ${p.description}${p.integrity ? ` [${p.integrity}]` : ''}`
+            `${p2.name}${p2.version ? `@${p2.version}` : ''}: ${p2.description}${p2.integrity ? ` [${p2.integrity}]` : ''}`
           )
-          out.info(`  memory: ${p.memoryTypes.join(', ') || '—'}`)
-          out.info(`  slots:  ${p.slots.join(', ') || '—'}`)
+          out.info(`  memory: ${p2.memoryTypes.join(', ') || '—'}`)
+          out.info(`  slots:  ${p2.slots.join(', ') || '—'}`)
         }
       }
       return { success: true, active }

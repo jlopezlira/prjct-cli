@@ -299,9 +299,9 @@ describe('ProfileLlmProvider', () => {
         baseUrl: 'http://localhost:11434/v1',
         model: 'mock-model',
       }
-      let seenBody: Record<string, unknown> = {}
+      const seenBody: Record<string, unknown> = {}
       const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
-        seenBody = JSON.parse(String(init?.body ?? '{}'))
+        Object.assign(seenBody, JSON.parse(String(init?.body ?? '{}')))
         return new Response(
           JSON.stringify({
             model: 'mock-model',

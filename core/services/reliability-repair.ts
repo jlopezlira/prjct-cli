@@ -19,8 +19,8 @@ export interface ReliabilityRepairReport {
 export function repairReliabilitySignals(projectId: string, days = 30): ReliabilityRepairReport {
   const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000
   const sinceIso = new Date(sinceMs).toISOString()
-  let tokensMirrored = 0
-  let usefulnessCredited = 0
+  const mirroredTaskIds: string[] = []
+  const creditedMemoryIds: string[] = []
 
   try {
     const rows = prjctDb.query<{
@@ -51,7 +51,7 @@ export function repairReliabilitySignals(projectId: string, days = 30): Reliabil
           r.t_out,
           r.work_cycle_id
         )
-        tokensMirrored++
+        mirroredTaskIds.push(r.work_cycle_id)
       } catch {
         /* best-effort */
       }
@@ -76,11 +76,14 @@ export function repairReliabilitySignals(projectId: string, days = 30): Reliabil
     for (const row of orphaned) {
       if (!row.memory_id) continue
       usefulnessService.recordFetch(projectId, row.memory_id, nowIso)
-      usefulnessCredited++
+      creditedMemoryIds.push(row.memory_id)
     }
   } catch {
     /* best-effort */
   }
 
-  return { tokensMirrored, usefulnessCredited }
+  return {
+    tokensMirrored: mirroredTaskIds.length,
+    usefulnessCredited: creditedMemoryIds.length,
+  }
 }

@@ -187,19 +187,13 @@ export class RetryPolicy {
       )
     }
 
-    let lastError: unknown
-    let attempt = 0
-
-    while (attempt < this.options.maxAttempts) {
+    const executeAttempt = async (attempt: number): Promise<T> => {
       try {
         const result = await operation()
         // Success - reset circuit breaker
         recordSuccess(operationId)
         return result
       } catch (error) {
-        lastError = error
-        attempt++
-
         if (isPermanentError(error)) {
           recordFailure(operationId, this.options.circuitBreakerThreshold)
           throw error
@@ -221,12 +215,10 @@ export class RetryPolicy {
 
         // Wait before retry
         await new Promise((resolve) => setTimeout(resolve, delay))
+        return executeAttempt(attempt + 1)
       }
     }
-
-    // All attempts failed
-    recordFailure(operationId, this.options.circuitBreakerThreshold)
-    throw lastError
+    return executeAttempt(1)
   }
 
   /**

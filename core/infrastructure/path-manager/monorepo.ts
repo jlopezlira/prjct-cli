@@ -71,50 +71,51 @@ export async function discoverMonorepoPackages(
   type: MonorepoInfo['type']
 ): Promise<MonorepoPackage[]> {
   const packages: MonorepoPackage[] = []
-  let patterns: string[] = []
 
   try {
-    if (type === 'pnpm') {
-      const yaml = await fs.readFile(path.join(rootPath, 'pnpm-workspace.yaml'), 'utf-8')
-      const match = yaml.match(/packages:\s*\n((?:\s*-\s*.+\n?)+)/)
-      if (match) {
-        patterns = match[1]
-          .split('\n')
-          .map((line) => line.replace(/^\s*-\s*['"]?|['"]?\s*$/g, ''))
-          .filter(Boolean)
+    const detectedPatterns = await (async (): Promise<string[]> => {
+      if (type === 'pnpm') {
+        const yaml = await fs.readFile(path.join(rootPath, 'pnpm-workspace.yaml'), 'utf-8')
+        const match = yaml.match(/packages:\s*\n((?:\s*-\s*.+\n?)+)/)
+        return match
+          ? match[1]
+              .split('\n')
+              .map((line) => line.replace(/^\s*-\s*['"]?|['"]?\s*$/g, ''))
+              .filter(Boolean)
+          : []
       }
-    } else if (type === 'npm' || type === 'lerna') {
-      const packageJsonPath = path.join(rootPath, 'package.json')
-      const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'))
-      if (Array.isArray(pkg.workspaces)) patterns = pkg.workspaces
-      else if (pkg.workspaces?.packages) patterns = pkg.workspaces.packages
-
-      if (type === 'lerna') {
-        const lernaPath = path.join(rootPath, 'lerna.json')
-        if (await fileHelper.fileExists(lernaPath)) {
-          const lerna = JSON.parse(await fs.readFile(lernaPath, 'utf-8'))
-          if (lerna.packages) patterns = lerna.packages
+      if (type === 'npm' || type === 'lerna') {
+        const packageJsonPath = path.join(rootPath, 'package.json')
+        const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'))
+        const workspacePatterns = Array.isArray(pkg.workspaces)
+          ? pkg.workspaces
+          : (pkg.workspaces?.packages ?? [])
+        if (type === 'lerna') {
+          const lernaPath = path.join(rootPath, 'lerna.json')
+          if (await fileHelper.fileExists(lernaPath)) {
+            const lerna = JSON.parse(await fs.readFile(lernaPath, 'utf-8'))
+            if (lerna.packages) return lerna.packages
+          }
         }
+        return workspacePatterns
       }
-    } else if (type === 'nx') {
-      patterns = ['apps/*', 'libs/*', 'packages/*']
-    } else if (type === 'turborepo') {
-      const packageJsonPath = path.join(rootPath, 'package.json')
-      const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'))
-      if (Array.isArray(pkg.workspaces)) patterns = pkg.workspaces
-    }
+      if (type === 'nx') return ['apps/*', 'libs/*', 'packages/*']
+      if (type === 'turborepo') {
+        const pkg = JSON.parse(await fs.readFile(path.join(rootPath, 'package.json'), 'utf-8'))
+        return Array.isArray(pkg.workspaces) ? pkg.workspaces : []
+      }
+      return []
+    })()
+    const patterns =
+      detectedPatterns.length > 0 ? detectedPatterns : ['packages/*', 'apps/*', 'libs/*']
 
-    if (patterns.length === 0) {
-      patterns = ['packages/*', 'apps/*', 'libs/*']
-    }
-
-    for (const pattern of patterns) {
-      if (pattern.startsWith('!')) continue
+    for (const pattern2 of patterns) {
+      if (pattern2.startsWith('!')) continue
 
       // node:fs globSync (node >=22, bun) — replaced the npm `glob` dep;
       // same contract for the simple workspace patterns used here
       // (relative matches under cwd; the package.json probe below filters).
-      const matches = globSync(pattern, { cwd: rootPath })
+      const matches = globSync(pattern2, { cwd: rootPath })
 
       for (const match of matches) {
         const packagePath = path.join(rootPath, match)
@@ -161,14 +162,9 @@ export async function findContainingPackage(
 }
 
 export async function findMonorepoRoot(startPath: string): Promise<string | null> {
-  let currentPath = path.resolve(startPath)
+  const currentPath = path.resolve(startPath)
   const root = path.parse(currentPath).root
-
-  while (currentPath !== root) {
-    const monoInfo = await detectMonorepo(currentPath)
-    if (monoInfo.isMonorepo) return currentPath
-    currentPath = path.dirname(currentPath)
-  }
-
-  return null
+  if (currentPath === root) return null
+  const monoInfo = await detectMonorepo(currentPath)
+  return monoInfo.isMonorepo ? currentPath : findMonorepoRoot(path.dirname(currentPath))
 }

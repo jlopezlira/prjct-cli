@@ -28,24 +28,29 @@ import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
 import prjctDb from '../../storage/database'
 
-let projectPath: string
-let projectId: string
+const fixture: {
+  projectPath: string
+  projectId: string
+} = {
+  projectPath: '',
+  projectId: '',
+}
 
 async function freshProject(persona?: Record<string, unknown>): Promise<void> {
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-session-start-test-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `test-${Math.random().toString(36).slice(2, 10)}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-session-start-test-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `test-${Math.random().toString(36).slice(2, 10)}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
     ...(persona ? { persona } : {}),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
+  await pathManager.ensureProjectStructure(fixture.projectId)
 }
 
 function insertMemory(type: string, content: string): void {
   prjctDb.run(
-    projectId,
+    fixture.projectId,
     "INSERT INTO events (type, data, timestamp) VALUES (?, ?, datetime('now'))",
     `memory.remember.${type}`,
     JSON.stringify({ content, tags: {}, provenance: 'declared' })
@@ -53,27 +58,27 @@ function insertMemory(type: string, content: string): void {
 }
 
 afterEach(async () => {
-  if (projectPath) {
-    await fs.rm(projectPath, { recursive: true, force: true })
-    projectPath = ''
+  if (fixture.projectPath) {
+    await fs.rm(fixture.projectPath, { recursive: true, force: true })
+    fixture.projectPath = ''
   }
 })
 
 describe('SessionStart hook — buildSessionContext', () => {
   test('returns null when config has no projectId', async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-no-id-'))
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-no-id-'))
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
     await fs.writeFile(
-      path.join(projectPath, '.prjct', 'prjct.config.json'),
+      path.join(fixture.projectPath, '.prjct', 'prjct.config.json'),
       JSON.stringify({ dataPath: '' })
     )
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).toBeNull()
   })
 
   test('emits cwd project identity even without persona (L1 isolation)', async () => {
     await freshProject()
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('## Project identity (cwd)')
     expect(ctx).toContain('Skill is portable L0')
@@ -85,7 +90,7 @@ describe('SessionStart hook — buildSessionContext', () => {
     // That broke cache stability; UserPromptSubmit handles per-turn recall.
     await freshProject()
     insertMemory('decision', 'we picked SQLite for local-first')
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('## Project identity (cwd)')
     expect(ctx).not.toContain('SQLite for local-first')
@@ -99,7 +104,7 @@ describe('SessionStart hook — buildSessionContext', () => {
       mcps: ['linear', 'posthog'],
       packs: ['pm', 'daily'],
     })
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('# prjct: project context')
     expect(ctx).toContain('## Project identity (cwd)')
@@ -111,13 +116,13 @@ describe('SessionStart hook — buildSessionContext', () => {
 
   test('always emits the "state, not prescription" disclaimer', async () => {
     await freshProject({ role: 'DEV' })
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).toContain('Exposed as state, not prescription')
   })
 
   test('does NOT repeat the recall verbs (they live in the skill — token diet R5)', async () => {
     await freshProject({ role: 'DEV' })
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).not.toContain('prjct context memory')
   })
 
@@ -125,7 +130,7 @@ describe('SessionStart hook — buildSessionContext', () => {
     await freshProject({ role: 'DEV' })
     insertMemory('decision', 'we picked SQLite for local-first')
     insertMemory('learning', 'JWT iat detects replay')
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).not.toBeNull()
     expect(ctx).not.toContain('## Recent memory')
     expect(ctx).not.toContain('SQLite for local-first')
@@ -136,13 +141,13 @@ describe('SessionStart hook — buildSessionContext', () => {
 
   test('output is bytes-identical regardless of memory state (cache stability)', async () => {
     await freshProject({ role: 'DEV', focus: 'platform' })
-    const before = await buildSessionContext(projectPath)
+    const before = await buildSessionContext(fixture.projectPath)
 
     // Add a bunch of memory entries — none should leak into the output.
-    for (let i = 0; i < 10; i++) {
+    for (const i of Array.from({ length: 10 }, (_, index) => index)) {
       insertMemory('decision', `entry ${i}: ${'x'.repeat(50)}`)
     }
-    const after = await buildSessionContext(projectPath)
+    const after = await buildSessionContext(fixture.projectPath)
 
     expect(after).toBe(before)
   })
@@ -152,7 +157,7 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
   test('digest OFF by default — the cache-safe path used by subagent/cwd reuse', async () => {
     await freshProject({ role: 'DEV' })
     insertMemory('gotcha', 'stale daemon caches old hook code; stop it before testing')
-    const ctx = await buildSessionContext(projectPath)
+    const ctx = await buildSessionContext(fixture.projectPath)
     expect(ctx).not.toBeNull()
     expect(ctx).not.toContain('What this project already knows')
     expect(ctx).not.toContain('stale daemon')
@@ -162,7 +167,7 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
     await freshProject({ role: 'DEV' })
     insertMemory('gotcha', 'stale daemon caches old hook code; stop it before testing')
     insertMemory('decision', 'we picked SQLite for local-first persistence')
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('What this project already knows')
     expect(ctx).toContain('Traps to avoid')
@@ -173,14 +178,14 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
   test('digest ON works even without a persona (knowledge alone is enough)', async () => {
     await freshProject()
     insertMemory('gotcha', 'never edit the generated vault by hand — fix the pipeline')
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('What this project already knows')
   })
 
   test('digest ON with no memory and no persona → identity only (no digest noise)', async () => {
     await freshProject()
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('## Project identity (cwd)')
     expect(ctx).not.toContain('What this project already knows')
@@ -189,21 +194,26 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
   test('digest surfaces an entry skill-missed ≥2× (feedback loop read side)', async () => {
     await freshProject({ role: 'DEV' })
     insertMemory('learning', 'embeddings clear deletes the keychain key — use set to keep it')
-    const row = prjctDb.get<{ id: number }>(projectId, 'SELECT MAX(id) AS id FROM events')
+    const row = prjctDb.get<{ id: number }>(fixture.projectId, 'SELECT MAX(id) AS id FROM events')
     const memId = `mem_${row?.id}`
-    for (let i = 0; i < 2; i++) {
+    for (const i of Array.from({ length: 2 }, (_, index) => index)) {
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         "INSERT INTO events (type, data, timestamp) VALUES (?, ?, datetime('now'))",
         'memory.remember.improvement-signal',
         JSON.stringify({
           content: `[skill-miss] Unused project knowledge (learning, ${memId})`,
-          tags: { kind: 'skill-miss', source: 'skill-miss-detector', relates: memId, key: `k${i}` },
+          tags: {
+            kind: 'skill-miss',
+            source: 'skill-miss-detector',
+            relates: memId,
+            key: `k${i}`,
+          },
           provenance: 'extracted',
         })
       )
     }
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).toContain('Keeps being missed')
     expect(ctx).toContain(memId)
     expect(ctx).toContain('2×')
@@ -212,9 +222,9 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
   test('a single skill-miss does NOT earn a digest slot (threshold is 2)', async () => {
     await freshProject({ role: 'DEV' })
     insertMemory('learning', 'embeddings clear deletes the keychain key — use set to keep it')
-    const row = prjctDb.get<{ id: number }>(projectId, 'SELECT MAX(id) AS id FROM events')
+    const row = prjctDb.get<{ id: number }>(fixture.projectId, 'SELECT MAX(id) AS id FROM events')
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       "INSERT INTO events (type, data, timestamp) VALUES (?, ?, datetime('now'))",
       'memory.remember.improvement-signal',
       JSON.stringify({
@@ -228,14 +238,14 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
         provenance: 'extracted',
       })
     )
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx ?? '').not.toContain('Keeps being missed')
   })
 
   test('digest references prjct_developer and id-resolution path', async () => {
     await freshProject({ role: 'DEV' })
     insertMemory('decision', 'ship as minor when the squash title starts with feat:')
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).toContain('prjct_developer')
     expect(ctx).toContain('prjct search')
   })
@@ -246,7 +256,7 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
       'feedback',
       'Memory content MUST be authored in English, regardless of conversation language.'
     )
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('How this developer works')
     expect(ctx).toContain('English')
@@ -258,23 +268,24 @@ describe('SessionStart hook — digest slots are proven-first (usefulness rerank
   test('a proven-useful old gotcha beats a newer unproven one for a digest slot', async () => {
     await freshProject({ role: 'DEV' })
     // 6 gotchas, oldest first. Pure recency would pick g5,g4,g3.
-    for (let i = 0; i < 6; i++) insertMemory('gotcha', `trap number ${i} in module-${i}`)
+    for (const i of Array.from({ length: 6 }, (_, index) => index))
+      insertMemory('gotcha', `trap number ${i} in module-${i}`)
 
     // The OLDEST entry is the only one with usefulness signal — it should
     // climb into the 3 digest slots, displacing the 3rd-newest.
     const { usefulnessService } = await import('../../services/usefulness')
     const oldest = prjctDb.query<{ id: number }>(
-      projectId,
+      fixture.projectId,
       "SELECT id FROM events WHERE type = 'memory.remember.gotcha' ORDER BY id ASC LIMIT 1"
     )[0]
     // Three deliberate fetches (≈ a genuinely proven entry). A single
     // fetch (0.4) stays under the rerank's normalization floor of 1 by
     // design — weak signals shouldn't reshuffle the digest.
-    usefulnessService.recordFetch(projectId, `mem_${oldest.id}`)
-    usefulnessService.recordFetch(projectId, `mem_${oldest.id}`)
-    usefulnessService.recordFetch(projectId, `mem_${oldest.id}`)
+    usefulnessService.recordFetch(fixture.projectId, `mem_${oldest.id}`)
+    usefulnessService.recordFetch(fixture.projectId, `mem_${oldest.id}`)
+    usefulnessService.recordFetch(fixture.projectId, `mem_${oldest.id}`)
 
-    const ctx = await buildSessionContext(projectPath, null, { digest: true })
+    const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('trap number 0')
     expect(ctx).toContain('trap number 5')

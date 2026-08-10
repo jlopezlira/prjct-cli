@@ -172,15 +172,15 @@ export function formatContextTiersMd(
   lines.push('')
   lines.push('## Anti-patterns')
   lines.push('')
-  for (const t of report.tiers) {
-    lines.push(`- **${t.id}**: ${t.antiPattern}`)
+  for (const t2 of report.tiers) {
+    lines.push(`- **${t2.id}**: ${t2.antiPattern}`)
   }
   lines.push('')
   lines.push('## Contents by tier')
   lines.push('')
-  for (const t of report.tiers) {
-    lines.push(`### ${t.id} — ${t.name}`)
-    for (const c of t.contents) lines.push(`- ${c}`)
+  for (const t3 of report.tiers) {
+    lines.push(`### ${t3.id} — ${t3.name}`)
+    for (const c of t3.contents) lines.push(`- ${c}`)
     lines.push('')
   }
   return `${lines.join('\n').trimEnd()}\n`

@@ -24,20 +24,25 @@ import prjctDb from '../../storage/database'
 import { ideasStorage } from '../../storage/ideas-storage'
 import { syncPendingStorage } from '../../storage/sync-pending-storage'
 
-let tempDir: string
-let originalProjectsDir: string | undefined
+const fixture: {
+  tempDir: string
+  originalProjectsDir: string | undefined
+} = {
+  tempDir: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+}
 
 describe('sync round-trip CRUD → pending → confirm → applyEvent', () => {
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-roundtrip-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = tempDir
+    fixture.tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-roundtrip-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = fixture.tempDir
   })
 
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-    await fs.rm(tempDir, { recursive: true, force: true })
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+    await fs.rm(fixture.tempDir, { recursive: true, force: true })
   })
 
   test('CRUD enqueues, partial confirm clears, applyEvent upserts by id', async () => {

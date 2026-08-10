@@ -21,25 +21,31 @@ import pathManager from '../../infrastructure/path-manager'
 import prjctDb from '../../storage/database'
 
 describe('symbol-graph', () => {
-  let testDir: string
-  let testProjectId: string
+  const fixture: {
+    testDir: string
+    testProjectId: string
+  } = {
+    testDir: '',
+    testProjectId: '',
+  }
+
   const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
   beforeEach(async () => {
-    testDir = path.join(
+    fixture.testDir = path.join(
       os.tmpdir(),
       `prjct-symbol-graph-${Date.now()}-${Math.random().toString(36).slice(2)}`
     )
-    testProjectId = `test-symbols-${Date.now()}`
-    await fs.mkdir(testDir, { recursive: true })
-    pathManager.getGlobalProjectPath = () => testDir
+    fixture.testProjectId = `test-symbols-${Date.now()}`
+    await fs.mkdir(fixture.testDir, { recursive: true })
+    pathManager.getGlobalProjectPath = () => fixture.testDir
   })
 
   afterEach(async () => {
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
     prjctDb.close()
     try {
-      await fs.rm(testDir, { recursive: true, force: true })
+      await fs.rm(fixture.testDir, { recursive: true, force: true })
     } catch {
       /* ignore */
     }
@@ -101,64 +107,64 @@ function checkId(id: string) { return id.length > 0 }
   describe('index + CALLS quality', () => {
     it('indexes project and finds symbols by name', async () => {
       await fs.writeFile(
-        path.join(testDir, 'validator.ts'),
+        path.join(fixture.testDir, 'validator.ts'),
         `export function validate() { return true }\n`
       )
       await fs.writeFile(
-        path.join(testDir, 'auth.ts'),
+        path.join(fixture.testDir, 'auth.ts'),
         `import { validate } from './validator'\nexport function login() { return validate() }\n`
       )
 
-      const meta = await indexSymbols(testDir, testProjectId)
+      const meta = await indexSymbols(fixture.testDir, fixture.testProjectId)
       expect(meta.symbolCount).toBeGreaterThan(0)
-      expect(hasSymbolIndex(testProjectId)).toBe(true)
+      expect(hasSymbolIndex(fixture.testProjectId)).toBe(true)
 
-      const hits = searchSymbols(testProjectId, 'validate')
+      const hits = searchSymbols(fixture.testProjectId, 'validate')
       expect(hits.some((h) => h.name === 'validate')).toBe(true)
 
-      const scored = scoreFilesFromQuery(testProjectId, 'login validate')
+      const scored = scoreFilesFromQuery(fixture.testProjectId, 'login validate')
       expect(scored.length).toBeGreaterThan(0)
       expect(scored.some((s) => s.path.includes('auth') || s.path.includes('validator'))).toBe(true)
     })
 
     it('traces login as inbound caller of validate (symbol-level CALLS)', async () => {
       await fs.writeFile(
-        path.join(testDir, 'validator.ts'),
+        path.join(fixture.testDir, 'validator.ts'),
         `export function validate() { return true }\nexport function normalize() { return true }\n`
       )
       await fs.writeFile(
-        path.join(testDir, 'auth.ts'),
+        path.join(fixture.testDir, 'auth.ts'),
         `import { normalize, validate } from './validator'\nexport function login() { return validate() && normalize() }\nexport function admin() { return validate() }\n`
       )
       await fs.writeFile(
-        path.join(testDir, 'bootstrap.ts'),
+        path.join(fixture.testDir, 'bootstrap.ts'),
         `import { validate } from './validator'\nconst ready = validate()\nexport { ready }\n`
       )
       await fs.writeFile(
-        path.join(testDir, 'isolated.ts'),
+        path.join(fixture.testDir, 'isolated.ts'),
         `export function idle() { return true }\n`
       )
 
-      await indexSymbols(testDir, testProjectId)
-      const tr = tracePath(testProjectId, 'validate', { direction: 'inbound', depth: 3 })
+      await indexSymbols(fixture.testDir, fixture.testProjectId)
+      const tr = tracePath(fixture.testProjectId, 'validate', { direction: 'inbound', depth: 3 })
       expect(tr).not.toBeNull()
       expect(tr!.root.some((r) => r.name === 'validate')).toBe(true)
       // login should appear as a real caller symbol
       expect(tr!.inbound.some((h) => h.symbol.name === 'login')).toBe(true)
 
-      const fanIn = fileFanIn(testProjectId, 'validator.ts')
+      const fanIn = fileFanIn(fixture.testProjectId, 'validator.ts')
       // login calls two target symbols but counts once; admin and the
       // top-level file:bootstrap.ts node are two more distinct callers.
-      const fanInByFile = fileFanInByFile(testProjectId)
+      const fanInByFile = fileFanInByFile(fixture.testProjectId)
       expect(fanIn).toBe(3)
       expect(fanInByFile.get('validator.ts')).toBe(fanIn)
       expect(fanInByFile.has('isolated.ts')).toBe(false)
     })
 
     it('resolves @/ and tsconfig paths for CALLS', async () => {
-      await fs.mkdir(path.join(testDir, 'src', 'lib'), { recursive: true })
+      await fs.mkdir(path.join(fixture.testDir, 'src', 'lib'), { recursive: true })
       await fs.writeFile(
-        path.join(testDir, 'tsconfig.json'),
+        path.join(fixture.testDir, 'tsconfig.json'),
         JSON.stringify({
           compilerOptions: {
             baseUrl: '.',
@@ -167,24 +173,27 @@ function checkId(id: string) { return id.length > 0 }
         })
       )
       await fs.writeFile(
-        path.join(testDir, 'src', 'lib', 'util.ts'),
+        path.join(fixture.testDir, 'src', 'lib', 'util.ts'),
         `export function helper() { return 42 }\n`
       )
       await fs.writeFile(
-        path.join(testDir, 'src', 'app.ts'),
+        path.join(fixture.testDir, 'src', 'app.ts'),
         `import { helper } from '@/lib/util'\nexport function main() { return helper() }\n`
       )
 
-      await indexSymbols(testDir, testProjectId)
-      const tr = tracePath(testProjectId, 'helper', { direction: 'inbound', depth: 2 })
+      await indexSymbols(fixture.testDir, fixture.testProjectId)
+      const tr = tracePath(fixture.testProjectId, 'helper', { direction: 'inbound', depth: 2 })
       expect(tr).not.toBeNull()
       expect(tr!.inbound.some((h) => h.symbol.name === 'main')).toBe(true)
     })
 
     it('does not invent symbols from test string fixtures', async () => {
-      await fs.writeFile(path.join(testDir, 'real.ts'), `export function onlyReal() { return 1 }\n`)
       await fs.writeFile(
-        path.join(testDir, 'spec.ts'),
+        path.join(fixture.testDir, 'real.ts'),
+        `export function onlyReal() { return 1 }\n`
+      )
+      await fs.writeFile(
+        path.join(fixture.testDir, 'spec.ts'),
         [
           'const sample = `',
           'export function ghostFn() {}',
@@ -194,10 +203,12 @@ function checkId(id: string) { return id.length > 0 }
         ].join('\n')
       )
 
-      await indexSymbols(testDir, testProjectId)
-      const ghosts = searchSymbols(testProjectId, 'ghostFn')
+      await indexSymbols(fixture.testDir, fixture.testProjectId)
+      const ghosts = searchSymbols(fixture.testProjectId, 'ghostFn')
       expect(ghosts.filter((g) => g.name === 'ghostFn')).toHaveLength(0)
-      expect(searchSymbols(testProjectId, 'onlyReal').some((s) => s.name === 'onlyReal')).toBe(true)
+      expect(
+        searchSymbols(fixture.testProjectId, 'onlyReal').some((s) => s.name === 'onlyReal')
+      ).toBe(true)
     })
   })
 })

@@ -1,24 +1,3 @@
-#!/usr/bin/env node
-
-/**
- * Release Script for prjct-cli
- *
- * Complete release flow:
- * 1. Validate (clean git, on main/release branch)
- * 2. Build (compile ALL TypeScript to dist/)
- * 3. Test (run tests)
- * 4. Version bump (patch/minor/major)
- * 5. Commit + Tag
- * 6. Publish to npm
- *
- * Usage:
- *   node scripts/release.js patch   # 0.29.2 → 0.29.3
- *   node scripts/release.js minor   # 0.29.2 → 0.30.0
- *   node scripts/release.js major   # 0.29.2 → 1.0.0
- *
- * @version 1.0.0
- */
-
 const { execSync } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -67,9 +46,9 @@ function exec(cmd, options = {}) {
 // case once; if it's missing, route npm calls through an interactive
 // login shell so nvm's loader actually fires.
 
-let _npmRunner = null
+const npmRunnerCache = { value: null }
 function npmRunner() {
-  if (_npmRunner) return _npmRunner
+  if (npmRunnerCache.value) return npmRunnerCache.value
   try {
     const out = execSync('command -v npm', {
       encoding: 'utf8',
@@ -77,8 +56,8 @@ function npmRunner() {
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim()
     if (out && !out.startsWith('alias ')) {
-      _npmRunner = (args) => `npm ${args}`
-      return _npmRunner
+      npmRunnerCache.value = (args) => `npm ${args}`
+      return npmRunnerCache.value
     }
   } catch {
     // /bin/sh can't see the shell function — fall through.
@@ -86,8 +65,8 @@ function npmRunner() {
   const shell = process.env.SHELL || '/bin/zsh'
   // -i (interactive) loads .zshrc / .bashrc, where nvm's npm() function
   // is defined; -c executes the command and exits.
-  _npmRunner = (args) => `${shell} -ic 'npm ${args}'`
-  return _npmRunner
+  npmRunnerCache.value = (args) => `${shell} -ic 'npm ${args}'`
+  return npmRunnerCache.value
 }
 
 function execNpm(args, options = {}) {
@@ -198,17 +177,12 @@ function bumpVersion(type) {
 
   const [major, minor, patch] = currentVersion.split('.').map(Number)
 
-  let newVersion
-  switch (type) {
-    case 'major':
-      newVersion = `${major + 1}.0.0`
-      break
-    case 'minor':
-      newVersion = `${major}.${minor + 1}.0`
-      break
-    default:
-      newVersion = `${major}.${minor}.${patch + 1}`
-  }
+  const newVersion =
+    type === 'major'
+      ? `${major + 1}.0.0`
+      : type === 'minor'
+        ? `${major}.${minor + 1}.0`
+        : `${major}.${minor}.${patch + 1}`
 
   pkg.version = newVersion
   fs.writeFileSync(PACKAGE_JSON, `${JSON.stringify(pkg, null, 2)}\n`)

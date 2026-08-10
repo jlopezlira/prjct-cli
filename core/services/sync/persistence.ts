@@ -40,23 +40,21 @@ export async function recordSyncMetrics(
   // Loaded ONCE and reused by the index-stats block below — the second load
   // used to hit right after the sync invalidated the cache, paying a full
   // corpus deserialize twice per sync.
-  let bm25Index: ReturnType<typeof loadBm25Index> = null
-  let originalSize = 0
-  try {
-    bm25Index = loadBm25Index(projectId)
-    if (bm25Index) {
-      for (const doc of Object.values(bm25Index.documents)) {
-        originalSize += doc.length
+  const { bm25Index, originalSize } = (() => {
+    try {
+      const index = loadBm25Index(projectId)
+      const measured = index
+        ? Object.values(index.documents).reduce((total, doc) => total + doc.length, 0)
+        : 0
+      return {
+        bm25Index: index,
+        originalSize: measured || stats.fileCount * DEFAULT_TOKENS_PER_FILE,
       }
+    } catch (error) {
+      log.debug('Could not load BM25 index for metrics', { error: getErrorMessage(error) })
+      return { bm25Index: null, originalSize: stats.fileCount * DEFAULT_TOKENS_PER_FILE }
     }
-  } catch (error) {
-    log.debug('Could not load BM25 index for metrics', { error: getErrorMessage(error) })
-  }
-
-  // Fallback: if no index yet (first sync before indexing), estimate from file count.
-  if (originalSize === 0) {
-    originalSize = stats.fileCount * DEFAULT_TOKENS_PER_FILE
-  }
+  })()
 
   // Skills are loaded natively by Claude Code — no agent files to measure.
   const filteredSize = 0
@@ -86,13 +84,12 @@ export async function recordSyncMetrics(
   } catch (error) {
     log.debug('Failed to recompute velocity', { error: getErrorMessage(error) })
   }
-  let developerSnapshotCaptured = false
-  try {
-    const { captureDeveloperSnapshot } = await import('../developer-evolution')
-    developerSnapshotCaptured = await captureDeveloperSnapshot(projectId)
-  } catch (error) {
-    log.debug('Failed to capture dev snapshot', { error: getErrorMessage(error) })
-  }
+  const developerSnapshotCaptured = await import('../developer-evolution')
+    .then(({ captureDeveloperSnapshot }) => captureDeveloperSnapshot(projectId))
+    .catch((error) => {
+      log.debug('Failed to capture dev snapshot', { error: getErrorMessage(error) })
+      return false
+    })
 
   const indexes: NonNullable<SyncMetrics['indexes']> = {}
   try {
@@ -163,33 +160,8 @@ export async function saveDraftAnalysis(
       confidence?: number
     }
 
-    let patterns: CodePattern[] = []
-    let antiPatterns: AntiPattern[] = []
-    let feedback: { patternsDiscovered: string[]; knownGotchas: string[] } | undefined
-
-    try {
-      feedback = await stateStorage.getAggregatedFeedback(projectId)
-      if (feedback.patternsDiscovered.length > 0) {
-        patterns = feedback.patternsDiscovered.map((p) => ({
-          name: p,
-          description: `Discovered during task execution: ${p}`,
-          source: 'feedback',
-          confidence: 0.74,
-        }))
-      }
-      if (feedback.knownGotchas.length > 0) {
-        antiPatterns = feedback.knownGotchas.map((g) => ({
-          issue: g,
-          file: 'multiple',
-          suggestion: `Recurring issue reported across tasks: ${g}`,
-          source: 'feedback',
-          severity: 'medium',
-          confidence: 0.7,
-        }))
-      }
-    } catch {
-      // Feedback aggregation failure shouldn't block analysis.
-    }
+    const feedback: { patternsDiscovered: string[]; knownGotchas: string[] } | undefined =
+      await stateStorage.getAggregatedFeedback(projectId).catch(() => undefined)
 
     // Refresh the skill index alongside analysis — both need projectPath and
     // both are per-sync catalog rebuilds (best-effort; never blocks the sync).
@@ -209,17 +181,14 @@ export async function saveDraftAnalysis(
       context7Verified,
     })
 
-    patterns = extracted.patterns
-    antiPatterns = extracted.antiPatterns
-
     await analysisStorage.saveDraft(projectId, {
       projectId,
       languages: stats.languages,
       frameworks: stats.frameworks,
       configFiles: [],
       fileCount: stats.fileCount,
-      patterns,
-      antiPatterns,
+      patterns: extracted.patterns as CodePattern[],
+      antiPatterns: extracted.antiPatterns as AntiPattern[],
       analyzedAt: dateHelper.getTimestamp(),
       status: 'draft',
       commitHash: commitHash ?? undefined,

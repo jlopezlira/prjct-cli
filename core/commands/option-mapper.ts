@@ -28,16 +28,16 @@ export function mapOptions(
   for (const key of schema.booleans ?? []) {
     result[key] = pick(key) === true
   }
-  for (const key of schema.strings ?? []) {
-    const v = pick(key)
-    result[key] = v != null && v !== false && v !== '' ? String(v) : undefined
+  for (const key2 of schema.strings ?? []) {
+    const v = pick(key2)
+    result[key2] = v != null && v !== false && v !== '' ? String(v) : undefined
   }
-  for (const key of schema.numbers ?? []) {
-    const v = pick(key)
+  for (const key3 of schema.numbers ?? []) {
+    const v = pick(key3)
     const n = v != null && v !== false && v !== '' ? Number(v) : Number.NaN
     // Non-numeric input maps to undefined (flag ignored), never NaN —
     // handlers must not have to NaN-guard every numeric option.
-    result[key] = Number.isNaN(n) ? undefined : n
+    result[key3] = Number.isNaN(n) ? undefined : n
   }
   return result
 }
