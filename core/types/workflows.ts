@@ -17,7 +17,6 @@ export type ProjectType =
 export type AIAgent =
   | 'claude'
   | 'cursor'
-  | 'windsurf'
   | 'copilot'
   | 'gemini'
   | 'codex'

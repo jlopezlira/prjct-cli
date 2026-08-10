@@ -14,8 +14,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { getTemplateContent } from '../agentic/template-loader'
-import { buildGrokSkillContent } from '../infrastructure/grok-skill'
+import { buildGrokSkillContent, getGrokSkillTemplate } from '../infrastructure/grok-skill'
 import { resolveUserPath } from '../infrastructure/user-home'
 import { getErrorMessage } from '../types/fs'
 import log from './logger'
@@ -65,10 +64,6 @@ Follow the host contract printed by the CLI:
 `
 }
 
-async function loadSkillTemplate(): Promise<string | null> {
-  return getTemplateContent('grok/SKILL.md') ?? getTemplateContent('codex/SKILL.md')
-}
-
 async function writeIfChanged(filePath: string, content: string): Promise<boolean> {
   try {
     const existing = await fs.readFile(filePath, 'utf-8')
@@ -91,7 +86,7 @@ export async function installGrokPlugin(pluginRoot = getGrokPluginRoot()): Promi
   files: string[]
 }> {
   try {
-    const template = await loadSkillTemplate()
+    const template = getGrokSkillTemplate()
     if (!template) {
       log.warn('Grok plugin: skill template missing')
       return { success: false, path: pluginRoot, changed: false, files: [] }

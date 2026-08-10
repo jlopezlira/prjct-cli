@@ -19,10 +19,7 @@ import type {
 } from '../types/infrastructure'
 import { fileExists } from '../utils/file-helper'
 import { getActiveProvider } from './ai-provider'
-import {
-  installDocs as installDocsImpl,
-  installGlobalConfig as installGlobalConfigImpl,
-} from './command-installer/global-config'
+import { installGlobalConfig as installGlobalConfigImpl } from './command-installer/global-config'
 import { resolveUserHome, resolveUserPath } from './user-home'
 
 // Re-export the installGlobalConfig used by external callers (e.g. update.ts).
@@ -249,10 +246,6 @@ export class CommandInstaller {
     }
 
     return { cleaned }
-  }
-
-  async installDocs(): Promise<{ success: boolean; error?: string }> {
-    return installDocsImpl()
   }
 }
 

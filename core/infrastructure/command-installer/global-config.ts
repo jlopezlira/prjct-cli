@@ -1,6 +1,5 @@
 /**
- * Install / update the global AI agent configuration (CLAUDE.md / GEMINI.md)
- * and the bundled documentation files in ~/.prjct-cli/docs/.
+ * Install / update the global AI agent configuration (CLAUDE.md / GEMINI.md).
  *
  * Extracted from command-installer.ts to keep that facade focused on
  * commands. The CLAUDE.md content is inlined here (post-template
@@ -9,11 +8,10 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { getTemplateContent, listTemplates } from '../../agentic/template-loader'
+import { getTemplateContent } from '../../agentic/template-loader'
 import { getErrorMessage, isNotFoundError } from '../../types/fs'
 import type { GlobalConfigResult } from '../../types/infrastructure'
 import { mergeWithMarkers } from '../ide-project-installer'
-import pathManager from '../path-manager'
 
 const GLOBAL_CLAUDE_MD_CONTENT = `<!-- prjct:start - DO NOT REMOVE THIS MARKER -->
 # p/ — Project knowledge layer
@@ -50,46 +48,6 @@ When you complete substantive work — analysis, decision, learning, gotcha — 
 **Auto-managed by prjct-cli** | https://prjct.app
 <!-- prjct:end - DO NOT REMOVE THIS MARKER -->
 `
-
-export async function installDocs(): Promise<{ success: boolean; error?: string }> {
-  try {
-    const docsDir = pathManager.getDocsPath()
-    await fs.mkdir(docsDir, { recursive: true })
-
-    // Try bundled templates first
-    const docKeys = listTemplates('global/docs/')
-    if (docKeys.length > 0) {
-      for (const key of docKeys) {
-        if (key.endsWith('.md')) {
-          const content = getTemplateContent(key)
-          if (content) {
-            await fs.writeFile(path.join(docsDir, path.basename(key)), content, 'utf-8')
-          }
-        }
-      }
-      return { success: true }
-    }
-
-    // Fall back to filesystem
-    const { PACKAGE_ROOT } = require('../../utils/version')
-    const templateDocsDir = path.join(PACKAGE_ROOT, 'templates/global/docs')
-    try {
-      const docFiles = await fs.readdir(templateDocsDir)
-      for (const file of docFiles) {
-        if (file.endsWith('.md')) {
-          const content = await fs.readFile(path.join(templateDocsDir, file), 'utf-8')
-          await fs.writeFile(path.join(docsDir, file), content, 'utf-8')
-        }
-      }
-    } catch {
-      // No docs directory — that's fine
-    }
-
-    return { success: true }
-  } catch (error) {
-    return { success: false, error: getErrorMessage(error) }
-  }
-}
 
 export async function installGlobalConfig(): Promise<GlobalConfigResult> {
   const aiProvider = require('../ai-provider')

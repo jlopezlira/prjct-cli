@@ -67,8 +67,8 @@ export interface HarnessSurfaceEntry {
 }
 
 /**
- * Benchmark-tier harnesses only (2026-07 focus). Windsurf and long-tail
- * runtimes stay on AGENTS.md + MCP portable baseline via the registry.
+ * Benchmark-tier harnesses only. Long-tail runtimes stay on AGENTS.md + MCP
+ * portable baseline via the registry.
  */
 export const BENCHMARK_HARNESS_SURFACES: readonly HarnessSurfaceEntry[] = [
   {

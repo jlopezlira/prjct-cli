@@ -124,10 +124,9 @@ export const buildGeminiConfig = (): string => buildGlobalConfig('Gemini')
 export const buildAntigravityConfig = (): string => buildGlobalConfig('Antigravity')
 
 /**
- * IDE rule pointers (Cursor `.mdc`; Windsurf `.md` = legacy residual only).
- * Clean-repo doctrine: these carry the SAME minimal pointer as AGENTS.md/
- * CLAUDE.md (MINIMAL_ROUTING_BODY, one source) — never a ruleset. Only the
- * per-rig frontmatter differs. Do not expand Windsurf-specific surfaces.
+ * IDE rule pointers. Clean-repo doctrine: these carry the SAME minimal
+ * pointer as AGENTS.md/CLAUDE.md (MINIMAL_ROUTING_BODY, one source) — never a
+ * ruleset. Only the per-rig frontmatter differs.
  */
 function buildIdePointer(frontmatter: string): string {
   return `${[
@@ -148,7 +147,21 @@ export const buildCursorRule = (): string =>
     'description: "prjct — pull project memory + workflow on demand"\nalwaysApply: true'
   )
 
-export const buildWindsurfRule = (): string =>
-  buildIdePointer(
-    'trigger: always_on\ndescription: "prjct — pull project memory + workflow on demand"'
-  )
+/**
+ * Runtime-only editor surfaces. Consumers request a logical template key;
+ * keeping the key→builder relationship here prevents physical template copies
+ * and keeps routing beside the content's single source of truth.
+ */
+export const EDITOR_SURFACE_BUILDERS: Readonly<Record<string, () => string>> = {
+  'codex/SKILL.md': buildCodexSkill,
+  'antigravity/SKILL.md': buildAntigravitySkill,
+  'global/GEMINI.md': buildGeminiConfig,
+  'global/ANTIGRAVITY.md': buildAntigravityConfig,
+  'global/CURSOR.mdc': buildCursorRule,
+}
+
+export const EDITOR_SURFACE_PATHS = Object.freeze(Object.keys(EDITOR_SURFACE_BUILDERS))
+
+export function buildEditorSurface(relativePath: string): string | null {
+  return EDITOR_SURFACE_BUILDERS[relativePath]?.() ?? null
+}

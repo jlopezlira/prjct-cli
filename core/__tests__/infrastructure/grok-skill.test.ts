@@ -9,8 +9,10 @@ import path from 'node:path'
 import {
   buildGrokSkillContent,
   getGrokSkillInstallPath,
+  getGrokSkillTemplate,
   installGrokSkill,
 } from '../../infrastructure/grok-skill'
+import { buildCodexSkill } from '../../services/skill-generator/editor-surfaces'
 
 const PREV_HOME = process.env.HOME
 const PREV_TEST = process.env.PRJCT_TEST_MODE
@@ -32,6 +34,10 @@ afterEach(async () => {
 })
 
 describe('installGrokSkill', () => {
+  it('reuses the canonical compact skill instead of carrying a Grok copy', () => {
+    expect(getGrokSkillTemplate()).toBe(buildCodexSkill())
+  })
+
   it('creates SKILL.md under the Grok skills path', async () => {
     const r = await installGrokSkill()
     expect(r.success).toBe(true)

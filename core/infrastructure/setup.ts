@@ -196,9 +196,6 @@ export async function run(): Promise<SetupResults> {
           }
         }
 
-        // Install documentation files
-        await installer.installDocs()
-
         // Install status line (Claude only)
         await installStatusLine()
 

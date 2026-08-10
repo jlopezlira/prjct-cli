@@ -1,9 +1,8 @@
 /**
  * Provider-status rendering shared by the two `version` surfaces
  * (`core/index.ts` displayVersion and the bin/prjct.ts version branch).
- * Both used to hand-roll the same glyph/branch pattern per provider and
- * had already drifted (one grew Antigravity, the other Windsurf) — the
- * line format lives here once; call sites supply the data.
+ * Both used to hand-roll the same glyph/branch pattern per provider and had
+ * already drifted — the line format lives here once; call sites supply data.
  */
 
 import chalk from 'chalk'

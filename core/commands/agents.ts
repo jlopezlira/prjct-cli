@@ -150,7 +150,7 @@ function formatMarkdown(
     '- `good`: AGENTS.md plus MCP-capable runtime.',
     '- `baseline`: repo instructions only; agents can still run `prjct --md`.',
     '- `hosted`: repo instructions are the portable layer; external platform config may be manual.',
-    '- `manual` / legacy: residual support only (e.g. Windsurf).',
+    '- `manual`: a portable standard exists, but prjct cannot configure it automatically.',
     '',
     formatHarnessSurfacesMarkdown({
       only: statuses

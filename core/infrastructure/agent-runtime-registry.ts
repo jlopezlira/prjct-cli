@@ -19,7 +19,6 @@ export type AgentRuntimeId =
   | 'goose'
   | 'aider'
   | 'cursor'
-  | 'windsurf'
   | 'cline'
   | 'roo-code'
   | 'continue'
@@ -55,8 +54,8 @@ export interface AgentRuntimeDefinition {
   id: AgentRuntimeId
   displayName: string
   kind: AgentRuntimeKind
-  /** stable = current benchmark focus; legacy = keep working but do not prioritize. */
-  status: 'stable' | 'emerging' | 'hosted' | 'legacy'
+  /** stable = current benchmark focus; emerging = active evaluation. */
+  status: 'stable' | 'emerging' | 'hosted'
   detectsBy?: {
     homeDirs?: string[]
     projectFiles?: string[]
@@ -396,31 +395,6 @@ export const AGENT_RUNTIME_REGISTRY: readonly AgentRuntimeDefinition[] = [
     },
     notes:
       'Benchmark-tier AI IDE (2026-07): agent mode + CLI. Rules under .cursor/rules; prjct install writes ~/.cursor/hooks.json.',
-  },
-  {
-    id: 'windsurf',
-    displayName: 'Windsurf',
-    kind: 'ide',
-    status: 'legacy',
-    detectsBy: { projectDirs: ['.windsurf'], projectFiles: ['.windsurfrules'] },
-    contextFiles: ['AGENTS.md', '.windsurf/rules/prjct.md'],
-    projectRuleTargets: [
-      {
-        relativePath: '.windsurf/rules/prjct.md',
-        templateKey: 'global/WINDSURF.md',
-        detectPath: '.windsurf',
-      },
-    ],
-    supports: {
-      agentsMd: true,
-      mcp: true,
-      skills: false,
-      hooks: false,
-      acp: false,
-      projectRules: true,
-    },
-    notes:
-      'LEGACY (2026-07): Windsurf is no longer a product focus. Keep AGENTS.md + optional .windsurf/rules for residual installs; do not expand surface area. Prefer Cursor, Claude Code, Codex, Gemini CLI, OpenCode, Cline.',
   },
   {
     id: 'cline',
@@ -768,7 +742,6 @@ const FULL_SUPPORT_RUNTIME_IDS = new Set<AgentRuntimeId>([
 
 function supportLevelFor(runtime: AgentRuntimeDefinition): RuntimeSupportLevel {
   if (runtime.status === 'hosted') return 'hosted'
-  if (runtime.status === 'legacy') return 'manual'
   if (FULL_SUPPORT_RUNTIME_IDS.has(runtime.id)) return 'full'
   if (runtime.supports.agentsMd && runtime.supports.mcp) return 'good'
   if (runtime.supports.agentsMd) return 'baseline'

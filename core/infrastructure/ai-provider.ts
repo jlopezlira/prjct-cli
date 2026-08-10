@@ -6,14 +6,13 @@
  * - Gemini CLI (CLI): ~/.gemini/, GEMINI.md, .toml commands
  * - OpenAI Codex (CLI): ~/.codex/, AGENTS.md
  * - Cursor IDE (GUI): .cursor/ (project-level), .mdc rules
- * - Windsurf IDE (GUI, LEGACY): .windsurf/ residual support only — do not expand
  *
  * Key differences:
  * - CLI providers (Claude/Gemini/Codex) have global config directories
- * - Cursor (and legacy Windsurf) are project-level only
+ * - Cursor is project-level only
  *
- * Benchmark focus (2026-07): Claude Code, Codex CLI, Gemini CLI, OpenCode,
- * Cursor, Cline, Grok Build — not Windsurf.
+ * Benchmark focus (2026-08): Claude Code, Codex CLI, Gemini CLI, OpenCode,
+ * Cursor, Cline, Grok Build, Pi, and Kimi CLI.
  *
  * @see https://geminicli.com/docs/cli/gemini-md/
  * @see https://geminicli.com/docs/cli/skills/
@@ -170,36 +169,6 @@ export const CursorProvider: AIProviderConfig = {
 }
 
 /**
- * Windsurf IDE — LEGACY residual support (product no longer a focus, 2026-07).
- * Keep install paths working for existing users; do not add new Windsurf-only
- * surfaces. Prefer Cursor / Claude Code / Codex / Gemini CLI / OpenCode / Cline.
- */
-const WindsurfProvider: AIProviderConfig = {
-  name: 'windsurf',
-  displayName: 'Windsurf IDE (legacy)',
-  cliCommand: null, // Not a CLI - GUI app
-  configDir: null, // No global config directory
-  contextFile: 'prjct.md', // Uses .md format (not .mdc)
-  skillsDir: null, // No skills directory
-  commandsDir: '.windsurf/workflows', // Windsurf uses "workflows" not "commands"
-  rulesDir: '.windsurf/rules',
-  commandFormat: 'md',
-  settingsFile: null,
-  projectSettingsFile: null,
-  ignoreFile: '.windsurfignore',
-  isProjectLevel: true, // Config is project-level only
-  websiteUrl: 'https://windsurf.com',
-  docsUrl: 'https://docs.windsurf.com',
-  get defaultModel() {
-    return getDefaultModel(this.name)
-  },
-  get supportedModels() {
-    return getSupportedModels(this.name)
-  },
-  minCliVersion: null,
-}
-
-/**
  * OpenAI Codex CLI provider configuration
  *
  * Agent-first CLI that uses AGENTS.md for project context.
@@ -242,7 +211,6 @@ export const Providers: Record<AIProviderName, AIProviderConfig> = {
   gemini: GeminiProvider,
   cursor: CursorProvider,
   antigravity: AntigravityProvider,
-  windsurf: WindsurfProvider,
   codex: CodexProvider,
 }
 
@@ -278,9 +246,8 @@ async function getCliVersion(command: string): Promise<string | null> {
 
 /**
  * Detect if a specific CLI-based provider is installed.
- * Cursor and Windsurf are project-level IDEs (no CLI binary), so this
- * returns `installed: false` for them and project-level detection lives
- * elsewhere.
+ * Cursor is a project-level IDE (no CLI binary), so this returns
+ * `installed: false` and project-level detection lives elsewhere.
  */
 export async function detectProvider(provider: AIProviderName): Promise<ProviderDetectionResult> {
   const config = Providers[provider]
@@ -360,7 +327,7 @@ export async function detectAllProviders(refresh = false): Promise<{
  * Priority:
  * 1. Check project config for saved provider preference
  * 2. Auto-detect single installed provider
- * 3. Prefer Claude when several legacy CLI providers are installed
+ * 3. Prefer Claude when several CLI providers are installed
  */
 export async function getActiveProvider(
   projectProvider?: AIProviderName
@@ -403,7 +370,6 @@ export function getProviderBranding(provider: AIProviderName): ProviderBranding 
     gemini: '⚡ prjct + Gemini',
     cursor: '⚡ prjct + Cursor',
     antigravity: '⚡ prjct + Antigravity',
-    windsurf: '⚡ prjct + Windsurf',
     codex: '⚡ prjct + Codex',
   }
 

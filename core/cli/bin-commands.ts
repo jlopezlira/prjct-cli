@@ -622,8 +622,6 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
       geminiConfigured,
       cursorDetected,
       cursorConfigured,
-      windsurfDetected,
-      windsurfConfigured,
       codexMcpConfigured,
       agentsMdConfigured,
     ] = await Promise.all([
@@ -631,8 +629,6 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
       fileExists(path.join(home, '.gemini', 'GEMINI.md')),
       fileExists(path.join(cwd, '.cursor')),
       fileExists(path.join(cwd, '.cursor', 'rules', 'prjct.mdc')),
-      fileExists(path.join(cwd, '.windsurf')),
-      fileExists(path.join(cwd, '.windsurf', 'rules', 'prjct.md')),
       fileExists(path.join(home, '.codex', 'config.toml')),
       fileExists(path.join(cwd, 'AGENTS.md')),
     ])
@@ -701,15 +697,6 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
         '○ not detected'
       )
     )
-    console.log(
-      providerStatusLine(
-        'Windsurf IDE',
-        windsurfDetected ? (windsurfConfigured ? 'ready' : 'detected') : 'missing',
-        windsurfDetected ? chalk.dim(' (project)') : '',
-        '○ not detected'
-      )
-    )
-
     console.log(`
 ${chalk.dim("Run 'prjct start' to configure global/runtime adapters")}
 ${chalk.dim("Run 'prjct init' or 'prjct sync' to refresh AGENTS.md and project-level rules")}

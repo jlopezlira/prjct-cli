@@ -29,7 +29,7 @@ describe('writeProjectAgentSurfaces', () => {
   })
 
   it('is still a no-op even when agents are selected but not explicit', async () => {
-    const result = await writeProjectAgentSurfaces(dir, { agents: ['cursor', 'windsurf'] })
+    const result = await writeProjectAgentSurfaces(dir, { agents: ['cursor', 'opencode'] })
 
     expect(result.ideRules).toEqual([])
     expect(await fs.readdir(dir)).toEqual([])
@@ -60,18 +60,15 @@ describe('writeProjectAgentSurfaces', () => {
   it('writes known project rule adapters as minimal pointers when selected (explicit)', async () => {
     const result = await writeProjectAgentSurfaces(dir, {
       explicit: true,
-      agents: ['cursor', 'windsurf'],
+      agents: ['cursor'],
     })
 
-    expect(result.ideRules).toEqual(['.cursor/rules/prjct.mdc', '.windsurf/rules/prjct.md'])
+    expect(result.ideRules).toEqual(['.cursor/rules/prjct.mdc'])
     const cursor = await fs.readFile(path.join(dir, '.cursor', 'rules', 'prjct.mdc'), 'utf-8')
-    const windsurf = await fs.readFile(path.join(dir, '.windsurf', 'rules', 'prjct.md'), 'utf-8')
-    for (const body of [cursor, windsurf]) {
-      expect(body).toContain('prjct work --md')
-      expect(body).toContain('This file holds no rules')
-      expect(body).not.toContain('RAG-backed project memory harness')
-      expect(body).not.toContain('Pull only relevant context')
-    }
+    expect(cursor).toContain('prjct work --md')
+    expect(cursor).toContain('This file holds no rules')
+    expect(cursor).not.toContain('RAG-backed project memory harness')
+    expect(cursor).not.toContain('Pull only relevant context')
   })
 
   it('does not invent project files for runtimes covered by AGENTS.md only (explicit)', async () => {

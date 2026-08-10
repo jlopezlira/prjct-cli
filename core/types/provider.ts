@@ -5,22 +5,19 @@
  * - Claude Code (CLI)
  * - Gemini CLI (CLI)
  * - Cursor IDE (GUI, project-level config)
- * - Windsurf IDE (GUI, project-level config)
  *
  * Key discovery: Skills use identical SKILL.md format for CLI providers.
  * Cursor uses .mdc files with frontmatter for rules.
- * Windsurf uses .md files with YAML frontmatter for rules.
  *
  * @see https://geminicli.com/docs/cli/gemini-md/
  * @see https://geminicli.com/docs/cli/skills/
  * @see https://cursor.com/docs/context/rules
- * @see https://docs.windsurf.com/windsurf/cascade/memories
  */
 
 /**
  * Supported AI provider names
  */
-export type AIProviderName = 'claude' | 'gemini' | 'cursor' | 'antigravity' | 'windsurf' | 'codex'
+export type AIProviderName = 'claude' | 'gemini' | 'cursor' | 'antigravity' | 'codex'
 
 /**
  * Command format for each provider
@@ -126,20 +123,6 @@ export interface ProviderSelectionResult {
  */
 export interface CursorProjectDetection {
   /** Whether .cursor/ directory exists in project */
-  detected: boolean
-
-  /** Whether prjct router is installed */
-  routerInstalled: boolean
-
-  /** Project root path */
-  projectRoot?: string
-}
-
-/**
- * Result of Windsurf project detection
- */
-export interface WindsurfProjectDetection {
-  /** Whether .windsurf/ directory exists in project */
   detected: boolean
 
   /** Whether prjct router is installed */

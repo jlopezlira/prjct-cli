@@ -25,8 +25,8 @@ export type AgentCapabilityClass = 'frontier' | 'balanced' | 'fast'
 /**
  * Per-provider model for each capability class, ordered best→fallback for
  * in-provider graceful degradation. THE single source for which models a rig
- * has. Multi-model IDEs (cursor/antigravity; windsurf = legacy residual) pick
- * the model in-app, so they have no fixed map (model = null / supported = []).
+ * has. Multi-model IDEs (cursor/antigravity) pick the model in-app, so they
+ * have no fixed map (model = null / supported = []).
  *
  * Capability chains ordered best→fallback for 2026-07 agent CLIs:
  * Claude Code, Codex CLI (TB leader), Gemini CLI, Grok Build, Kimi CLI.

@@ -2,7 +2,6 @@ import { constants as fsConstants } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { getTemplateContent } from '../agentic/template-loader'
 import { CONTEXT7_VERIFY_TTL_MS } from '../constants/timings'
 import { resolveCliHome } from '../infrastructure/cli-home'
 import { getErrorMessage, isNotFoundError } from '../types/fs'
@@ -58,16 +57,6 @@ async function writePersistedVerify(
   }
 }
 
-interface Context7TemplateConfig {
-  mcpServers?: {
-    context7?: {
-      command?: string
-      args?: string[]
-      description?: string
-    }
-  }
-}
-
 const CONTEXT7_DEFAULT = MCP_SERVER_PRESETS.context7
 let cachedVerify: { at: number; provider: string; status: Context7Status } | null = null
 
@@ -89,21 +78,6 @@ const CONTEXT7_SMOKE_HOME_RELATIVE_PATH_DIRS = [
   ['.rtx', 'shims'],
   ['.npm-global', 'bin'],
 ]
-
-function parseTemplateConfig(): Context7TemplateConfig {
-  const raw = getTemplateContent('mcp-config.json')
-  if (!raw) return { mcpServers: { context7: CONTEXT7_DEFAULT } }
-  try {
-    return JSON.parse(raw) as Context7TemplateConfig
-  } catch {
-    return { mcpServers: { context7: CONTEXT7_DEFAULT } }
-  }
-}
-
-function getContext7Config() {
-  const template = parseTemplateConfig()
-  return template.mcpServers?.context7 || CONTEXT7_DEFAULT
-}
 
 async function listChildDirs(parent: string): Promise<string[]> {
   try {
@@ -204,7 +178,7 @@ async function readConfig(filePath: string): Promise<Record<string, unknown>> {
 async function runSmokeCheck(): Promise<void> {
   if (process.env.PRJCT_SKIP_CONTEXT7_SMOKE === '1' || process.env.NODE_ENV === 'test') return
 
-  const cfg = getContext7Config()
+  const cfg = CONTEXT7_DEFAULT
   const args = [...(cfg.args || []), '--help']
   const smokePath = await buildContext7SmokePath()
   const command = await resolveExecutable(cfg.command || 'npx', smokePath)
@@ -242,7 +216,7 @@ class Context7Service {
       unknown
     >
 
-    const desired = getContext7Config()
+    const desired = CONTEXT7_DEFAULT
     const current = mcpServers.context7
     // Skip the write — and the verify-cache invalidation — when the existing
     // entry already matches. Avoids invalidating the persisted verify cache
