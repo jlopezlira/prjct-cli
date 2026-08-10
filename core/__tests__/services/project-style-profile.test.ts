@@ -126,4 +126,17 @@ describe('project-style-profile', () => {
     expect(snap.conventionCount).toBe(0)
     expect(snap.payload.stack.ecosystem).toBe('JavaScript')
   })
+
+  test('recognizes split MCP v2 packages without duplicate library labels', () => {
+    const snap = buildProjectStyleSnapshot({
+      stats: baseStats,
+      stack: emptyStack,
+      packageDeps: {
+        '@modelcontextprotocol/client': '2.0.0',
+        '@modelcontextprotocol/server': '2.0.0',
+      },
+    })
+
+    expect(snap.payload.stack.keyLibraries.filter((name) => name === 'MCP SDK')).toHaveLength(1)
+  })
 })

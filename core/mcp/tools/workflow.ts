@@ -3,8 +3,7 @@
  *
  * Wraps custom-workflow-storage and workflow-rule-storage.
  */
-
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { customWorkflowStorage } from '../../storage/custom-workflow-storage'
 import { workflowRuleStorage } from '../../storage/workflow-rule-storage'
@@ -18,12 +17,15 @@ type S = any
 export function registerWorkflowTools(server: McpServer) {
   const s: S = server
 
-  s.tool(
+  s.registerTool(
     'prjct_workflow_rules',
-    'The gates/hooks/steps registered for a command (task, ship, …). Check before running a lifecycle verb so a gate never surprises you mid-action.',
     {
-      projectPath: optionalProjectPath,
-      command: z.string().describe('Command name (task, done, ship, sync, etc.)'),
+      description:
+        'The gates/hooks/steps registered for a command (task, ship, …). Check before running a lifecycle verb so a gate never surprises you mid-action.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        command: z.string().describe('Command name (task, done, ship, sync, etc.)'),
+      }),
     },
     safeMcpCall('prjct_workflow_rules', async (args: { projectPath: string; command: string }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -55,11 +57,14 @@ export function registerWorkflowTools(server: McpServer) {
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_workflow_list',
-    'Every workflow this project registered (built-in + custom). Use to discover what `prjct workflow run <name>` can execute here.',
     {
-      projectPath: optionalProjectPath,
+      description:
+        'Every workflow this project registered (built-in + custom). Use to discover what `prjct workflow run <name>` can execute here.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+      }),
     },
     safeMcpCall('prjct_workflow_list', async (args: { projectPath: string }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -83,11 +88,14 @@ export function registerWorkflowTools(server: McpServer) {
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_workflow_status',
-    'Where the active work cycle sits in its workflow/gates (state + rules currently in force). Read when deciding whether done/ship is allowed next.',
     {
-      projectPath: optionalProjectPath,
+      description:
+        'Where the active work cycle sits in its workflow/gates (state + rules currently in force). Read when deciding whether done/ship is allowed next.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+      }),
     },
     safeMcpCall('prjct_workflow_status', async (args: { projectPath: string }) => {
       const projectId = await resolveProjectId(args.projectPath)

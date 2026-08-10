@@ -12,8 +12,7 @@
  * them (intent recognition) so a fresh Claude session in the desktop
  * app routes feature/spec talk to the right tool.
  */
-
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { renderAuditDispatch, selectReviewers } from '../../services/spec-audit-dispatch'
 import { specService } from '../../services/spec-service'
@@ -36,30 +35,33 @@ type S = any
 export function registerSpecTools(server: McpServer) {
   const s: S = server
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_create',
-    'Draft a spec when the user frames a feature/fix/initiative WITH goals or stakes (e.g. "rate limiting on auth", "fix onboarding"). Fields default empty — fill them via `prjct_spec_update`. Skip for routine work (single-file fix, doc tweak, capture); use `prjct_mem_save` with type="inbox" or the CLI `prjct capture` instead.',
     {
-      projectPath: optionalProjectPath,
-      title: z.string().describe("One-line title (what you'd say to a coworker walking by)"),
-      goal: z.string().describe('What success looks like, 1-3 sentences. Concrete, observable.'),
-      eli10: z.string().optional().describe('Plain English a 16-year-old follows, 2-4 sentences'),
-      stakes: z.string().optional().describe('What breaks if we ship the wrong thing'),
-      acceptance_criteria: z
-        .array(z.string())
-        .optional()
-        .describe('Testable, observable list. Each item ends in a verifiable claim.'),
-      scope: z.array(z.string()).optional().describe("What's IN — file paths, modules, surfaces"),
-      out_of_scope: z.array(z.string()).optional().describe("What's OUT — anti-creep shield"),
-      risks: z
-        .array(z.object({ risk: z.string(), mitigation: z.string() }))
-        .optional()
-        .describe('Each risk has a mitigation; a risk without one is just a complaint'),
-      test_plan: z.array(z.string()).optional().describe('How you prove acceptance criteria'),
-      tags: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe('Key:value tags (e.g. {domain: "auth", priority: "high"})'),
+      description:
+        'Draft a spec when the user frames a feature/fix/initiative WITH goals or stakes (e.g. "rate limiting on auth", "fix onboarding"). Fields default empty — fill them via `prjct_spec_update`. Skip for routine work (single-file fix, doc tweak, capture); use `prjct_mem_save` with type="inbox" or the CLI `prjct capture` instead.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        title: z.string().describe("One-line title (what you'd say to a coworker walking by)"),
+        goal: z.string().describe('What success looks like, 1-3 sentences. Concrete, observable.'),
+        eli10: z.string().optional().describe('Plain English a 16-year-old follows, 2-4 sentences'),
+        stakes: z.string().optional().describe('What breaks if we ship the wrong thing'),
+        acceptance_criteria: z
+          .array(z.string())
+          .optional()
+          .describe('Testable, observable list. Each item ends in a verifiable claim.'),
+        scope: z.array(z.string()).optional().describe("What's IN — file paths, modules, surfaces"),
+        out_of_scope: z.array(z.string()).optional().describe("What's OUT — anti-creep shield"),
+        risks: z
+          .array(z.object({ risk: z.string(), mitigation: z.string() }))
+          .optional()
+          .describe('Each risk has a mitigation; a risk without one is just a complaint'),
+        test_plan: z.array(z.string()).optional().describe('How you prove acceptance criteria'),
+        tags: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe('Key:value tags (e.g. {domain: "auth", priority: "high"})'),
+      }),
     },
     safeMcpCall(
       'prjct_spec_create',
@@ -105,16 +107,19 @@ export function registerSpecTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_list',
-    'List specs in this project. Use to check what specs exist before drafting a new one (avoid duplicates) or to find the right spec to link a task to.',
     {
-      projectPath: optionalProjectPath,
-      status: z
-        .enum(SPEC_STATUSES)
-        .optional()
-        .describe('Filter by status: draft|reviewed|in_progress|shipped|archived'),
-      includeArchived: z.boolean().optional().describe('Include archived specs (default: false)'),
+      description:
+        'List specs in this project. Use to check what specs exist before drafting a new one (avoid duplicates) or to find the right spec to link a task to.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        status: z
+          .enum(SPEC_STATUSES)
+          .optional()
+          .describe('Filter by status: draft|reviewed|in_progress|shipped|archived'),
+        includeArchived: z.boolean().optional().describe('Include archived specs (default: false)'),
+      }),
     },
     safeMcpCall(
       'prjct_spec_list',
@@ -148,12 +153,15 @@ export function registerSpecTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_get',
-    'Fetch one spec by id, including all structured fields (goal, acceptance criteria, scope, risks, reviews, linked tasks).',
     {
-      projectPath: optionalProjectPath,
-      id: z.string().describe('Spec id'),
+      description:
+        'Fetch one spec by id, including all structured fields (goal, acceptance criteria, scope, risks, reviews, linked tasks).',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id'),
+      }),
     },
     safeMcpCall('prjct_spec_get', async (args: { projectPath: string; id: string }) => {
       const spec = await specService.get(resolveProjectPath(args.projectPath), args.id)
@@ -166,26 +174,29 @@ export function registerSpecTools(server: McpServer) {
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_update',
-    "Replace a spec's structured content. Pass the FULL content object (this is a replace, not a merge) — when filling in acceptance_criteria for the first time, fetch with `prjct_spec_get` first and merge in your changes.",
     {
-      projectPath: optionalProjectPath,
-      id: z.string().describe('Spec id'),
-      content: z
-        .object({
-          goal: z.string(),
-          eli10: z.string().optional(),
-          stakes: z.string().optional(),
-          acceptance_criteria: z.array(z.string()).optional(),
-          scope: z.array(z.string()).optional(),
-          out_of_scope: z.array(z.string()).optional(),
-          risks: z.array(z.object({ risk: z.string(), mitigation: z.string() })).optional(),
-          test_plan: z.array(z.string()).optional(),
-          notes: z.string().optional(),
-          linked_tasks: z.array(z.string()).optional(),
-        })
-        .describe('Full SpecContent shape — Zod-validated server-side'),
+      description:
+        "Replace a spec's structured content. Pass the FULL content object (this is a replace, not a merge) — when filling in acceptance_criteria for the first time, fetch with `prjct_spec_get` first and merge in your changes.",
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id'),
+        content: z
+          .object({
+            goal: z.string(),
+            eli10: z.string().optional(),
+            stakes: z.string().optional(),
+            acceptance_criteria: z.array(z.string()).optional(),
+            scope: z.array(z.string()).optional(),
+            out_of_scope: z.array(z.string()).optional(),
+            risks: z.array(z.object({ risk: z.string(), mitigation: z.string() })).optional(),
+            test_plan: z.array(z.string()).optional(),
+            notes: z.string().optional(),
+            linked_tasks: z.array(z.string()).optional(),
+          })
+          .describe('Full SpecContent shape — Zod-validated server-side'),
+      }),
     },
     safeMcpCall(
       'prjct_spec_update',
@@ -210,13 +221,16 @@ export function registerSpecTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_set_status',
-    'Promote/demote a spec lifecycle state: `in_progress` when work starts, `archived` when superseded. (draft → reviewed auto-promotes when reviewers pass; for first ship use `prjct_spec_ship` so the PR is recorded.)',
     {
-      projectPath: optionalProjectPath,
-      id: z.string().describe('Spec id'),
-      status: z.enum(SPEC_STATUSES).describe('Target status'),
+      description:
+        'Promote/demote a spec lifecycle state: `in_progress` when work starts, `archived` when superseded. (draft → reviewed auto-promotes when reviewers pass; for first ship use `prjct_spec_ship` so the PR is recorded.)',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id'),
+        status: z.enum(SPEC_STATUSES).describe('Target status'),
+      }),
     },
     safeMcpCall(
       'prjct_spec_set_status',
@@ -236,12 +250,15 @@ export function registerSpecTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_audit',
-    'Call before implementing a spec. Returns a dispatch prompt for the review specialists the spec raises — a DYNAMIC set (architecture is the floor; security/data/performance/design/strategic + any project DOMAIN experts join when the spec signals them). Run them IN PARALLEL (one Agent block per reviewer, same message). Persist each verdict via `prjct_spec_record_review`; all pass → spec auto-promotes draft → reviewed.',
     {
-      projectPath: optionalProjectPath,
-      id: z.string().describe('Spec id to audit'),
+      description:
+        'Call before implementing a spec. Returns a dispatch prompt for the review specialists the spec raises — a DYNAMIC set (architecture is the floor; security/data/performance/design/strategic + any project DOMAIN experts join when the spec signals them). Run them IN PARALLEL (one Agent block per reviewer, same message). Persist each verdict via `prjct_spec_record_review`; all pass → spec auto-promotes draft → reviewed.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id to audit'),
+      }),
     },
     safeMcpCall('prjct_spec_audit', async (args: { projectPath: string; id: string }) => {
       const spec = await specService.get(resolveProjectPath(args.projectPath), args.id)
@@ -275,15 +292,18 @@ export function registerSpecTools(server: McpServer) {
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_record_review',
-    "Persist one reviewer's verdict from `prjct_spec_audit` dispatch. Call once per reviewer (strategic, architecture, design). When all three are recorded with verdict=pass, the spec auto-promotes draft → reviewed.",
     {
-      projectPath: optionalProjectPath,
-      id: z.string().describe('Spec id'),
-      reviewer: z.string().min(1).describe('Which lens (e.g. architecture, security, data)'),
-      verdict: z.enum(['pass', 'fail']).describe('Verdict'),
-      notes: z.string().describe('2-4 sentence notes from the subagent'),
+      description:
+        "Persist one reviewer's verdict from `prjct_spec_audit` dispatch. Call once per reviewer (strategic, architecture, design). When all three are recorded with verdict=pass, the spec auto-promotes draft → reviewed.",
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id'),
+        reviewer: z.string().min(1).describe('Which lens (e.g. architecture, security, data)'),
+        verdict: z.enum(['pass', 'fail']).describe('Verdict'),
+        notes: z.string().describe('2-4 sentence notes from the subagent'),
+      }),
     },
     safeMcpCall(
       'prjct_spec_record_review',
@@ -315,13 +335,16 @@ export function registerSpecTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_link_task',
-    'Link a task to its spec (call after starting the task) so `prjct_ship` knows which spec to gate against. Idempotent.',
     {
-      projectPath: optionalProjectPath,
-      specId: z.string().describe('Spec id'),
-      taskId: z.string().describe('Task id (from `prjct_task_start` or stateStorage)'),
+      description:
+        'Link a task to its spec (call after starting the task) so `prjct_ship` knows which spec to gate against. Idempotent.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        specId: z.string().describe('Spec id'),
+        taskId: z.string().describe('Task id (from `prjct_task_start` or stateStorage)'),
+      }),
     },
     safeMcpCall(
       'prjct_spec_link_task',
@@ -341,13 +364,16 @@ export function registerSpecTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_spec_ship',
-    'Mark a spec as shipped (after the linked PR merges). Records the PR number on the spec for provenance.',
     {
-      projectPath: optionalProjectPath,
-      id: z.string().describe('Spec id'),
-      pr: z.number().optional().describe('PR / MR number that delivered the spec'),
+      description:
+        'Mark a spec as shipped (after the linked PR merges). Records the PR number on the spec for provenance.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id'),
+        pr: z.number().optional().describe('PR / MR number that delivered the spec'),
+      }),
     },
     safeMcpCall(
       'prjct_spec_ship',

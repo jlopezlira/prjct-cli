@@ -4,8 +4,7 @@
  * Exposes import graph, co-change analysis, change propagation,
  * symbol search/trace, detect_changes, and combined related-context.
  */
-
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { affectedDomains, propagateChanges } from '../../domain/change-propagator'
 import {
@@ -31,17 +30,20 @@ type S = any
 export function registerCodeIntelTools(server: McpServer) {
   const s: S = server
 
-  s.tool(
+  s.registerTool(
     'prjct_impact_analysis',
-    'Blast radius + risk for changed files (or git working tree / committed range). Prefer over manual Grep for review scope.',
     {
-      projectPath: optionalProjectPath,
-      changedFiles: z
-        .array(z.string())
-        .optional()
-        .describe(
-          'Changed file paths relative to project root. Omit to auto-detect from git working tree / committed range.'
-        ),
+      description:
+        'Blast radius + risk for changed files (or git working tree / committed range). Prefer over manual Grep for review scope.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        changedFiles: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Changed file paths relative to project root. Omit to auto-detect from git working tree / committed range.'
+          ),
+      }),
     },
     safeMcpCall(
       'prjct_impact_analysis',
@@ -101,13 +103,16 @@ export function registerCodeIntelTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_search_symbols',
-    'Search the structural symbol graph (functions, classes, routes). Run prjct sync first.',
     {
-      projectPath: optionalProjectPath,
-      pattern: z.string().describe('Symbol name substring (case-insensitive)'),
-      limit: z.number().optional().default(30).describe('Max results'),
+      description:
+        'Search the structural symbol graph (functions, classes, routes). Run prjct sync first.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        pattern: z.string().describe('Symbol name substring (case-insensitive)'),
+        limit: z.number().optional().default(30).describe('Max results'),
+      }),
     },
     safeMcpCall(
       'prjct_search_symbols',
@@ -141,18 +146,21 @@ export function registerCodeIntelTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_trace_path',
-    'BFS call-path trace: who calls a function and what it calls. Prefer over Grep for "who uses X?".',
     {
-      projectPath: optionalProjectPath,
-      functionName: z.string().describe('Function/class/method name to trace'),
-      direction: z
-        .enum(['inbound', 'outbound', 'both'])
-        .optional()
-        .default('both')
-        .describe('inbound = callers, outbound = callees'),
-      depth: z.number().optional().default(3).describe('BFS depth 1-5'),
+      description:
+        'BFS call-path trace: who calls a function and what it calls. Prefer over Grep for "who uses X?".',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        functionName: z.string().describe('Function/class/method name to trace'),
+        direction: z
+          .enum(['inbound', 'outbound', 'both'])
+          .optional()
+          .default('both')
+          .describe('inbound = callers, outbound = callees'),
+        depth: z.number().optional().default(3).describe('BFS depth 1-5'),
+      }),
     },
     safeMcpCall(
       'prjct_trace_path',
@@ -214,11 +222,14 @@ export function registerCodeIntelTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_architecture',
-    'Structural architecture overview: languages, symbol kinds, packages, hotspots (call fan-in), routes, entry candidates. One shot — prefer over tree walks.',
     {
-      projectPath: optionalProjectPath,
+      description:
+        'Structural architecture overview: languages, symbol kinds, packages, hotspots (call fan-in), routes, entry candidates. One shot — prefer over tree walks.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+      }),
     },
     safeMcpCall('prjct_architecture', async (args: { projectPath: string }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -227,12 +238,15 @@ export function registerCodeIntelTools(server: McpServer) {
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_dead_code',
-    'Find functions/methods/classes with zero inbound CALLS (excludes entry points, tests, types). Best-effort graph.',
     {
-      projectPath: optionalProjectPath,
-      limit: z.number().optional().default(50).describe('Max candidates'),
+      description:
+        'Find functions/methods/classes with zero inbound CALLS (excludes entry points, tests, types). Best-effort graph.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        limit: z.number().optional().default(50).describe('Max candidates'),
+      }),
     },
     safeMcpCall('prjct_dead_code', async (args: { projectPath: string; limit: number }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -241,13 +255,19 @@ export function registerCodeIntelTools(server: McpServer) {
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_import_graph',
-    'Import graph stats + file neighbors (imports/importers). Pass a file for its neighbors, omit for graph stats.',
     {
-      projectPath: optionalProjectPath,
-      file: z.string().optional().describe('File path to get neighbors for (omit for graph stats)'),
-      rebuild: z.boolean().optional().default(false).describe('Force rebuild the import graph'),
+      description:
+        'Import graph stats + file neighbors (imports/importers). Pass a file for its neighbors, omit for graph stats.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        file: z
+          .string()
+          .optional()
+          .describe('File path to get neighbors for (omit for graph stats)'),
+        rebuild: z.boolean().optional().default(false).describe('Force rebuild the import graph'),
+      }),
     },
     safeMcpCall(
       'prjct_import_graph',
@@ -285,14 +305,20 @@ export function registerCodeIntelTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_cochange',
-    'Files that historically change together (Jaccard similarity from git history)',
     {
-      projectPath: optionalProjectPath,
-      seedFiles: z.array(z.string()).describe('Seed files to find co-change partners for'),
-      rebuild: z.boolean().optional().default(false).describe('Force rebuild the co-change matrix'),
-      maxResults: z.number().optional().default(10).describe('Max results (default 10)'),
+      description: 'Files that historically change together (Jaccard similarity from git history)',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        seedFiles: z.array(z.string()).describe('Seed files to find co-change partners for'),
+        rebuild: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe('Force rebuild the co-change matrix'),
+        maxResults: z.number().optional().default(10).describe('Max results (default 10)'),
+      }),
     },
     safeMcpCall(
       'prjct_cochange',
@@ -330,13 +356,15 @@ export function registerCodeIntelTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_related_context',
-    'Combined: import neighbors + co-change partners for seed files',
     {
-      projectPath: optionalProjectPath,
-      seedFiles: z.array(z.string()).describe('Seed files to find related context for'),
-      maxResults: z.number().optional().default(15).describe('Max results (default 15)'),
+      description: 'Combined: import neighbors + co-change partners for seed files',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        seedFiles: z.array(z.string()).describe('Seed files to find related context for'),
+        maxResults: z.number().optional().default(15).describe('Max results (default 15)'),
+      }),
     },
     safeMcpCall(
       'prjct_related_context',

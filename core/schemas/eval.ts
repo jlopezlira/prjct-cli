@@ -21,7 +21,7 @@ export const EvalScenarioSchema = z.object({
   status: z.enum(['pass', 'warn', 'fail']),
   score: z.number().min(0).max(100),
   durationMs: z.number().nonnegative(),
-  metrics: z.record(z.union([z.string(), z.number(), z.boolean()])),
+  metrics: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
   actionables: z.array(EvalActionableSchema),
 })
 

@@ -7,8 +7,8 @@
  * Schema tax: every registered tool's name+description+JSON schema is
  * loaded into the host model every session. Keep DEFAULT tier lean.
  */
-
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { McpServer } from '@modelcontextprotocol/server'
+import { VERSION } from '../utils/version'
 import { registerCodeIntelTools } from './tools/code-intel'
 import { registerFileTools } from './tools/files'
 import { registerMemoryTools } from './tools/memory'
@@ -43,6 +43,12 @@ Use when work needs durable project memory, intent, or harness gates. Prefer too
 export type ToolTier = 'core' | 'standard' | 'all'
 
 export const DEFAULT_MCP_TOOL_TIER: ToolTier = 'core'
+export const MCP_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1_000
+
+const CATALOG_CACHE_HINT = {
+  ttlMs: MCP_CATALOG_CACHE_TTL_MS,
+  cacheScope: 'private' as const,
+}
 
 export function resolveTier(envValue: string | undefined = process.env.PRJCT_MCP_TOOLS): ToolTier {
   const raw = (envValue ?? DEFAULT_MCP_TOOL_TIER).toLowerCase()
@@ -52,8 +58,15 @@ export function resolveTier(envValue: string | undefined = process.env.PRJCT_MCP
 
 export function createServer(): McpServer {
   const server = new McpServer(
-    { name: 'prjct', version: '1.0.0' },
-    { instructions: PRJCT_INSTRUCTIONS }
+    { name: 'prjct', version: VERSION },
+    {
+      capabilities: { tools: { listChanged: false } },
+      instructions: PRJCT_INSTRUCTIONS,
+      cacheHints: {
+        'server/discover': CATALOG_CACHE_HINT,
+        'tools/list': CATALOG_CACHE_HINT,
+      },
+    }
   )
 
   const tier = resolveTier()
