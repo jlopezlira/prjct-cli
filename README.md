@@ -359,6 +359,8 @@ Remove with `prjct claude uninstall` (hooks only) or `prjct uninstall` (everythi
 
 prjct-cli exposes an MCP server with 6 tool groups (every tool is prefixed `prjct_`):
 
+The stdio server negotiates MCP `2026-07-28` while retaining the legacy 2025 handshake for existing hosts. Modern clients skip `initialize`, cache discovery and the static tool catalog privately for 24 hours, and avoid unnecessary list-change subscriptions. The default `core` tier exposes only 10 high-signal tools; set `PRJCT_MCP_TOOLS=standard|all` when a host needs the larger surface.
+
 | Group | Tools |
 |---|---|
 | **memory** | `mem_save`, `mem_list`, `mem_similar`, `mem_forget`, `guard`, `record_decision` / `record_gotcha` / `record_learning` / `record_fact`, `capture_inbox` |

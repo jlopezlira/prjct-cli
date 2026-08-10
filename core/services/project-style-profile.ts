@@ -28,6 +28,8 @@ const KNOWN_LIBS = [
   'zod',
   'better-sqlite3',
   '@modelcontextprotocol/sdk',
+  '@modelcontextprotocol/client',
+  '@modelcontextprotocol/server',
   'chalk',
   'chokidar',
   'commander',
@@ -271,13 +273,13 @@ function buildCommands(commands?: ProjectCommands | null): ProjectStyleCommands 
 }
 
 function collectKeyLibraries(deps: Record<string, string>): string[] {
-  const out: string[] = []
+  const libraries = new Set<string>()
   for (const name of KNOWN_LIBS) {
     if (deps[name]) {
-      out.push(displayLibName(name))
+      libraries.add(displayLibName(name))
     }
   }
-  return out.slice(0, 16)
+  return [...libraries].slice(0, 16)
 }
 
 function displayLibName(pkg: string): string {
@@ -294,6 +296,8 @@ function displayLibName(pkg: string): string {
     zod: 'Zod',
     'better-sqlite3': 'better-sqlite3',
     '@modelcontextprotocol/sdk': 'MCP SDK',
+    '@modelcontextprotocol/client': 'MCP SDK',
+    '@modelcontextprotocol/server': 'MCP SDK',
     biome: 'Biome',
     lefthook: 'Lefthook',
     'drizzle-orm': 'Drizzle',

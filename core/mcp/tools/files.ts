@@ -3,8 +3,7 @@
  *
  * Wraps existing context tools: files-tool, signatures-tool, state-storage.
  */
-
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { stateStorage } from '../../storage/state-storage'
 import { findRelevantFiles } from '../../tools/context/files-tool'
@@ -19,13 +18,16 @@ type S = any
 export function registerFileTools(server: McpServer) {
   const s: S = server
 
-  s.tool(
+  s.registerTool(
     'prjct_relevant_files',
-    'MUST call before Grep/Glob tree walks. Resolves a constrained work scope via prjct: memory (FTS + semantic embeddings when enabled) + code BM25 + symbol graph + import graph + co-change. Prefer this over scanning the repo. For call chains use prjct_trace_path.',
     {
-      projectPath: optionalProjectPath,
-      query: z.string().describe('Task or query to find relevant files for'),
-      maxFiles: z.number().optional().default(10).describe('Max files to return'),
+      description:
+        'MUST call before Grep/Glob tree walks. Resolves a constrained work scope via prjct: memory (FTS + semantic embeddings when enabled) + code BM25 + symbol graph + import graph + co-change. Prefer this over scanning the repo. For call chains use prjct_trace_path.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        query: z.string().describe('Task or query to find relevant files for'),
+        maxFiles: z.number().optional().default(10).describe('Max files to return'),
+      }),
     },
     safeMcpCall(
       'prjct_relevant_files',
@@ -91,12 +93,15 @@ export function registerFileTools(server: McpServer) {
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_signatures',
-    'Function/class signatures of a file without bodies (~90% fewer tokens). Use to map an unfamiliar file before deciding whether to Read it fully.',
     {
-      projectPath: optionalProjectPath,
-      filePath: z.string().describe('Relative file path to extract signatures from'),
+      description:
+        'Function/class signatures of a file without bodies (~90% fewer tokens). Use to map an unfamiliar file before deciding whether to Read it fully.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        filePath: z.string().describe('Relative file path to extract signatures from'),
+      }),
     },
     safeMcpCall('prjct_signatures', async (args: { projectPath: string; filePath: string }) => {
       const result = await extractSignatures(args.filePath, args.projectPath)
@@ -126,12 +131,15 @@ export function registerFileTools(server: McpServer) {
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_history',
-    'Recently completed tasks and how they ended. Use to learn what was just done before continuing related work.',
     {
-      projectPath: optionalProjectPath,
-      limit: z.number().optional().default(10).describe('Max results'),
+      description:
+        'Recently completed tasks and how they ended. Use to learn what was just done before continuing related work.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        limit: z.number().optional().default(10).describe('Max results'),
+      }),
     },
     safeMcpCall('prjct_history', async (args: { projectPath: string; limit: number }) => {
       const projectId = await resolveProjectId(args.projectPath)

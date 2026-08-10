@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [3.83.0] - 2026-08-10
+
+### Added
+
+- Document MCP 2026 compatibility and efficiency controls
+- MCP `2026-07-28` stdio negotiation with transparent 2025-era compatibility, cacheable discovery/tool catalogs, and a static-list capability that avoids unused subscriptions.
+
+### Changed
+
+- Migrated to the split MCP TypeScript SDK v2 and Zod 4. The default 10-tool catalog is 36.7% smaller than v3.82.0 (7,699 → 4,871 serialized bytes) with an effectively flat server bundle (+0.09%).
+
 ## [3.82.0] - 2026-08-10
 
 ### Added

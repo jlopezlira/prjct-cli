@@ -9,10 +9,7 @@ import { z } from 'zod'
 import configManager from '../infrastructure/config-manager'
 
 /** Shared schema field — omit on single-project MCP installs. */
-export const optionalProjectPath = z
-  .string()
-  .optional()
-  .describe('Project root. Omit to use PRJCT_PROJECT_PATH or the MCP server cwd.')
+export const optionalProjectPath = z.string().optional()
 
 /**
  * Resolve filesystem project root for a tool call.

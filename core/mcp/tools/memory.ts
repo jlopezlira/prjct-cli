@@ -24,8 +24,7 @@
  * `projectMemory` API, so whatever the human types in the terminal
  * is visible here too, and vice versa.
  */
-
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { enrichedRecall } from '../../memory/enriched-recall'
 import { BASE_MEMORY_TYPES, type MemoryType } from '../../memory/entries'
@@ -49,22 +48,24 @@ const TYPE_DESCRIPTIONS = `Base types: ${BASE_MEMORY_TYPES.join(', ')}. Any lowe
 export function registerMemoryTools(server: McpServer, options: { extended?: boolean } = {}) {
   const s: S = server
 
-  s.tool(
+  s.registerTool(
     'prjct_mem_save',
-    `Save a memory entry. Author content in ENGLISH regardless of the conversation language. ${TYPE_DESCRIPTIONS} Evolving topic? add tags.topic (stable key) — prjct UPSERTS by topic key, superseding prior versions instead of accumulating. Secret-like content is refused unless force=true.`,
     {
-      projectPath: optionalProjectPath,
-      type: z.string().describe('Memory type (fact/decision/learning/... or user-defined)'),
-      content: z.string().describe('The memory content. Freeform text.'),
-      tags: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe('Key:value tags (e.g. {domain: "auth"})'),
-      source: z.string().optional().describe('Task id this memory came from, if any'),
-      force: z
-        .boolean()
-        .optional()
-        .describe('Bypass the secret-like-content refusal. Default false.'),
+      description:
+        'Save durable project memory in English. Use tags.topic for evolving subjects; matching topics supersede older entries.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        type: z
+          .string()
+          .describe('Memory type, such as fact, decision, learning, or a custom type'),
+        content: z.string().describe('Freeform memory text'),
+        tags: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe('Key:value metadata, such as {domain: "auth"}'),
+        source: z.string().optional().describe('Originating task id'),
+        force: z.boolean().optional().describe('Allow content rejected as secret-like'),
+      }),
     },
     safeMcpCall(
       'prjct_mem_save',
@@ -122,18 +123,21 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_mem_list',
-    'Recall memory entries as compact one-line cues (id + type + truncated body). Pull a full body on demand by id (`prjct context memory <id>`). Optional filters: topic (keyword across content + tag values), types, tags, limit.',
     {
-      projectPath: optionalProjectPath,
-      topic: z.string().optional().describe('Keyword to match over content + tag values'),
-      types: z.array(z.string()).optional().describe('Restrict to these types'),
-      tags: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe('Require exact match on these k:v pairs'),
-      limit: z.number().optional().default(25).describe('Max entries (default 25)'),
+      description:
+        'Recall ranked memory as compact, resolvable cues. Filter by topic, types, tags, or limit.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        topic: z.string().optional().describe('Keyword to match over content + tag values'),
+        types: z.array(z.string()).optional().describe('Restrict to these types'),
+        tags: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe('Require exact match on these k:v pairs'),
+        limit: z.number().optional().default(25).describe('Max entries (default 25)'),
+      }),
     },
     safeMcpCall(
       'prjct_mem_list',
@@ -164,13 +168,16 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_mem_similar',
-    'Find memory entries similar to a free-text description. Keyword-based, best-effort. Returns compact one-line cues; pull a full body by id on demand.',
     {
-      projectPath: optionalProjectPath,
-      description: z.string().describe('Free-text description to find similar memories for'),
-      limit: z.number().optional().default(10).describe('Max results (default 10)'),
+      description:
+        'Find ranked memory related to a free-text description; returns compact, resolvable cues.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        description: z.string().describe('Free-text description to find similar memories for'),
+        limit: z.number().optional().default(10).describe('Max results (default 10)'),
+      }),
     },
     safeMcpCall(
       'prjct_mem_similar',
@@ -197,13 +204,16 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_guard',
-    'Anticipation: before editing a file, get the preventive memory recorded against it — gotchas, anti-patterns, recurring bugs only. Empty result means clear to edit. Pull this instead of guessing what might break.',
     {
-      projectPath: optionalProjectPath,
-      file: z.string().describe('File to check (absolute or repo-relative)'),
-      limit: z.number().optional().default(3).describe('Max preventive entries (default 3)'),
+      description:
+        'Before editing a file, retrieve preventive gotchas and recurring failures. Empty means clear to edit.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        file: z.string().describe('File to check (absolute or repo-relative)'),
+        limit: z.number().optional().default(3).describe('Max preventive entries (default 3)'),
+      }),
     },
     safeMcpCall(
       'prjct_guard',
@@ -227,12 +237,14 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_mem_forget',
-    'Remove a memory entry by id. Ids are stable — pull them from `prjct_mem_list`.',
     {
-      projectPath: optionalProjectPath,
-      id: z.string().describe('Memory id (e.g. "mem_42" or "ship_7")'),
+      description: 'Delete a memory by stable id from prjct_mem_list.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Memory id (e.g. "mem_42" or "ship_7")'),
+      }),
     },
     safeMcpCall('prjct_mem_forget', async (args: { projectPath?: string; id: string }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -281,14 +293,17 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     return { content: [{ type: 'text', text: `Saved ${type}: ${content.slice(0, 80)}` }] }
   }
 
-  s.tool(
+  s.registerTool(
     'prjct_record_decision',
-    'Record a DECISION: what was decided, why, and alternatives. Author in ENGLISH. (Or use prjct_mem_save type=decision.)',
     {
-      projectPath: optionalProjectPath,
-      decision: z.string().describe('What was decided'),
-      rationale: z.string().optional().describe('Why'),
-      alternatives: z.array(z.string()).optional().describe('Rejected options'),
+      description:
+        'Record a DECISION: what was decided, why, and alternatives. Author in ENGLISH. (Or use prjct_mem_save type=decision.)',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        decision: z.string().describe('What was decided'),
+        rationale: z.string().optional().describe('Why'),
+        alternatives: z.array(z.string()).optional().describe('Rejected options'),
+      }),
     },
     safeMcpCall(
       'prjct_record_decision',
@@ -307,14 +322,17 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_record_gotcha',
-    'Record a GOTCHA (trap + fix). Tag file for prjct_guard. (Or prjct_mem_save type=gotcha.)',
     {
-      projectPath: optionalProjectPath,
-      symptom: z.string().describe('What goes wrong'),
-      fix: z.string().describe('How to avoid/fix'),
-      file: z.string().optional().describe('File path for guard'),
+      description:
+        'Record a GOTCHA (trap + fix). Tag file for prjct_guard. (Or prjct_mem_save type=gotcha.)',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        symptom: z.string().describe('What goes wrong'),
+        fix: z.string().describe('How to avoid/fix'),
+        file: z.string().optional().describe('File path for guard'),
+      }),
     },
     safeMcpCall(
       'prjct_record_gotcha',
@@ -329,13 +347,16 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_record_learning',
-    'Record a LEARNING + evidence. Author in ENGLISH. (Or prjct_mem_save type=learning.)',
     {
-      projectPath: optionalProjectPath,
-      claim: z.string().describe('What was learned'),
-      evidence: z.string().optional().describe('Supporting observation'),
+      description:
+        'Record a LEARNING + evidence. Author in ENGLISH. (Or prjct_mem_save type=learning.)',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        claim: z.string().describe('What was learned'),
+        evidence: z.string().optional().describe('Supporting observation'),
+      }),
     },
     safeMcpCall(
       'prjct_record_learning',
@@ -346,13 +367,16 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_record_fact',
-    'Record a FACT about a subject. Author in ENGLISH. (Or prjct_mem_save type=fact.)',
     {
-      projectPath: optionalProjectPath,
-      subject: z.string().describe('Subject'),
-      statement: z.string().describe('The fact'),
+      description:
+        'Record a FACT about a subject. Author in ENGLISH. (Or prjct_mem_save type=fact.)',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        subject: z.string().describe('Subject'),
+        statement: z.string().describe('The fact'),
+      }),
     },
     safeMcpCall(
       'prjct_record_fact',
@@ -364,12 +388,14 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_capture_inbox',
-    'Quick INBOX capture for later triage. (Or prjct_mem_save type=inbox.)',
     {
-      projectPath: optionalProjectPath,
-      text: z.string().describe('Note text'),
+      description: 'Quick INBOX capture for later triage. (Or prjct_mem_save type=inbox.)',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        text: z.string().describe('Note text'),
+      }),
     },
     safeMcpCall('prjct_capture_inbox', async (args: { projectPath?: string; text: string }) => {
       return saveTyped(args.projectPath, 'inbox', args.text)

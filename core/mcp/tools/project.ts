@@ -8,8 +8,7 @@
  * feed lands (e.g. driven by the Stop hook capturing durations),
  * add the relevant tools back here.
  */
-
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { formatLikelyFileForAgent } from '../../services/file-cue'
 import { collectActiveTasks } from '../../services/task-overview'
@@ -37,11 +36,14 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
   const s: S = server
 
   // Core: managed session resume (high-value land→prime continuity).
-  s.tool(
+  s.registerTool(
     'prjct_session_resume',
-    'Managed session resume card (land→prime continuity): last land stamp, open cycle, session-close hand-off, next actions. Prefer this after a fresh window instead of re-discovering from chat.',
     {
-      projectPath: optionalProjectPath,
+      description:
+        'Resume after a fresh window: active cycle, last hand-off, journal, and next actions.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+      }),
     },
     safeMcpCall('prjct_session_resume', async (args: { projectPath: string }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -77,11 +79,13 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_task_status',
-    'The active work cycle (description, branch, when it started) plus queued work. Read this to see what is in progress before starting new work.',
     {
-      projectPath: optionalProjectPath,
+      description: 'Read active work across worktrees plus queued work.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+      }),
     },
     safeMcpCall('prjct_task_status', async (args: { projectPath: string }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -116,20 +120,23 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_task_start',
-    'Start a work cycle. Fires before/after workflow gates and memory logging through the compatibility task backend; a gate may block the start. Surfaces predictive risks (preventive memory on likely files) — same class as CLI `prjct work` — so MCP agents read traps before editing. Pass linked_spec_id only when a durable intent/spec brief is required. Use when the user begins concrete work.',
     {
-      projectPath: optionalProjectPath,
-      description: z.string().describe('What the work cycle is — a short intent phrase'),
-      linked_spec_id: z
-        .string()
-        .optional()
-        .describe('Intent/spec id to link for high-stakes work (e.g. "spec_12")'),
-      skip_hooks: z
-        .boolean()
-        .optional()
-        .describe('Skip before/after workflow rules. Default false.'),
+      description:
+        'Start a gated work cycle and return predicted file risks and context. Link a spec only when durable intent is required.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        description: z.string().describe('What the work cycle is — a short intent phrase'),
+        linked_spec_id: z
+          .string()
+          .optional()
+          .describe('Intent/spec id to link for high-stakes work (e.g. "spec_12")'),
+        skip_hooks: z
+          .boolean()
+          .optional()
+          .describe('Skip before/after workflow rules. Default false.'),
+      }),
     },
     safeMcpCall(
       'prjct_task_start',
@@ -202,14 +209,17 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
     )
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_task_set_status',
-    'Change the active work cycle status. Records the transition and drives the workflow state machine. "active"/"resume" promotes paused work back to focus. To report token usage use the dedicated prjct_cost_add tool — this verb only transitions state.',
     {
-      projectPath: optionalProjectPath,
-      status: z
-        .enum(['done', 'completed', 'paused', 'active', 'resume', 'in_progress'])
-        .describe('New status'),
+      description:
+        'Transition the active cycle status. Use prjct_cost_add instead for token usage.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        status: z
+          .enum(['done', 'completed', 'paused', 'active', 'resume', 'in_progress'])
+          .describe('New status'),
+      }),
     },
     safeMcpCall('prjct_task_set_status', async (args: { projectPath: string; status: string }) => {
       const projectId = await resolveProjectId(args.projectPath)
@@ -238,15 +248,18 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
     })
   )
 
-  s.tool(
+  s.registerTool(
     'prjct_analysis',
-    'The stored project analysis: architecture, stack, patterns, anti-patterns, conventions, tech-debt, and insights. Read this instead of re-deriving the architecture from source. Pass mode:"archive" for the history of superseded analyses.',
     {
-      projectPath: optionalProjectPath,
-      mode: z
-        .enum(['active', 'archive'])
-        .optional()
-        .describe('"active" (default) = current analysis; "archive" = superseded history'),
+      description:
+        'Read stored architecture, stack, conventions, risks, and insights. mode:"archive" includes superseded analyses.',
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        mode: z
+          .enum(['active', 'archive'])
+          .optional()
+          .describe('"active" (default) = current analysis; "archive" = superseded history'),
+      }),
     },
     safeMcpCall(
       'prjct_analysis',
@@ -374,17 +387,19 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
   // Standard+ only — cut ListTools token tax on default core (≤12 tools).
   // CLI parity: prjct cost, prjct context, prjct seed skills, etc.
   if (options.extended) {
-    s.tool(
+    s.registerTool(
       'prjct_cost_add',
-      'Record cycle token usage (cost/ROI). Pass model/runtime when known.',
       {
-        projectPath: optionalProjectPath,
-        tokensIn: z.number().describe('Input tokens'),
-        tokensOut: z.number().describe('Output tokens'),
-        model: z.string().optional().describe('Model id'),
-        runtime: z.string().optional().describe('Host: claude | codex | gemini | …'),
-        isEstimated: z.boolean().optional().describe('True if estimated. Default false.'),
-        workCycleId: z.string().optional().describe('Task id; defaults to active cycle'),
+        description: 'Record cycle token usage (cost/ROI). Pass model/runtime when known.',
+        inputSchema: z.object({
+          projectPath: optionalProjectPath,
+          tokensIn: z.number().describe('Input tokens'),
+          tokensOut: z.number().describe('Output tokens'),
+          model: z.string().optional().describe('Model id'),
+          runtime: z.string().optional().describe('Host: claude | codex | gemini | …'),
+          isEstimated: z.boolean().optional().describe('True if estimated. Default false.'),
+          workCycleId: z.string().optional().describe('Task id; defaults to active cycle'),
+        }),
       },
       safeMcpCall(
         'prjct_cost_add',
@@ -432,10 +447,13 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
       )
     )
 
-    s.tool(
+    s.registerTool(
       'prjct_developer',
-      'Synthesized developer profile (feedback + friction). Act as this developer would.',
-      { projectPath: optionalProjectPath },
+      {
+        description:
+          'Synthesized developer profile (feedback + friction). Act as this developer would.',
+        inputSchema: z.object({ projectPath: optionalProjectPath }),
+      },
       safeMcpCall('prjct_developer', async (args: { projectPath?: string }) => {
         const projectId = await resolveProjectId(args.projectPath)
         const { projectMemory } = await import('../../memory/project-memory')
@@ -451,10 +469,12 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
       })
     )
 
-    s.tool(
+    s.registerTool(
       'prjct_signals',
-      'Machine signals: hot files, skill-misses, friction (transient telemetry).',
-      { projectPath: optionalProjectPath },
+      {
+        description: 'Machine signals: hot files, skill-misses, friction (transient telemetry).',
+        inputSchema: z.object({ projectPath: optionalProjectPath }),
+      },
       safeMcpCall('prjct_signals', async (args: { projectPath?: string }) => {
         const projectId = await resolveProjectId(args.projectPath)
         const { projectMemory } = await import('../../memory/project-memory')
@@ -465,10 +485,12 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
       })
     )
 
-    s.tool(
+    s.registerTool(
       'prjct_skills',
-      'Skill index: name + description + EXACT SKILL.md path for subagent dispatch.',
-      { projectPath: optionalProjectPath },
+      {
+        description: 'Skill index: name + description + EXACT SKILL.md path for subagent dispatch.',
+        inputSchema: z.object({ projectPath: optionalProjectPath }),
+      },
       safeMcpCall('prjct_skills', async (args: { projectPath?: string }) => {
         const path = resolveProjectPath(args.projectPath)
         const projectId = await resolveProjectId(path)
@@ -483,22 +505,26 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
       })
     )
 
-    s.tool(
+    s.registerTool(
       'prjct_context_tiers',
-      'Context cache tiers L0–L3 + live L0 budget. Never stuff L2 into L0.',
-      { projectPath: optionalProjectPath },
+      {
+        description: 'Context cache tiers L0–L3 + live L0 budget. Never stuff L2 into L0.',
+        inputSchema: z.object({ projectPath: optionalProjectPath }),
+      },
       safeMcpCall('prjct_context_tiers', async () => {
         const { formatContextTiersMd } = await import('../../services/context-tiers')
         return { content: [{ type: 'text', text: formatContextTiersMd() }] }
       })
     )
 
-    s.tool(
+    s.registerTool(
       'prjct_safe_artifacts',
-      'Audit agent outputs: judgment, ships, handoffs, checkpoints, session stamp.',
       {
-        projectPath: optionalProjectPath,
-        limit: z.number().int().min(1).max(20).optional().describe('Max per kind (default 5)'),
+        description: 'Audit agent outputs: judgment, ships, handoffs, checkpoints, session stamp.',
+        inputSchema: z.object({
+          projectPath: optionalProjectPath,
+          limit: z.number().int().min(1).max(20).optional().describe('Max per kind (default 5)'),
+        }),
       },
       safeMcpCall(
         'prjct_safe_artifacts',
