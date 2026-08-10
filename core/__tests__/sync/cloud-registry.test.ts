@@ -43,8 +43,7 @@ describe('cloud-registry', () => {
   test('add → list → remove round-trips', async () => {
     await addLinkedProject('p1', '/repo/one')
     await addLinkedProject('p2', '/repo/two')
-    const initialList: import('/Users/jj/Apps/prjct/prjct-cli/core/sync/cloud-registry').LinkedProject[] =
-      await listLinkedProjects()
+    const initialList = await listLinkedProjects()
     expect(initialList.map((p) => p.projectId).sort()).toEqual(['p1', 'p2'])
 
     await removeLinkedProject('p1')

@@ -73,8 +73,7 @@ describe('entity-handlers registry', () => {
     }
 
     await handler.upsert(fixture.projectId, data)
-    const initialIdeas: import('/Users/jj/Apps/prjct/prjct-cli/core/types/storage').Idea[] =
-      await ideasStorage.getAll(fixture.projectId)
+    const initialIdeas = await ideasStorage.getAll(fixture.projectId)
     expect(initialIdeas.length).toBe(1)
     expect(initialIdeas[0].id).toBe('idea-1')
 
