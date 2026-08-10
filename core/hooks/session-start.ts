@@ -96,17 +96,17 @@ export async function buildSessionContext(
   // L0 memory index (Claude MEMORY.md pattern): compact TOC always-on when
   // digest is requested. Prefer stored/fresh stamp; fall back to legacy digest
   // only when the index cannot be built.
-  let digest: string | null = null
-  if (opts.digest) {
-    try {
-      const { memoryL0IndexForSession } = await import('../services/memory-index')
-      const indexMd = memoryL0IndexForSession(config.projectId, { rebuildIfStale: true })
-      digest = indexMd
-    } catch {
-      digest = null
-    }
-    if (!digest) digest = buildKnowledgeDigest(config.projectId)
-  }
+  const digest = opts.digest
+    ? await (async (): Promise<string | null> => {
+        try {
+          const { memoryL0IndexForSession } = await import('../services/memory-index')
+          const indexMd = memoryL0IndexForSession(config.projectId, { rebuildIfStale: true })
+          return indexMd || buildKnowledgeDigest(config.projectId)
+        } catch {
+          return buildKnowledgeDigest(config.projectId)
+        }
+      })()
+    : null
   // Start independent post-digest probes together. Each retains its original
   // failure contract, and output assembly below preserves their byte order.
   const stalenessPromise = buildStalenessNotice(projectPath, config.projectId)
@@ -249,8 +249,6 @@ async function buildStalenessNotice(
     // Continuous understanding: detach a lightweight sync so the map
     // refreshes without GSD-style full map-codebase thrash every phase.
     // SUPERIOR: stamp schedule/apply so we don't warn forever after refresh.
-    let refreshScheduled = false
-    let stamp: import('../services/drift-refresh').DriftRefreshStamp = {}
     try {
       const path = await import('node:path')
       const os = await import('node:os')
@@ -259,22 +257,22 @@ async function buildStalenessNotice(
       const cliHome = process.env.PRJCT_CLI_HOME
         ? path.resolve(process.env.PRJCT_CLI_HOME)
         : path.join(os.homedir(), '.prjct-cli')
-      stamp = readDriftStamp(cliHome)
+      const initialStamp = readDriftStamp(cliHome)
       // If a recent apply already cleared staleness presentation, say so once.
-      if (driftStaleResolved(stamp)) {
+      if (driftStaleResolved(initialStamp)) {
         return formatDriftNotice({
           warning,
           commitsSinceSync: status.commitsSinceSync,
-          stamp,
+          stamp: initialStamp,
           refreshScheduled: false,
         })
       }
-      refreshScheduled = maybeDetachDriftRefresh({
+      const refreshScheduled = maybeDetachDriftRefresh({
         projectPath,
         cliHome,
         commitsSinceSync: status.commitsSinceSync,
       })
-      stamp = readDriftStamp(cliHome)
+      const stamp = readDriftStamp(cliHome)
       return formatDriftNotice({
         warning,
         commitsSinceSync: status.commitsSinceSync,
@@ -285,20 +283,20 @@ async function buildStalenessNotice(
       /* never block SessionStart */
     }
     // Symbol graph age: if sync is stale OR index missing, nudge code reindex.
-    let symbolCue = ''
-    try {
-      const { hasSymbolIndex, loadMeta } = await import('../domain/symbol-graph')
-      if (!hasSymbolIndex(projectId)) {
-        symbolCue =
-          ' Code graph empty — `prjct code reindex` (or `prjct sync`) before trace/impact.'
-      } else if (status.commitsSinceSync >= 5) {
+    const symbolCue = await (async (): Promise<string> => {
+      try {
+        const { hasSymbolIndex, loadMeta } = await import('../domain/symbol-graph')
+        if (!hasSymbolIndex(projectId)) {
+          return ' Code graph empty — `prjct code reindex` (or `prjct sync`) before trace/impact.'
+        }
+        if (status.commitsSinceSync < 5) return ''
         const meta = loadMeta(projectId)
         const built = meta?.builtAt ? ` (index ${meta.builtAt.slice(0, 10)})` : ''
-        symbolCue = ` Symbol index may lag${built} — prefer \`prjct code reindex\` after big pulls.`
+        return ` Symbol index may lag${built} — prefer \`prjct code reindex\` after big pulls.`
+      } catch {
+        return ''
       }
-    } catch {
-      /* optional */
-    }
+    })()
     return `**Understanding may be stale:** ${warning} — run \`prjct sync\` before big calls.${symbolCue}`
   } catch {
     return null
@@ -312,64 +310,63 @@ async function buildStalenessNotice(
  * ranked with usefulness rerank; tightly truncated.
  */
 function buildKnowledgeDigest(projectId: string): string | null {
-  let gotchas: MemoryEntry[] = []
-  let decisions: MemoryEntry[] = []
-  let devRules: Array<{ rule: string; sourceId: string }> = []
-  try {
-    // Overfetch recency-ordered candidates, then let the usefulness
-    // ledger reorder before taking the few digest slots: the 3 most
-    // PROVEN entries (referenced, fetched, shipped-with) beat the 3 most
-    // recently captured. Bounded rerank — recency still leads on ties.
-    gotchas = usefulnessService
-      .rerank(
-        projectId,
-        projectMemory.recall(projectId, {
-          types: ['gotcha', 'anti-pattern'],
-          limit: DIGEST_PER_TYPE * 4,
-        })
-      )
-      .slice(0, DIGEST_PER_TYPE)
-    decisions = usefulnessService
-      .rerank(
-        projectId,
-        projectMemory.recall(projectId, { types: ['decision'], limit: DIGEST_PER_TYPE * 4 })
-      )
-      .slice(0, DIGEST_PER_TYPE)
-  } catch {
-    return null
-  }
+  const memories = (() => {
+    try {
+      // Overfetch recency-ordered candidates, then allow the usefulness
+      // ledger to reorder before taking the few digest slots.
+      const gotchas = usefulnessService
+        .rerank(
+          projectId,
+          projectMemory.recall(projectId, {
+            types: ['gotcha', 'anti-pattern'],
+            limit: DIGEST_PER_TYPE * 4,
+          })
+        )
+        .slice(0, DIGEST_PER_TYPE)
+      const decisions = usefulnessService
+        .rerank(
+          projectId,
+          projectMemory.recall(projectId, { types: ['decision'], limit: DIGEST_PER_TYPE * 4 })
+        )
+        .slice(0, DIGEST_PER_TYPE)
+      return { gotchas, decisions }
+    } catch {
+      return null
+    }
+  })()
+  if (!memories) return null
+  const { gotchas, decisions } = memories
 
   // Developer model: feedback + friction → actionable rules. Pushed here so
   // a cold model (post-update) acts as the developer without MCP pull.
-  try {
-    const pool = projectMemory.recall(projectId, {
-      types: ['feedback', 'improvement-signal'],
-      limit: 40,
-      dedupeByKey: false,
-    })
-    devRules = extractDeveloperRules(pool, DIGEST_DEV_RULES)
-  } catch {
-    devRules = []
-  }
+  const devRules = (() => {
+    try {
+      const pool = projectMemory.recall(projectId, {
+        types: ['feedback', 'improvement-signal'],
+        limit: 40,
+        dedupeByKey: false,
+      })
+      return extractDeveloperRules(pool, DIGEST_DEV_RULES)
+    } catch {
+      return []
+    }
+  })()
 
   const repeatMiss = findRepeatMissedEntry(
     projectId,
     new Set([...gotchas, ...decisions].map((e) => e.id))
   )
   // Project style (house rules) — dual to developer rules
-  let projectStyleBlock: string | null = null
-  try {
-    const style = getActiveProjectStyle(projectId)
-    if (style) {
-      projectStyleBlock = formatProjectStyleDigest(style, {
-        maxConventions: 4,
-        maxPatterns: 3,
-        maxAnti: 2,
-      })
+  const projectStyleBlock = (() => {
+    try {
+      const style = getActiveProjectStyle(projectId)
+      return style
+        ? formatProjectStyleDigest(style, { maxConventions: 4, maxPatterns: 3, maxAnti: 2 })
+        : null
+    } catch {
+      return null
     }
-  } catch {
-    projectStyleBlock = null
-  }
+  })()
 
   if (
     gotchas.length === 0 &&
@@ -407,7 +404,7 @@ function buildKnowledgeDigest(projectId: string): string | null {
   }
   if (decisions.length > 0) {
     lines.push('', '**Decisions in force:**')
-    for (const e of decisions) lines.push(`- ${digestLine(e)}`)
+    for (const e2 of decisions) lines.push(`- ${digestLine(e2)}`)
   }
   if (repeatMiss) {
     lines.push(
@@ -470,14 +467,10 @@ function findRepeatMissedEntry(
       if (!memId) continue
       counts.set(memId, (counts.get(memId) ?? 0) + 1)
     }
-    let topId: string | null = null
-    let topCount = 0
-    for (const [id, count] of counts) {
-      if (count > topCount) {
-        topId = id
-        topCount = count
-      }
-    }
+    const [topId, topCount] = [...counts].reduce<[string | null, number]>(
+      (top, candidate) => (candidate[1] > top[1] ? candidate : top),
+      [null, 0]
+    )
     if (!topId || topCount < REPEAT_MISS_THRESHOLD || alreadyShown.has(topId)) return null
     const entry = projectMemory.getById(projectId, topId)
     return entry ? { entry, count: topCount } : null
@@ -572,15 +565,16 @@ export async function buildProjectIdentityLine(
     const path = await import('node:path')
     const { execFileAsync } = await import('../utils/exec')
     const name = path.basename(projectPath)
-    let branch = ''
-    try {
-      const { stdout } = await execFileAsync('git', ['branch', '--show-current'], {
-        cwd: projectPath,
-      })
-      branch = stdout.trim()
-    } catch {
-      branch = ''
-    }
+    const branch = await (async (): Promise<string> => {
+      try {
+        const { stdout } = await execFileAsync('git', ['branch', '--show-current'], {
+          cwd: projectPath,
+        })
+        return stdout.trim()
+      } catch {
+        return ''
+      }
+    })()
     const shortId = projectId.length > 12 ? `${projectId.slice(0, 8)}…` : projectId
     const parts = [`## Project identity (cwd)`, `- **${name}** · id \`${shortId}\``]
     if (branch) parts.push(`- Branch: \`${branch}\``)
@@ -603,39 +597,48 @@ export function runSessionStartHook(
 ): Promise<void> {
   // Captured by the build closure so afterEmit can reuse it without a
   // second disk read on the hot path that fires on every session start.
-  let cachedConfig: LocalConfig | null = null
+  const cachedConfig = configManager.readConfig(projectPath).catch(() => null)
 
   return runHook<HookInput>(
     {
       event: 'SessionStart',
       projectPath,
       build: async (input, p) => {
-        cachedConfig = await configManager.readConfig(p).catch(() => null)
+        const config =
+          p === projectPath
+            ? await cachedConfig
+            : await configManager.readConfig(p).catch(() => null)
         // Cold-start sources rebuild context from scratch (no warm cache to
         // bust) and are exactly when grounding matters — a resumed session
         // still holds its context, so it stays persona-only for cache safety.
         const source = input.source ?? 'startup'
         const digest = source === 'startup' || source === 'clear' || source === 'compact'
-        return buildSessionContext(p, cachedConfig, { digest })
+        return buildSessionContext(p, config, { digest })
       },
       afterEmit: async (_input, p) => {
-        if (cachedConfig?.projectId) {
-          let taskId: string | null = null
-          let goal: string | null = _input.source ?? null
-          try {
-            const { collectActiveTasks } = await import('../services/task-overview')
-            const overview = await collectActiveTasks(cachedConfig.projectId, p)
-            taskId = overview.current?.id ?? null
-            if (overview.current?.description) goal = overview.current.description
-          } catch {
-            /* best-effort binding */
-          }
+        const config = await cachedConfig
+        if (config?.projectId) {
+          const activeTask = await (async (): Promise<{
+            taskId: string | null
+            goal: string | null
+          }> => {
+            try {
+              const { collectActiveTasks } = await import('../services/task-overview')
+              const overview = await collectActiveTasks(config.projectId, p)
+              return {
+                taskId: overview.current?.id ?? null,
+                goal: overview.current?.description ?? _input.source ?? null,
+              }
+            } catch {
+              return { taskId: null, goal: _input.source ?? null }
+            }
+          })()
           recordAgentSessionStart({
-            projectId: cachedConfig.projectId,
+            projectId: config.projectId,
             sessionId: _input.session_id,
             directory: p,
-            taskId,
-            goal,
+            taskId: activeTask.taskId,
+            goal: activeTask.goal,
           })
         }
 

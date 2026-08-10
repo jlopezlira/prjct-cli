@@ -35,7 +35,11 @@ const TYPES = [
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-events-range-'))
 const openDbs: SqliteDatabase[] = []
-let dbCounter = 0
+const fixture: {
+  dbCounter: number
+} = {
+  dbCounter: 0,
+}
 
 afterAll(() => {
   for (const db of openDbs) {
@@ -47,7 +51,7 @@ afterAll(() => {
 })
 
 function freshDb(): SqliteDatabase {
-  const db = openDatabase(path.join(tmpDir, `events-${++dbCounter}.db`))
+  const db = openDatabase(path.join(tmpDir, `events-${++fixture.dbCounter}.db`))
   openDbs.push(db)
   db.run('CREATE TABLE events (id INTEGER PRIMARY KEY, type TEXT)')
   const insert = db.prepare('INSERT INTO events (type) VALUES (?)')

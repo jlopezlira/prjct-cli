@@ -79,13 +79,13 @@ class SyncService {
     this.projectPath = projectPath
     const startTime = Date.now()
 
-    let context7Status: Context7Status = {
+    const context7Status: Context7Status = {
       installed: false,
       verified: false,
       configPath: '',
       message: '',
     }
-    let postIndexWork: PostIndexWork | undefined
+    const postIndexWork: PostIndexWork[] = []
 
     try {
       // 1. Get project config
@@ -134,18 +134,17 @@ class SyncService {
       const activeProvider = await getActiveProvider().catch(() => null)
       const context7Provider = activeProvider?.name ?? 'claude'
       try {
-        context7Status = await phase('context7', () =>
-          context7Service.ensureReady(context7Provider)
+        Object.assign(
+          context7Status,
+          await phase('context7', () => context7Service.ensureReady(context7Provider))
         )
       } catch (error) {
         const message = getErrorMessage(error)
         log.warn(`Context7 MCP not ready (continuing sync): ${message}`)
-        context7Status = {
-          installed: context7Status.installed,
+        Object.assign(context7Status, {
           verified: false,
-          configPath: context7Status.configPath,
           message,
-        }
+        })
       }
 
       // 2. Ensure directories exist (non-blocking)
@@ -287,18 +286,20 @@ class SyncService {
               .readConfig(postIndexProjectPath)
               .catch(() => null)
             const uploadToCloud = shouldAutoUploadCodeGraph(postIndexConfig)
-            postIndexWork = startPostIndexWork(
-              () => maybeExportAfterIndex(postIndexProjectId, { uploadToCloud }),
-              {
-                onComplete: ({ totalMs, error }) => {
-                  log.debug('sync post-index work settled', {
-                    projectId: postIndexProjectId,
-                    uploadToCloud,
-                    totalMs,
-                    ...(error === undefined ? {} : { error: getErrorMessage(error) }),
-                  })
-                },
-              }
+            postIndexWork.push(
+              startPostIndexWork(
+                () => maybeExportAfterIndex(postIndexProjectId, { uploadToCloud }),
+                {
+                  onComplete: ({ totalMs, error }) => {
+                    log.debug('sync post-index work settled', {
+                      projectId: postIndexProjectId,
+                      uploadToCloud,
+                      totalMs,
+                      ...(error === undefined ? {} : { error: getErrorMessage(error) }),
+                    })
+                  },
+                }
+              )
             )
           } catch (error) {
             log.debug('File ranking index build failed (non-critical)', {
@@ -309,16 +310,14 @@ class SyncService {
       }
 
       // 4. Portable multi-host skills (no project stamp — L0 isolation)
-      let generatedSkills: import('../types/project-sync').ProjectSyncResult['generatedSkills']
       const skillPhaseStart = Date.now()
       log.debug('sync phase start', { phase: 'skills' })
-      try {
-        generatedSkills = await skillGenerator.generateAndInstall()
-      } catch (error) {
+      const generatedSkills = await skillGenerator.generateAndInstall().catch((error) => {
         log.debug('Native skill generation failed (non-critical)', {
           error: getErrorMessage(error),
         })
-      }
+        return undefined
+      })
       log.debug('sync phase done', { phase: 'skills', ms: Date.now() - skillPhaseStart })
 
       // 5. Update files IN PARALLEL (write to different files)
@@ -366,39 +365,43 @@ class SyncService {
 
       // 9a. Project style model — recalculate every sync (dual evolution with
       // developer snapshot above). Progressive delta + history + memory bridge.
-      let projectStyle: import('../types/project-sync').ProjectStyleSyncSummary | undefined
-      try {
-        const { recomputeProjectStyle, formatProjectStyleForSync } = await import(
-          './project-style-evolution'
-        )
-        const styleResult = await phase('project-style', () =>
-          recomputeProjectStyle({
-            projectId: this.projectId!,
-            projectPath: this.projectPath,
-            stats,
-            stack,
-            commands,
-            commitHash: git.recentCommits[0]?.hash ?? null,
-            source: 'sync-mechanical',
-          })
-        )
-        const formatted = formatProjectStyleForSync(styleResult)
-        const coverageRaw = styleResult.snapshot.payload.metrics.styleCoverage
-        projectStyle = {
-          summary: styleResult.snapshot.summary,
-          evolutionMd: formatted.evolutionMd,
-          patternCount: styleResult.snapshot.patternCount,
-          antiPatternCount: styleResult.snapshot.antiPatternCount,
-          conventionCount: styleResult.snapshot.conventionCount,
-          styleCoverage: typeof coverageRaw === 'number' ? coverageRaw : Number(coverageRaw) || 0,
-          isFirst: styleResult.isFirst,
-          hasChanges: styleResult.delta.hasChanges,
-        }
-      } catch (error) {
-        log.debug('Project style recompute failed (non-critical)', {
-          error: getErrorMessage(error),
-        })
-      }
+      const projectStyle: import('../types/project-sync').ProjectStyleSyncSummary | undefined =
+        await (async () => {
+          try {
+            const { recomputeProjectStyle, formatProjectStyleForSync } = await import(
+              './project-style-evolution'
+            )
+            const styleResult = await phase('project-style', () =>
+              recomputeProjectStyle({
+                projectId: this.projectId!,
+                projectPath: this.projectPath,
+                stats,
+                stack,
+                commands,
+                commitHash: git.recentCommits[0]?.hash ?? null,
+                source: 'sync-mechanical',
+              })
+            )
+            const formatted = formatProjectStyleForSync(styleResult)
+            const coverageRaw = styleResult.snapshot.payload.metrics.styleCoverage
+            return {
+              summary: styleResult.snapshot.summary,
+              evolutionMd: formatted.evolutionMd,
+              patternCount: styleResult.snapshot.patternCount,
+              antiPatternCount: styleResult.snapshot.antiPatternCount,
+              conventionCount: styleResult.snapshot.conventionCount,
+              styleCoverage:
+                typeof coverageRaw === 'number' ? coverageRaw : Number(coverageRaw) || 0,
+              isFirst: styleResult.isFirst,
+              hasChanges: styleResult.delta.hasChanges,
+            }
+          } catch (error) {
+            log.debug('Project style recompute failed (non-critical)', {
+              error: getErrorMessage(error),
+            })
+            return undefined
+          }
+        })()
 
       const workCost = await phase('work-cost', () => publishWorkCostSnapshots(this.projectId!))
 
@@ -427,13 +430,12 @@ class SyncService {
             maxArchive: cfg?.retention?.maxArchive,
             maxDelete: cfg?.retention?.maxDelete,
           })
-          let inboxMerged = 0
-          let inboxArchived = 0
-          if (!dryRun) {
-            const triaged = triageInbox(this.projectId!)
-            inboxMerged = triaged.merged
-            inboxArchived = triaged.archived
-          }
+          const { inboxMerged, inboxArchived } = dryRun
+            ? { inboxMerged: 0, inboxArchived: 0 }
+            : (() => {
+                const triaged = triageInbox(this.projectId!)
+                return { inboxMerged: triaged.merged, inboxArchived: triaged.archived }
+              })()
 
           // Cold purge: vacuum soft-deleted, orphan events, old archives,
           // auto-source caps. This is where historical bloat actually dies.
@@ -495,17 +497,17 @@ class SyncService {
       })
 
       // 11. Run verification checks (built-in + custom from config)
-      let verification: VerificationReport | undefined
-      await phase('verify', async () => {
+      const verification: VerificationReport | undefined = await phase('verify', async () => {
         try {
           const localConfig = await configManager.readConfig(this.projectPath)
-          verification = await syncVerifier.verify(
+          return await syncVerifier.verify(
             this.projectPath,
             this.globalPath,
             localConfig?.verification
           )
         } catch (error) {
           log.debug('Verification failed (non-critical)', { error: getErrorMessage(error) })
+          return undefined
         }
       })
 
@@ -527,7 +529,7 @@ class SyncService {
         }
       }
 
-      await postIndexWork?.settle()
+      await Promise.all(postIndexWork.map((work) => work.settle()))
 
       return {
         success: true,

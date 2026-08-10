@@ -10,19 +10,24 @@ import { HarnessCommands } from '../../commands/harness'
 
 describe('prjct harness command', () => {
   const cmd = new HarnessCommands()
-  let logSpy: ReturnType<typeof spyOn>
-  let errSpy: ReturnType<typeof spyOn>
+  const fixture: {
+    logSpy: ReturnType<typeof spyOn>
+    errSpy: ReturnType<typeof spyOn>
+  } = {
+    logSpy: undefined as unknown as ReturnType<typeof spyOn>,
+    errSpy: undefined as unknown as ReturnType<typeof spyOn>,
+  }
 
   beforeEach(() => {
-    logSpy = spyOn(console, 'log').mockImplementation(() => {})
-    errSpy = spyOn(console, 'error').mockImplementation(() => {})
+    fixture.logSpy = spyOn(console, 'log').mockImplementation(() => {})
+    fixture.errSpy = spyOn(console, 'error').mockImplementation(() => {})
   })
   afterEach(() => {
-    logSpy.mockRestore()
-    errSpy.mockRestore()
+    fixture.logSpy.mockRestore()
+    fixture.errSpy.mockRestore()
   })
 
-  const logged = (): string => logSpy.mock.calls.flat().join('\n')
+  const logged = (): string => fixture.logSpy.mock.calls.flat().join('\n')
 
   it('list prints the stealable rigs', async () => {
     const r = await cmd.list()

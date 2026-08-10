@@ -10,28 +10,34 @@ import { prjctDb } from '../../storage/database'
 import { getTaskPipelineState } from '../../storage/task-pipeline-storage'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
-let tmpRoot: string
-let projectId: string
-let projectPath: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+  projectPath: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+  projectPath: '',
+}
 
 describe('task service pipeline orchestration', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-task-service-pipeline-'))
-    projectId = `pipeline-service-${Date.now()}`
-    projectPath = path.join(tmpRoot, 'repo')
-    patchPathManager(tmpRoot)
-    await fs.mkdir(pathManager.getStoragePath(projectId, ''), { recursive: true })
-    await fs.mkdir(projectPath, { recursive: true })
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-task-service-pipeline-'))
+    fixture.projectId = `pipeline-service-${Date.now()}`
+    fixture.projectPath = path.join(fixture.tmpRoot, 'repo')
+    patchPathManager(fixture.tmpRoot)
+    await fs.mkdir(pathManager.getStoragePath(fixture.projectId, ''), { recursive: true })
+    await fs.mkdir(fixture.projectPath, { recursive: true })
   })
 
   afterEach(async () => {
     prjctDb.close()
     restorePathManager()
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
   })
 
   it('starts trivial work in the direct station', async () => {
-    const outcome = await startTask(projectId, projectPath, 'fix typo in README', {
+    const outcome = await startTask(fixture.projectId, fixture.projectPath, 'fix typo in README', {
       skipHooks: true,
     })
 
@@ -40,15 +46,15 @@ describe('task service pipeline orchestration', () => {
     expect(outcome.pipeline?.station).toBe('direct')
     expect(outcome.pipeline?.nextAction).toContain('Proceed directly')
     expect(outcome.taskId).toBeTruthy()
-    expect(getTaskPipelineState(projectId, outcome.taskId ?? '', MAIN_WORKSPACE_ID)?.station).toBe(
-      'direct'
-    )
+    expect(
+      getTaskPipelineState(fixture.projectId, outcome.taskId ?? '', MAIN_WORKSPACE_ID)?.station
+    ).toBe('direct')
   })
 
   it('starts substantive work in the spec-required test-first station', async () => {
     const outcome = await startTask(
-      projectId,
-      projectPath,
+      fixture.projectId,
+      fixture.projectPath,
       'add billing retry handling with failure recovery',
       { skipHooks: true }
     )
@@ -59,25 +65,31 @@ describe('task service pipeline orchestration', () => {
     expect(outcome.pipeline?.nextAction).toContain('Create or link a reviewed spec')
     expect(outcome.pipeline?.nextAction).toContain('tests before implementation')
     expect(
-      getTaskPipelineState(projectId, outcome.taskId ?? '', MAIN_WORKSPACE_ID)?.requiresTestsFirst
+      getTaskPipelineState(fixture.projectId, outcome.taskId ?? '', MAIN_WORKSPACE_ID)
+        ?.requiresTestsFirst
     ).toBe(true)
   })
 
   it('surfaces likely files from the project index when work starts', async () => {
-    await fs.mkdir(path.join(projectPath, 'core', 'server'), { recursive: true })
+    await fs.mkdir(path.join(fixture.projectPath, 'core', 'server'), { recursive: true })
     await fs.writeFile(
-      path.join(projectPath, 'core', 'server', 'headless-api.ts'),
+      path.join(fixture.projectPath, 'core', 'server', 'headless-api.ts'),
       'export function mapHeadlessApiEndpoints() { return [] }'
     )
     await fs.writeFile(
-      path.join(projectPath, 'core', 'server', 'billing.ts'),
+      path.join(fixture.projectPath, 'core', 'server', 'billing.ts'),
       'export function updateBilling() { return null }'
     )
-    await indexProject(projectPath, projectId)
+    await indexProject(fixture.projectPath, fixture.projectId)
 
-    const outcome = await startTask(projectId, projectPath, 'map headless API endpoints', {
-      skipHooks: true,
-    })
+    const outcome = await startTask(
+      fixture.projectId,
+      fixture.projectPath,
+      'map headless API endpoints',
+      {
+        skipHooks: true,
+      }
+    )
 
     expect(outcome.ok).toBe(true)
     expect(outcome.likelyFiles?.[0]?.path).toBe('core/server/headless-api.ts')

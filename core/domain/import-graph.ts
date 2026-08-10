@@ -29,16 +29,10 @@ import { batchProcess, walkDir } from '../utils/file-helper'
  * Only resolves relative imports (starting with . or @/).
  */
 function extractImportSources(content: string): string[] {
-  const sources: string[] = []
-  let match: RegExpExecArray | null
   const regex = new RegExp(IMPORT_REGEX.source, 'g')
-  while ((match = regex.exec(content)) !== null) {
-    const source = match[1]
-    if (source.startsWith('.') || source.startsWith('@/')) {
-      sources.push(source)
-    }
-  }
-  return sources
+  return [...content.matchAll(regex)]
+    .map((match) => match[1])
+    .filter((source) => source.startsWith('.') || source.startsWith('@/'))
 }
 
 /**
@@ -49,14 +43,9 @@ async function resolveImport(
   fromFile: string,
   projectPath: string
 ): Promise<string | null> {
-  let basePath: string
-
-  if (source.startsWith('@/')) {
-    basePath = path.join(projectPath, 'src', source.slice(2))
-  } else {
-    const fromDir = path.dirname(path.join(projectPath, fromFile))
-    basePath = path.resolve(fromDir, source)
-  }
+  const basePath = source.startsWith('@/')
+    ? path.join(projectPath, 'src', source.slice(2))
+    : path.resolve(path.dirname(path.join(projectPath, fromFile)), source)
 
   for (const ext of RESOLVE_EXTENSIONS) {
     const fullPath = basePath + ext
@@ -83,7 +72,6 @@ export async function buildGraph(projectPath: string): Promise<ImportGraph> {
   const files = await walkDir(projectPath)
   const forward: ImportAdjacency = {}
   const reverse: ReverseAdjacency = {}
-  let edgeCount = 0
 
   // Process files in parallel batches of 50
   const results = await batchProcess(files, 50, async (filePath) => {
@@ -107,8 +95,6 @@ export async function buildGraph(projectPath: string): Promise<ImportGraph> {
 
   for (const { filePath, imports } of results) {
     forward[filePath] = imports
-    edgeCount += imports.length
-
     for (const target of imports) {
       if (!reverse[target]) reverse[target] = []
       reverse[target].push(filePath)
@@ -119,7 +105,7 @@ export async function buildGraph(projectPath: string): Promise<ImportGraph> {
     forward,
     reverse,
     fileCount: files.length,
-    edgeCount,
+    edgeCount: results.reduce((total, result) => total + result.imports.length, 0),
     builtAt: new Date().toISOString(),
   }
 }
@@ -166,8 +152,7 @@ export function scoreFromSeeds(
   }
 
   // Process queue without Array.shift(), which is O(n) per pop on large graphs.
-  for (let queueIndex = 0; queueIndex < queue.length; queueIndex++) {
-    const { file, depth } = queue[queueIndex]
+  for (const { file, depth } of queue) {
     if (depth > maxDepth) continue
 
     const score = 1 / (depth + 1)
@@ -188,9 +173,9 @@ export function scoreFromSeeds(
       const forwardEdges = graph.forward[file] || []
       const reverseEdges = graph.reverse[file] || []
 
-      for (const neighbor of [...forwardEdges, ...reverseEdges]) {
-        if (!seedSet.has(neighbor) && !visited.has(neighbor)) {
-          queue.push({ file: neighbor, depth: depth + 1 })
+      for (const neighbor2 of [...forwardEdges, ...reverseEdges]) {
+        if (!seedSet.has(neighbor2) && !visited.has(neighbor2)) {
+          queue.push({ file: neighbor2, depth: depth + 1 })
         }
       }
     }
@@ -328,10 +313,10 @@ function updatePerFileEdges(
       for (const filePath of new Set([...changedFiles, ...deletedFiles])) {
         deleteOutgoing.run(filePath)
       }
-      for (const filePath of changedFiles) {
-        const imports = graph.forward[filePath] || []
+      for (const filePath2 of changedFiles) {
+        const imports = graph.forward[filePath2] || []
         for (const [sortOrder, target] of imports.entries()) {
-          insertEdge.run(filePath, target, sortOrder)
+          insertEdge.run(filePath2, target, sortOrder)
         }
       }
     })
@@ -468,8 +453,8 @@ export async function updateImportGraph(
   for (const filePath of touched) removeOutgoingEdges(existing, filePath)
 
   const affectedImporters = new Set<string>()
-  for (const filePath of deletedFiles) {
-    for (const importer of removeIncomingEdges(existing, filePath)) {
+  for (const filePath2 of deletedFiles) {
+    for (const importer of removeIncomingEdges(existing, filePath2)) {
       affectedImporters.add(importer)
     }
   }

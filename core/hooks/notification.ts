@@ -23,13 +23,13 @@ export function runNotificationHook(
       build: async (_input, p) => {
         const config = await configManager.readConfig(p).catch(() => null)
         if (!config?.projectId || effectiveNotifyMode(config) === 'off') return null
-        let detail = 'Waiting for your input'
-        try {
-          const overview = await collectActiveTasks(config.projectId, p)
-          if (overview.current) detail = `Waiting — active: ${overview.current.description}`
-        } catch {
-          /* best-effort */
-        }
+        const detail = await collectActiveTasks(config.projectId, p)
+          .then((overview) =>
+            overview.current
+              ? `Waiting — active: ${overview.current.description}`
+              : 'Waiting for your input'
+          )
+          .catch(() => 'Waiting for your input')
         await notifyDesktop('prjct — Claude needs you', detail)
         return null
       },

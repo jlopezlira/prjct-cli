@@ -82,6 +82,14 @@ const MIN_OVERFETCH = 100
  */
 const SUPERSEDE_TAG_KEYS = ['supersedes', 'duplicates', 'superseded-by']
 
+function getOrCreateMapValue<K, V>(map: Map<K, V>, key: K, create: () => V): V {
+  const existing = map.get(key)
+  if (existing !== undefined) return existing
+  const value = create()
+  map.set(key, value)
+  return value
+}
+
 /**
  * Dead-id set for the FTS mirror: every entry retired by an author-declared
  * relationship tag, regardless of result window. Scans only live rows whose
@@ -107,11 +115,7 @@ function collectMirrorSupersededIds(projectId: string): Set<string> {
     )
     const byId = new Map<string, Record<string, string>>()
     for (const r of rows) {
-      let tags = byId.get(r.entry_id)
-      if (!tags) {
-        tags = {}
-        byId.set(r.entry_id, tags)
-      }
+      const tags = getOrCreateMapValue(byId, r.entry_id, (): Record<string, string> => ({}))
       tags[r.key] = r.value
     }
     const pseudo: Pick<MemoryEntry, 'id' | 'tags'>[] = [...byId.entries()].map(([id, tags]) => ({
@@ -141,11 +145,7 @@ function batchTagsByEntryId(projectId: string, ids: string[]): Map<string, Recor
     ...ids
   )
   for (const t of tagRows) {
-    let m = tagsById.get(t.entry_id)
-    if (!m) {
-      m = {}
-      tagsById.set(t.entry_id, m)
-    }
+    const m = getOrCreateMapValue(tagsById, t.entry_id, (): Record<string, string> => ({}))
     m[t.key] = t.value
   }
   return tagsById
@@ -302,7 +302,6 @@ export const projectMemory = {
       force?: boolean
     }
   ): Promise<void> {
-    let type = args.type
     const tags: Record<string, string> = { ...(args.tags ?? {}) }
     const provenance = args.provenance ?? 'declared'
     const contentHash = memoryFingerprint(args.content)
@@ -312,14 +311,9 @@ export const projectMemory = {
     // requireWrite throws so user-facing verbs fail loud if a caller skipped
     // the edge check.
     {
-      let evaluateMemoryContent:
-        | typeof import('../services/trust-boundary')['evaluateMemoryContent']
-        | null = null
-      try {
-        ;({ evaluateMemoryContent } = await import('../services/trust-boundary'))
-      } catch {
-        /* module unavailable — never brick auto-capture paths */
-      }
+      const evaluateMemoryContent = await import('../services/trust-boundary')
+        .then((module) => module.evaluateMemoryContent)
+        .catch(() => null)
       if (evaluateMemoryContent) {
         const trust = evaluateMemoryContent(args.content, { force: args.force })
         if (!trust.allow) {
@@ -333,39 +327,39 @@ export const projectMemory = {
     // gotchas, sub-substance inbox. Demote rewrites type before gate/dedup so
     // knowledge is preserved as context instead of polluting judgment types.
     // force (CLI/MCP) bypasses shape gates with an audit tag.
-    {
-      const { classifyCapturePrecision } = await import('./precision-classifier')
-      const precision = classifyCapturePrecision(args.content, type, {
-        force: args.force === true,
-      })
-      if (precision.action === 'refuse') {
-        if (args.requireWrite) {
-          throw new Error(`precision refuse (${precision.reasonCode}): ${precision.reason}`)
-        }
-        return
+    const { classifyCapturePrecision } = await import('./precision-classifier')
+    const precision = classifyCapturePrecision(args.content, args.type, {
+      force: args.force === true,
+    })
+    if (precision.action === 'refuse') {
+      if (args.requireWrite) {
+        throw new Error(`precision refuse (${precision.reasonCode}): ${precision.reason}`)
       }
-      if (precision.action === 'demote' && precision.demoteTo) {
-        tags.shape_demoted = 'true'
-        tags.original_type = type
-        tags.precision_reason = precision.reasonCode
-        type = precision.demoteTo as MemoryType
-      }
-      if (args.force) {
-        tags['precision:force'] = 'true'
-      }
+      return
     }
+    if (precision.action === 'demote' && precision.demoteTo) {
+      tags.shape_demoted = 'true'
+      tags.original_type = args.type
+      tags.precision_reason = precision.reasonCode
+    }
+    if (args.force) tags['precision:force'] = 'true'
+    const type =
+      precision.action === 'demote' && precision.demoteTo
+        ? (precision.demoteTo as MemoryType)
+        : args.type
 
     // Resolve the project once and reuse it for both the dedup guard and the
     // sync publish below (each used to read + parse the config independently).
-    let projectId: string | undefined = args.projectId
-    if (!projectId) {
-      try {
-        const { default: configManager } = await import('../infrastructure/config-manager')
-        projectId = (await configManager.readConfig(projectPath))?.projectId
-      } catch {
-        /* config unreadable — dedup + sync are best-effort; the local write proceeds */
-      }
-    }
+    const projectId =
+      args.projectId ??
+      (await (async () => {
+        try {
+          const { default: configManager } = await import('../infrastructure/config-manager')
+          return (await configManager.readConfig(projectPath))?.projectId
+        } catch {
+          return undefined
+        }
+      })())
 
     // Anticipation bind: if the agent omitted `file:`, infer a repo-relative
     // path from content / files tag / cycle scope so guard + work risks fire.
@@ -373,23 +367,25 @@ export const projectMemory = {
     if (!tags.file) {
       try {
         const { inferMemoryFileTag } = await import('./infer-memory-file')
-        let cycleFiles: string[] | null = null
-        if (projectId) {
-          try {
-            const { stateStorage } = await import('../storage/state-storage')
-            const task = await stateStorage.getCurrentTask(projectId)
-            // Work-scope paths stamped when present (likelyFiles on some hosts).
-            const raw = (task as { likelyFiles?: Array<{ path?: string } | string> } | null)
-              ?.likelyFiles
-            if (Array.isArray(raw)) {
-              cycleFiles = raw
-                .map((f) => (typeof f === 'string' ? f : f?.path))
-                .filter((p): p is string => typeof p === 'string' && p.length > 0)
-            }
-          } catch {
-            cycleFiles = null
-          }
-        }
+        const cycleFiles = projectId
+          ? await (async (): Promise<string[] | null> => {
+              try {
+                const { stateStorage } = await import('../storage/state-storage')
+                const task = await stateStorage.getCurrentTask(projectId)
+                // Work-scope paths stamped when present (likelyFiles on some hosts).
+                const raw = (task as { likelyFiles?: Array<{ path?: string } | string> } | null)
+                  ?.likelyFiles
+                if (Array.isArray(raw)) {
+                  return raw
+                    .map((f) => (typeof f === 'string' ? f : f?.path))
+                    .filter((p): p is string => typeof p === 'string' && p.length > 0)
+                }
+                return null
+              } catch {
+                return null
+              }
+            })()
+          : null
         const inferred = inferMemoryFileTag({
           content: args.content,
           tags,
@@ -482,7 +478,7 @@ export const projectMemory = {
         ? { ...(projectId ? { projectId } : {}), required: args.requireWrite }
         : undefined
     )
-    if (logResult?.projectId && !projectId) projectId = logResult.projectId
+    const resolvedProjectId = projectId ?? logResult?.projectId
 
     // memory_entries (the single source for recall + FTS) is populated by the
     // memory_entries_from_events trigger on the events insert above — covers
@@ -497,8 +493,8 @@ export const projectMemory = {
     // write actually succeeding (logResult.eventId): if `log()` swallowed a
     // transient failure, no new row exists — superseding the old revisions
     // then would silently erase the topic's only active knowledge.
-    if (projectId && dedupTopicKey && logResult?.eventId != null) {
-      this.applyTopicSupersession(projectId, type, contentHash, dedupTopicKey)
+    if (resolvedProjectId && dedupTopicKey && logResult?.eventId != null) {
+      this.applyTopicSupersession(resolvedProjectId, type, contentHash, dedupTopicKey)
     }
 
     // Reinforcement loop: credit the entries this new one references — they
@@ -522,7 +518,7 @@ export const projectMemory = {
     // table, but it doesn't enqueue a SyncEvent for push — that's
     // what this call does. Best-effort; a sync queue write must not
     // fail the local memory write.
-    if (!projectId) return
+    if (!resolvedProjectId) return
     try {
       const { publishCRUD } = await import('../sync/publish-helper')
       const entityId =
@@ -532,7 +528,7 @@ export const projectMemory = {
         args.source ??
         `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       await publishCRUD({
-        projectId,
+        projectId: resolvedProjectId,
         entityType: 'memories',
         entityId,
         eventType: 'upsert',
@@ -584,27 +580,28 @@ export const projectMemory = {
       provenance: string | null
       created_at: number
     }
-    let rows: FtsRow[]
-    try {
-      // Overfetch: superseded pruning below may drop rows, and this is
-      // the surface that feeds the per-prompt trap cue — a stale decision
-      // must not consume the only result slot. Single-source: FTS over
-      // memory_entries (migration 42).
-      rows = prjctDb.query<FtsRow>(
-        projectId,
-        `SELECT m.id, m.content, m.type, m.provenance, m.created_at
+    const rows = (() => {
+      try {
+        // Overfetch: superseded pruning below may drop rows, and this is
+        // the surface that feeds the per-prompt trap cue — a stale decision
+        // must not consume the only result slot. Single-source: FTS over
+        // memory_entries (migration 42).
+        return prjctDb.query<FtsRow>(
+          projectId,
+          `SELECT m.id, m.content, m.type, m.provenance, m.created_at
          FROM memory_entries_fts ft
          JOIN memory_entries m ON m.rowid = ft.rowid
          WHERE memory_entries_fts MATCH ?
            AND m.deleted_at IS NULL
          ORDER BY bm25(memory_entries_fts) ASC, m.created_at DESC
          LIMIT ?`,
-        matchExpr,
-        limit * 2
-      )
-    } catch {
-      return []
-    }
+          matchExpr,
+          limit * 2
+        )
+      } catch {
+        return []
+      }
+    })()
     if (rows.length === 0) return []
 
     const tagsById = batchTagsByEntryId(
@@ -612,7 +609,7 @@ export const projectMemory = {
       rows.map((r) => r.id)
     )
 
-    let entries = rows.map((row) => ({
+    const entries = rows.map((row) => ({
       id: row.id,
       type: (row.type ?? 'fact') as MemoryType,
       content: row.content,
@@ -628,8 +625,8 @@ export const projectMemory = {
     // of all live mirror rows carrying relationship tags (small, indexed
     // by the LIKE pre-filter) instead of just the result window.
     const dead = collectMirrorSupersededIds(projectId)
-    if (dead.size > 0) entries = entries.filter((e) => !dead.has(e.id))
-    return entries.slice(0, limit)
+    const liveEntries = dead.size > 0 ? entries.filter((entry) => !dead.has(entry.id)) : entries
+    return liveEntries.slice(0, limit)
   },
 
   /**
@@ -670,38 +667,38 @@ export const projectMemory = {
         )
       : []
 
-    let entries: MemoryEntry[] = [...v2entries, ...shipped.map(shippedRowToEntry)]
-
-    if (typesFilter) {
-      entries = entries.filter((e) => typesFilter.has(e.type))
-    }
-    if (opts.tags) {
-      entries = entries.filter((e) => matchesTags(e, opts.tags ?? {}))
-    }
-    if (opts.topic) {
-      entries = entries.filter((e) => matchesTopic(e, opts.topic!))
-    }
-
-    entries.sort((a, b) => b.rememberedAt.localeCompare(a.rememberedAt))
+    const allEntries: MemoryEntry[] = [...v2entries, ...shipped.map(shippedRowToEntry)]
+    const typedEntries = typesFilter
+      ? allEntries.filter((entry) => typesFilter.has(entry.type))
+      : allEntries
+    const taggedEntries = opts.tags
+      ? typedEntries.filter((entry) => matchesTags(entry, opts.tags ?? {}))
+      : typedEntries
+    const topicalEntries = opts.topic
+      ? taggedEntries.filter((entry) => matchesTopic(entry, opts.topic!))
+      : taggedEntries
+    const sortedEntries = [...topicalEntries].sort((a, b) =>
+      b.rememberedAt.localeCompare(a.rememberedAt)
+    )
 
     // Latest-winner dedupe: when an entry has a `key` tag, only the
     // newest entry per (type, key) survives. Entries without a key fall
     // through unchanged. Sort-then-dedupe order matters — must run AFTER
     // sort so the first match per group is the newest.
-    if (opts.dedupeByKey !== false) {
-      entries = dedupeLatestByKey(entries)
-    }
+    const dedupedEntries =
+      opts.dedupeByKey !== false ? dedupeLatestByKey(sortedEntries) : sortedEntries
 
     // Author-declared compaction: drop entries explicitly retired via
     // supersedes / superseded-by / duplicates. Runs before the slice so a
     // retired entry never consumes a result slot. Opt out (link/index layer)
     // to keep retired entries resolvable.
-    if (opts.pruneSuperseded !== false) {
-      const dead = collectSupersededIds(entries)
-      if (dead.size > 0) entries = entries.filter((e) => !dead.has(e.id))
-    }
+    const liveEntries = (() => {
+      if (opts.pruneSuperseded === false) return dedupedEntries
+      const dead = collectSupersededIds(dedupedEntries)
+      return dead.size > 0 ? dedupedEntries.filter((entry) => !dead.has(entry.id)) : dedupedEntries
+    })()
 
-    return entries.slice(0, limit)
+    return liveEntries.slice(0, limit)
   },
 
   /**
@@ -739,23 +736,24 @@ export const projectMemory = {
     // SQL LIMIT bounds the hot path (pre-edit / guard). Over-fetch a small
     // multiple so preventive JS filter + superseded prune still fill `limit`.
     const sqlLimit = Math.max(limit * 5, 15)
-    let matches: MemoryEntry[]
-    try {
-      matches = loadV2Entries(
-        projectId,
-        `AND file IS NOT NULL
-          AND (file = ? OR ? LIKE '%/' || file OR file = ? OR file LIKE '%/' || ?)
-          ORDER BY created_at DESC, rowid DESC
-          LIMIT ?`,
-        filePath,
-        filePath,
-        base,
-        base,
-        sqlLimit
-      ).filter(isPreventive)
-    } catch {
-      return []
-    }
+    const preventiveMatches = (() => {
+      try {
+        return loadV2Entries(
+          projectId,
+          `AND file IS NOT NULL
+            AND (file = ? OR ? LIKE '%/' || file OR file = ? OR file LIKE '%/' || ?)
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?`,
+          filePath,
+          filePath,
+          base,
+          base,
+          sqlLimit
+        ).filter(isPreventive)
+      } catch {
+        return []
+      }
+    })()
     // Also surface the task CONTEXT that touched this file ("this file was
     // changed during these tasks, by these authors") — the git-anchored
     // second-brain answer to "what happened here / who?" without git blame.
@@ -763,26 +761,29 @@ export const projectMemory = {
     // The pre-edit PUSH opts out (`preventiveOnly`): a heads-up that fires on
     // every edit must carry only TRAPS, not file history — history stays one
     // pull away via `prjct guard` when the agent actually asks "what happened?".
-    if (!opts.preventiveOnly) {
-      try {
-        const ctxRows = loadV2Entries(
-          projectId,
-          'AND type = ? ORDER BY created_at DESC, rowid DESC LIMIT 200',
-          'context'
-        )
-        for (const e of ctxRows) {
-          const files = (e.tags?.files ?? '').split(',').map((f) => f.trim())
-          if (files.some((f) => f === filePath || f === base || f.endsWith(`/${base}`))) {
-            matches.push(e)
+    const contextMatches = !opts.preventiveOnly
+      ? (() => {
+          try {
+            const ctxRows = loadV2Entries(
+              projectId,
+              'AND type = ? ORDER BY created_at DESC, rowid DESC LIMIT 200',
+              'context'
+            )
+            return ctxRows.filter((entry) => {
+              const files = (entry.tags?.files ?? '').split(',').map((file) => file.trim())
+              return files.some(
+                (file) => file === filePath || file === base || file.endsWith(`/${base}`)
+              )
+            })
+          } catch {
+            return []
           }
-        }
-      } catch {
-        /* best-effort — preventive matches still stand */
-      }
-    }
+        })()
+      : []
+    const matches = [...preventiveMatches, ...contextMatches]
     const dead = collectSupersededIds(matches)
-    if (dead.size > 0) matches = matches.filter((e) => !dead.has(e.id))
-    return matches.slice(0, limit)
+    const liveMatches = dead.size > 0 ? matches.filter((entry) => !dead.has(entry.id)) : matches
+    return liveMatches.slice(0, limit)
   },
 
   /**
@@ -868,23 +869,24 @@ export const projectMemory = {
     if (!m) return false
     const rowId = Number(m[1])
     const memId = `mem_${rowId}`
-    let removed = false
-
     // Source event (recall + vault index read events directly). A memories
     // mirror row can outlive its event and vice-versa, so clean each
     // independently and report success if EITHER surface had the entry.
-    try {
-      const ev = prjctDb.get<{ id: number }>(
-        projectId,
-        'SELECT id FROM events WHERE id = ? AND type LIKE ?',
-        rowId,
-        `${REMEMBER_EVENT_PREFIX}%`
-      )
-      if (ev) {
+    const eventRemoved = (() => {
+      try {
+        const event = prjctDb.get<{ id: number }>(
+          projectId,
+          'SELECT id FROM events WHERE id = ? AND type LIKE ?',
+          rowId,
+          `${REMEMBER_EVENT_PREFIX}%`
+        )
+        if (!event) return false
         prjctDb.run(projectId, 'DELETE FROM events WHERE id = ?', rowId)
-        removed = true
+        return true
+      } catch {
+        return false
       }
-    } catch {}
+    })()
 
     // (memory_entries soft-delete below is the single-source forget; it also
     // removes the entry from searchFts via the FTS triggers.)
@@ -897,17 +899,21 @@ export const projectMemory = {
     // Schema v2 single source: soft-delete the normalized row so recall +
     // searchFts (which read memory_entries) stop returning it. Counts as a
     // successful forget even if the events/legacy mirrors had nothing.
-    try {
-      const r = prjctDb.run(
-        projectId,
-        'UPDATE memory_entries SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL',
-        Date.now(),
-        memId
-      )
-      if (r.changes > 0) removed = true
-    } catch {}
+    const entryRemoved = (() => {
+      try {
+        const result = prjctDb.run(
+          projectId,
+          'UPDATE memory_entries SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL',
+          Date.now(),
+          memId
+        )
+        return result.changes > 0
+      } catch {
+        return false
+      }
+    })()
 
-    return removed
+    return eventRemoved || entryRemoved
   },
 
   /**
@@ -940,7 +946,7 @@ export const projectMemory = {
         if (!v) continue
         for (const m of String(v).matchAll(refRe)) refs.add(`mem_${m[1]}`)
       }
-      for (const m of entry.content.matchAll(refRe)) refs.add(`mem_${m[1]}`)
+      for (const m2 of entry.content.matchAll(refRe)) refs.add(`mem_${m2[1]}`)
 
       for (const ref of refs) {
         if (linked.length >= cap) break

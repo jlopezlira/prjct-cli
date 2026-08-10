@@ -226,14 +226,16 @@ class SyncClient {
         }
       )
       if (!response.ok) {
-        let detail = `${response.status} ${response.statusText}`
-        try {
-          const errBody = (await response.json()) as { detail?: unknown }
-          if (typeof errBody.detail === 'string') detail = errBody.detail
-          else if (errBody.detail != null) detail = JSON.stringify(errBody.detail).slice(0, 300)
-        } catch {
-          /* ignore body parse */
-        }
+        const detail = await (async () => {
+          const fallback = `${response.status} ${response.statusText}`
+          try {
+            const errBody = (await response.json()) as { detail?: unknown }
+            if (typeof errBody.detail === 'string') return errBody.detail
+            return errBody.detail != null ? JSON.stringify(errBody.detail).slice(0, 300) : fallback
+          } catch {
+            return fallback
+          }
+        })()
         return { ok: false, reason: detail }
       }
       const body = (await response.json()) as { ok?: boolean; nodes?: number; links?: number }

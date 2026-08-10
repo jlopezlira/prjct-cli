@@ -25,8 +25,13 @@ import { buildReferenceModel, isReferenceEligible } from '../../services/retenti
 import prjctDb from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
 
 const NOW = Date.parse('2026-07-10T00:00:00.000Z')
 const DAY = 86_400_000
@@ -43,15 +48,15 @@ const entry = (over: Partial<MemoryEntry>): MemoryEntry => ({
 })
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-rho-'))
-  projectId = `test-rho-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  patchPathManager(tmpRoot)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-rho-'))
+  fixture.projectId = `test-rho-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  patchPathManager(fixture.tmpRoot)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
 })
 
 afterEach(async () => {
   restorePathManager()
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('reference model R', () => {
@@ -84,7 +89,7 @@ describe('reference model R', () => {
 
   it('caps |R| and prefers decisions over weak context', () => {
     const many: MemoryEntry[] = []
-    for (let i = 0; i < 200; i++) {
+    for (const i of Array.from({ length: 200 }, (_, index) => index)) {
       many.push(
         entry({
           id: `mem_${i}`,
@@ -228,14 +233,14 @@ describe('scoreEntry integrates excess', () => {
 
 describe('capture gate', () => {
   it('rejects low-stakes near-dup of existing judgment', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content:
         'always run typecheck before push because lefthook only covers staged files in worktrees',
-      projectId,
+      projectId: fixture.projectId,
     })
     const gate = captureGate(
-      projectId,
+      fixture.projectId,
       'inbox',
       'always run typecheck before push because lefthook only covers staged files in worktrees'
     )
@@ -244,14 +249,14 @@ describe('capture gate', () => {
   })
 
   it('accepts judgment types even when similar (human asserted)', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content:
         'prefer soft-delete over hard purge for memory so recovery remains possible from archives',
-      projectId,
+      projectId: fixture.projectId,
     })
     const gate = captureGate(
-      projectId,
+      fixture.projectId,
       'decision',
       'prefer soft-delete for memory recovery via archives table when retention archives'
     )
@@ -260,7 +265,7 @@ describe('capture gate', () => {
 
   it('accepts high-excess novel inbox on empty-ish R', () => {
     const gate = captureGate(
-      projectId,
+      fixture.projectId,
       'inbox',
       'brand new idea about shipping multi-agent handoff marketing narrative for the site'
     )
@@ -276,23 +281,23 @@ describe('capture gate', () => {
 
 describe('evaluateRetention end-to-end with R', () => {
   it('reports referenceSize and scores real vault', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content:
         'multi-agent switch yields ownership via SQLite handoffs with who and why durable fields',
-      projectId,
+      projectId: fixture.projectId,
     })
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'gotcha',
       content:
         'Codex skill body must stay under 1024 bytes or the entire skill is silently rejected',
-      projectId,
+      projectId: fixture.projectId,
     })
-    const report = evaluateRetention(projectId, NOW)
+    const report = evaluateRetention(fixture.projectId, NOW)
     expect(report.referenceSize).toBeGreaterThan(0)
     expect(report.evaluated).toBeGreaterThanOrEqual(2)
     expect(report.active + report.archive + report.delete).toBe(report.evaluated)
-    const inputs = collectRetentionInputs(projectId, NOW)
+    const inputs = collectRetentionInputs(fixture.projectId, NOW)
     expect(inputs.refIndex.entries.length).toBe(report.referenceSize)
   })
 })

@@ -179,9 +179,9 @@ function diffStringArray(
     }
   }
 
-  for (const val of before) {
-    if (!afterSet.has(val)) {
-      items.push({ field: label, type: 'removed', before: val })
+  for (const val2 of before) {
+    if (!afterSet.has(val2)) {
+      items.push({ field: label, type: 'removed', before: val2 })
     }
   }
 }

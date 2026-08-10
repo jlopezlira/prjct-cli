@@ -114,11 +114,10 @@ class ContextZoneStorage {
     )
 
     const counts: Record<string, number> = { smart: 0, warning: 0, dumb: 0 }
-    let total = 0
     for (const row of transitions) {
       counts[row.zone_to] = row.cnt
-      total += row.cnt
     }
+    const total = transitions.reduce((sum, row) => sum + row.cnt, 0)
 
     // Count compactions
     const compactionRows = prjctDb.query<{ cnt: number }>(

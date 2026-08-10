@@ -134,18 +134,17 @@ export async function getSessionActivity(projectId: string): Promise<{
       return ts?.startsWith(today)
     })
 
-    let sessionDuration: string | null = null
-    if (todayEvents.length >= 2) {
+    const sessionDuration = (() => {
+      if (todayEvents.length < 2) return null
       const timestamps = todayEvents
         .map((e) => new Date((e.timestamp || e.ts) as string).getTime())
         .filter((t) => !Number.isNaN(t))
         .sort((a, b) => a - b)
 
-      if (timestamps.length >= 2) {
-        const durationMs = timestamps[timestamps.length - 1] - timestamps[0]
-        sessionDuration = dateHelper.formatDuration(durationMs)
-      }
-    }
+      if (timestamps.length < 2) return null
+      const durationMs = timestamps[timestamps.length - 1] - timestamps[0]
+      return dateHelper.formatDuration(durationMs)
+    })()
 
     const tasksCompleted = todayEvents.filter((e) => e.action === 'task_completed').length
     const featuresShipped = todayEvents.filter((e) => e.action === 'feature_shipped').length

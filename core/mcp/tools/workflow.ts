@@ -45,9 +45,9 @@ export function registerWorkflowTools(server: McpServer) {
       const parts: string[] = [`## Workflow Rules for \`${args.command}\``]
       for (const [key, groupRules] of Object.entries(grouped)) {
         parts.push(`\n### ${key}`)
-        for (const r of groupRules) {
-          const status = r.enabled ? '' : ' (disabled)'
-          parts.push(`- ${r.action}${r.description ? ` — ${r.description}` : ''}${status}`)
+        for (const r2 of groupRules) {
+          const status = r2.enabled ? '' : ' (disabled)'
+          parts.push(`- ${r2.action}${r2.description ? ` — ${r2.description}` : ''}${status}`)
         }
       }
 

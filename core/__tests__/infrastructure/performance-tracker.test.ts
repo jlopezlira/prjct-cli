@@ -22,18 +22,23 @@ import prjctDb from '../../storage/database'
 
 // Test Setup
 
-let tmpRoot: string | null = null
-let testProjectId: string
+const fixture: {
+  tmpRoot: string | null
+  testProjectId: string
+} = {
+  tmpRoot: null,
+  testProjectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('PerformanceTracker', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-perf-test-'))
-    testProjectId = 'test-project-perf'
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-perf-test-'))
+    fixture.testProjectId = 'test-project-perf'
 
     pathManager.getGlobalProjectPath = (projectId: string) => {
-      return path.join(tmpRoot!, projectId)
+      return path.join(fixture.tmpRoot!, projectId)
     }
   })
 
@@ -41,11 +46,11 @@ describe('PerformanceTracker', () => {
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
 
     // Close SQLite connection before cleaning up
-    prjctDb.close(testProjectId)
+    prjctDb.close(fixture.testProjectId)
 
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
-      tmpRoot = null
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+      fixture.tmpRoot = null
     }
   })
 
@@ -93,13 +98,13 @@ describe('PerformanceTracker', () => {
     })
 
     it('should record memory to SQLite', () => {
-      const snapshot = performanceTracker.recordMemory(testProjectId)
+      const snapshot = performanceTracker.recordMemory(fixture.testProjectId)
 
       expect(snapshot.heapUsed).toBeGreaterThan(0)
 
       // Verify events were written to SQLite
       const events = prjctDb.query<{ type: string; data: string }>(
-        testProjectId,
+        fixture.testProjectId,
         'SELECT metric AS type, data FROM perf_samples ORDER BY id'
       )
 
@@ -118,10 +123,10 @@ describe('PerformanceTracker', () => {
 
   describe('metric recording', () => {
     it('should record timing metric to SQLite', () => {
-      performanceTracker.recordTiming(testProjectId, 'startup_time', 350.5)
+      performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 350.5)
 
       const events = prjctDb.query<{ type: string; data: string }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT metric AS type, data FROM perf_samples WHERE metric = 'startup_time'"
       )
 
@@ -133,12 +138,12 @@ describe('PerformanceTracker', () => {
     })
 
     it('should record timing with context', () => {
-      performanceTracker.recordTiming(testProjectId, 'command_duration', 120, {
+      performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', 120, {
         command: 'sync',
       })
 
       const events = prjctDb.query<{ data: string }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT data FROM perf_samples WHERE metric = 'command_duration'"
       )
 
@@ -147,12 +152,12 @@ describe('PerformanceTracker', () => {
     })
 
     it('should append multiple metrics', () => {
-      performanceTracker.recordTiming(testProjectId, 'startup_time', 300)
-      performanceTracker.recordTiming(testProjectId, 'startup_time', 250)
-      performanceTracker.recordTiming(testProjectId, 'command_duration', 50)
+      performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 300)
+      performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 250)
+      performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', 50)
 
       const events = prjctDb.query<{ type: string }>(
-        testProjectId,
+        fixture.testProjectId,
         'SELECT metric AS type FROM perf_samples'
       )
 
@@ -160,15 +165,17 @@ describe('PerformanceTracker', () => {
     })
 
     it('does not write new telemetry into the events log', () => {
-      performanceTracker.recordTiming(testProjectId, 'command_duration', 50, { command: 'status' })
-      performanceTracker.recordMemory(testProjectId)
+      performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', 50, {
+        command: 'status',
+      })
+      performanceTracker.recordMemory(fixture.testProjectId)
 
       const telemetryEvents = prjctDb.query<{ n: number }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT COUNT(*) AS n FROM events WHERE type LIKE 'perf.%'"
       )
       const samples = prjctDb.query<{ n: number }>(
-        testProjectId,
+        fixture.testProjectId,
         'SELECT COUNT(*) AS n FROM perf_samples'
       )
 
@@ -181,14 +188,14 @@ describe('PerformanceTracker', () => {
 
   describe('context correctness', () => {
     it('should record context correctness entry', () => {
-      performanceTracker.recordContextCorrectness(testProjectId, {
+      performanceTracker.recordContextCorrectness(fixture.testProjectId, {
         taskId: 'task_123',
         receivedSync: true,
         syncFieldsInjected: ['analysis', 'patterns'],
       })
 
       const events = prjctDb.query<{ data: string }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT data FROM perf_samples WHERE metric = 'context_correctness'"
       )
 
@@ -204,14 +211,14 @@ describe('PerformanceTracker', () => {
 
   describe('subtask handoff', () => {
     it('should record handoff entry', () => {
-      performanceTracker.recordSubtaskHandoff(testProjectId, {
+      performanceTracker.recordSubtaskHandoff(fixture.testProjectId, {
         taskId: 'task_456',
         subtaskId: 'subtask-001',
         outputPopulated: true,
       })
 
       const events = prjctDb.query<{ data: string }>(
-        testProjectId,
+        fixture.testProjectId,
         "SELECT data FROM perf_samples WHERE metric = 'subtask_handoff'"
       )
 
@@ -226,7 +233,7 @@ describe('PerformanceTracker', () => {
 
   describe('report generation', () => {
     it('should return empty report when no data', () => {
-      const report = performanceTracker.getReport(testProjectId)
+      const report = performanceTracker.getReport(fixture.testProjectId)
 
       expect(report.period).toBe('7d')
       expect(report.startup).toBeUndefined()
@@ -236,11 +243,11 @@ describe('PerformanceTracker', () => {
     })
 
     it('should aggregate startup time metrics', () => {
-      performanceTracker.recordTiming(testProjectId, 'startup_time', 300)
-      performanceTracker.recordTiming(testProjectId, 'startup_time', 400)
-      performanceTracker.recordTiming(testProjectId, 'startup_time', 500)
+      performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 300)
+      performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 400)
+      performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 500)
 
-      const report = performanceTracker.getReport(testProjectId)
+      const report = performanceTracker.getReport(fixture.testProjectId)
 
       expect(report.startup).toBeDefined()
       expect(report.startup!.avg).toBe(400)
@@ -250,9 +257,9 @@ describe('PerformanceTracker', () => {
     })
 
     it('should aggregate memory metrics', () => {
-      performanceTracker.recordMemory(testProjectId)
+      performanceTracker.recordMemory(fixture.testProjectId)
 
-      const report = performanceTracker.getReport(testProjectId)
+      const report = performanceTracker.getReport(fixture.testProjectId)
 
       expect(report.memory).toBeDefined()
       expect(report.memory!.avgHeapMB).toBeGreaterThan(0)
@@ -260,16 +267,16 @@ describe('PerformanceTracker', () => {
     })
 
     it('should aggregate context correctness', () => {
-      performanceTracker.recordContextCorrectness(testProjectId, {
+      performanceTracker.recordContextCorrectness(fixture.testProjectId, {
         taskId: 't1',
         receivedSync: true,
       })
-      performanceTracker.recordContextCorrectness(testProjectId, {
+      performanceTracker.recordContextCorrectness(fixture.testProjectId, {
         taskId: 't2',
         receivedSync: false,
       })
 
-      const report = performanceTracker.getReport(testProjectId)
+      const report = performanceTracker.getReport(fixture.testProjectId)
 
       expect(report.contextCorrectness).toBeDefined()
       expect(report.contextCorrectness!.total).toBe(2)
@@ -278,23 +285,23 @@ describe('PerformanceTracker', () => {
     })
 
     it('should aggregate subtask handoff', () => {
-      performanceTracker.recordSubtaskHandoff(testProjectId, {
+      performanceTracker.recordSubtaskHandoff(fixture.testProjectId, {
         taskId: 't1',
         subtaskId: 's1',
         outputPopulated: true,
       })
-      performanceTracker.recordSubtaskHandoff(testProjectId, {
+      performanceTracker.recordSubtaskHandoff(fixture.testProjectId, {
         taskId: 't1',
         subtaskId: 's2',
         outputPopulated: true,
       })
-      performanceTracker.recordSubtaskHandoff(testProjectId, {
+      performanceTracker.recordSubtaskHandoff(fixture.testProjectId, {
         taskId: 't1',
         subtaskId: 's3',
         outputPopulated: false,
       })
 
-      const report = performanceTracker.getReport(testProjectId)
+      const report = performanceTracker.getReport(fixture.testProjectId)
 
       expect(report.subtaskHandoff).toBeDefined()
       expect(report.subtaskHandoff!.total).toBe(3)
@@ -303,17 +310,17 @@ describe('PerformanceTracker', () => {
     })
 
     it('should aggregate command durations', () => {
-      performanceTracker.recordTiming(testProjectId, 'command_duration', 100, {
+      performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', 100, {
         command: 'sync',
       })
-      performanceTracker.recordTiming(testProjectId, 'command_duration', 200, {
+      performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', 200, {
         command: 'sync',
       })
-      performanceTracker.recordTiming(testProjectId, 'command_duration', 50, {
+      performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', 50, {
         command: 'status',
       })
 
-      const report = performanceTracker.getReport(testProjectId)
+      const report = performanceTracker.getReport(fixture.testProjectId)
 
       expect(report.commandDurations).toBeDefined()
       expect(report.commandDurations!.sync).toBeDefined()
@@ -325,10 +332,10 @@ describe('PerformanceTracker', () => {
 
     it('should filter by date range', () => {
       // Record some metrics
-      performanceTracker.recordTiming(testProjectId, 'startup_time', 300)
+      performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 300)
 
       // Report for 0 days (should find nothing before today)
-      const report = performanceTracker.getReport(testProjectId, 0)
+      const report = performanceTracker.getReport(fixture.testProjectId, 0)
       // With 0 days, sinceDate = today, so entries from "now" should still match
       // because the filter is >= sinceIso (same day)
       expect(report.startup).toBeDefined()

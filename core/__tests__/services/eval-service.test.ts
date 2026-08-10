@@ -13,22 +13,30 @@ import {
 } from '../../services/eval-service'
 import { execFileAsync } from '../../utils/exec'
 
-let tmpRoot = ''
-let projectPath = ''
-let originalCliHome: string | undefined
+const fixture: {
+  tmpRoot: string
+  projectPath: string
+  originalCliHome: string | undefined
+} = {
+  tmpRoot: '',
+  projectPath: '',
+  originalCliHome: undefined as unknown as string | undefined,
+}
 
 async function writeFile(relativePath: string, content: string): Promise<void> {
-  const filePath = path.join(projectPath, relativePath)
+  const filePath = path.join(fixture.projectPath, relativePath)
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, content, 'utf-8')
 }
 
 async function setupGitProject(): Promise<void> {
-  await execFileAsync('git', ['init'], { cwd: projectPath })
-  await execFileAsync('git', ['config', 'user.email', 'eval@example.com'], { cwd: projectPath })
-  await execFileAsync('git', ['config', 'user.name', 'Eval Runner'], { cwd: projectPath })
+  await execFileAsync('git', ['init'], { cwd: fixture.projectPath })
+  await execFileAsync('git', ['config', 'user.email', 'eval@example.com'], {
+    cwd: fixture.projectPath,
+  })
+  await execFileAsync('git', ['config', 'user.name', 'Eval Runner'], { cwd: fixture.projectPath })
   await execFileAsync('git', ['remote', 'add', 'origin', 'git@github.com:acme/prjct-evals.git'], {
-    cwd: projectPath,
+    cwd: fixture.projectPath,
   })
 }
 
@@ -46,18 +54,18 @@ async function createHealthyProject(): Promise<void> {
 }
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-eval-test-'))
-  projectPath = path.join(tmpRoot, 'repo')
-  await fs.mkdir(projectPath, { recursive: true })
-  originalCliHome = process.env.PRJCT_CLI_HOME
-  process.env.PRJCT_CLI_HOME = path.join(tmpRoot, 'home')
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-eval-test-'))
+  fixture.projectPath = path.join(fixture.tmpRoot, 'repo')
+  await fs.mkdir(fixture.projectPath, { recursive: true })
+  fixture.originalCliHome = process.env.PRJCT_CLI_HOME
+  process.env.PRJCT_CLI_HOME = path.join(fixture.tmpRoot, 'home')
   await setupGitProject()
 })
 
 afterEach(async () => {
-  if (originalCliHome === undefined) delete process.env.PRJCT_CLI_HOME
-  else process.env.PRJCT_CLI_HOME = originalCliHome
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => undefined)
+  if (fixture.originalCliHome === undefined) delete process.env.PRJCT_CLI_HOME
+  else process.env.PRJCT_CLI_HOME = fixture.originalCliHome
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => undefined)
 })
 
 describe('eval-service', () => {
@@ -65,8 +73,8 @@ describe('eval-service', () => {
   test('runs deterministic evals and stores portable artifacts', async () => {
     await createHealthyProject()
 
-    const run = await runEval(projectPath, { candidate: 'candidate-a', source: 'agent' })
-    const latest = await loadLatestEvalRun(projectPath)
+    const run = await runEval(fixture.projectPath, { candidate: 'candidate-a', source: 'agent' })
+    const latest = await loadLatestEvalRun(fixture.projectPath)
 
     expect(run.schemaVersion).toBe(1)
     expect(run.runner.source).toBe('agent')
@@ -88,7 +96,7 @@ describe('eval-service', () => {
     await createHealthyProject()
     await writeFile('docs/usage.md', 'Run /p: sync before shipping.\n')
 
-    const run = await runEval(projectPath, { candidate: 'stale-guidance' })
+    const run = await runEval(fixture.projectPath, { candidate: 'stale-guidance' })
     const staleScenario = run.scenarios.find((scenario) => scenario.id === 'stale-command-guidance')
 
     expect(staleScenario?.status).toBe('warn')
@@ -98,16 +106,16 @@ describe('eval-service', () => {
 
   test('compares baseline and candidate runs with actionable version deltas', async () => {
     await writeFile('package.json', JSON.stringify({ scripts: {} }, null, 2))
-    const baseline = await runEval(projectPath, { candidate: 'baseline-version' })
+    const baseline = await runEval(fixture.projectPath, { candidate: 'baseline-version' })
 
     await createHealthyProject()
-    const candidate = await runEval(projectPath, { candidate: 'candidate-version' })
-    const comparison = await compareEvalRuns(projectPath, {
+    const candidate = await runEval(fixture.projectPath, { candidate: 'candidate-version' })
+    const comparison = await compareEvalRuns(fixture.projectPath, {
       baseline: 'baseline-version',
       candidate: 'candidate-version',
     })
 
-    const latestComparison = await loadLatestEvalComparison(projectPath)
+    const latestComparison = await loadLatestEvalComparison(fixture.projectPath)
 
     expect(comparison.comparisonId).toContain('baseline-version_to_candidate-version')
     expect(comparison.baselineRunId).toBe(baseline.runId)
@@ -125,9 +133,9 @@ describe('eval-service', () => {
 
   test('prepares cloud benchmark publication without network writes in dry run', async () => {
     await createHealthyProject()
-    const run = await runEval(projectPath, { candidate: 'publishable' })
+    const run = await runEval(fixture.projectPath, { candidate: 'publishable' })
 
-    const result = await publishEvalRun(projectPath, { dryRun: true })
+    const result = await publishEvalRun(fixture.projectPath, { dryRun: true })
 
     expect(result.dryRun).toBe(true)
     expect(result.target).toBe('cloud')
@@ -141,15 +149,15 @@ describe('eval-service', () => {
 
   test('prepares cloud comparison publication without network writes in dry run', async () => {
     await writeFile('package.json', JSON.stringify({ scripts: {} }, null, 2))
-    await runEval(projectPath, { candidate: 'baseline-publish' })
+    await runEval(fixture.projectPath, { candidate: 'baseline-publish' })
     await createHealthyProject()
-    await runEval(projectPath, { candidate: 'candidate-publish' })
-    const comparison = await compareEvalRuns(projectPath, {
+    await runEval(fixture.projectPath, { candidate: 'candidate-publish' })
+    const comparison = await compareEvalRuns(fixture.projectPath, {
       baseline: 'baseline-publish',
       candidate: 'candidate-publish',
     })
 
-    const result = await publishEvalComparison(projectPath, comparison, { dryRun: true })
+    const result = await publishEvalComparison(fixture.projectPath, comparison, { dryRun: true })
 
     expect(result.dryRun).toBe(true)
     expect(result.artifactType).toBe('comparison')
@@ -162,7 +170,7 @@ describe('eval-service', () => {
 
   test('formats markdown reports with scenario metrics and actionables', async () => {
     await createHealthyProject()
-    const run = await runEval(projectPath, { candidate: 'markdown' })
+    const run = await runEval(fixture.projectPath, { candidate: 'markdown' })
 
     const markdown = formatEvalRunMarkdown(run)
 
@@ -173,10 +181,10 @@ describe('eval-service', () => {
 
   test('rejects removed GitHub publication target with an actionable migration', async () => {
     await createHealthyProject()
-    await runEval(projectPath, { candidate: 'removed-github' })
+    await runEval(fixture.projectPath, { candidate: 'removed-github' })
 
-    await expect(publishEvalRun(projectPath, { target: 'github', dryRun: true })).rejects.toThrow(
-      'GitHub eval publishing was removed'
-    )
+    await expect(
+      publishEvalRun(fixture.projectPath, { target: 'github', dryRun: true })
+    ).rejects.toThrow('GitHub eval publishing was removed')
   })
 })

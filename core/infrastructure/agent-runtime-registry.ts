@@ -710,8 +710,8 @@ async function detectRuntimeSignals(
     if (await dirExists(path.join(projectPath, dir))) signals.push(`${dir}/`)
   }
 
-  for (const dir of runtime.detectsBy?.homeDirs ?? []) {
-    if (await dirExists(path.join(resolveUserHome(), dir))) signals.push(`~/${dir}/`)
+  for (const dir2 of runtime.detectsBy?.homeDirs ?? []) {
+    if (await dirExists(path.join(resolveUserHome(), dir2))) signals.push(`~/${dir2}/`)
   }
 
   for (const command of runtime.detectsBy?.commands ?? []) {

@@ -19,45 +19,51 @@ import { prjctDb } from '../../storage/database'
 import { stateStorage } from '../../storage/state-storage'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
-let tmpRoot: string | null = null
-let projectId: string
-let projectPath: string
+const fixture: {
+  tmpRoot: string | null
+  projectId: string
+  projectPath: string
+} = {
+  tmpRoot: null,
+  projectId: '',
+  projectPath: '',
+}
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-overview-'))
-  projectId = `test-ov-${Date.now()}`
-  projectPath = path.join(tmpRoot, 'work') // plain dir → main sentinel
-  await fs.mkdir(projectPath, { recursive: true })
-  patchPathManager(tmpRoot!)
-  await fs.mkdir(pathManager.getStoragePath(projectId, ''), { recursive: true })
-  await fs.mkdir(path.join(tmpRoot!, projectId, 'sync'), { recursive: true })
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-overview-'))
+  fixture.projectId = `test-ov-${Date.now()}`
+  fixture.projectPath = path.join(fixture.tmpRoot, 'work') // plain dir → main sentinel
+  await fs.mkdir(fixture.projectPath, { recursive: true })
+  patchPathManager(fixture.tmpRoot!)
+  await fs.mkdir(pathManager.getStoragePath(fixture.projectId, ''), { recursive: true })
+  await fs.mkdir(path.join(fixture.tmpRoot!, fixture.projectId, 'sync'), { recursive: true })
 })
 
 afterEach(async () => {
   prjctDb.close()
   restorePathManager()
-  if (tmpRoot) {
-    await fs.rm(tmpRoot, { recursive: true, force: true })
-    tmpRoot = null
+  if (fixture.tmpRoot) {
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+    fixture.tmpRoot = null
   }
 })
 
 describe('collectActiveTasks', () => {
   it('empty → no current, empty list', async () => {
-    const ov = await collectActiveTasks(projectId, projectPath)
+    const ov = await collectActiveTasks(fixture.projectId, fixture.projectPath)
     expect(ov.current).toBeNull()
     expect(ov.all).toHaveLength(0)
     expect(formatActiveTaskList(ov)).toBe('No active work cycle.')
   })
 
   it('main currentTask is the current workspace; child tasks are listed as others', async () => {
-    await stateStorage.startTask(projectId, {
+    await stateStorage.startTask(fixture.projectId, {
       id: 'main-1',
       description: 'main work',
       sessionId: 's-main',
     } as Parameters<typeof stateStorage.startTask>[1])
     await stateStorage.startTaskInWorkspace(
-      projectId,
+      fixture.projectId,
       {
         id: 'child-1',
         description: 'child work',
@@ -68,7 +74,7 @@ describe('collectActiveTasks', () => {
       'ws-child'
     )
 
-    const ov = await collectActiveTasks(projectId, projectPath)
+    const ov = await collectActiveTasks(fixture.projectId, fixture.projectPath)
     expect(ov.current?.id).toBe('main-1')
     expect(ov.current?.isCurrent).toBe(true)
     expect(ov.all).toHaveLength(2)

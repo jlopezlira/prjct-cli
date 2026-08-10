@@ -61,11 +61,9 @@ export class CeremonyCommands extends PrjctCommandsBase {
     const content = (input ?? '').trim()
     if (!content)
       return this.fail('Usage: prjct log "<what you tried / found>" [--task id]', options)
-    let taskId = options.task
-    if (!taskId) {
-      const overview = await collectActiveTasks(proj.value, projectPath).catch(() => null)
-      taskId = overview?.current?.id
-    }
+    const taskId =
+      options.task ??
+      (await collectActiveTasks(proj.value, projectPath).catch(() => null))?.current?.id
     if (!taskId) return this.fail('No active work cycle — pass --task <id>', options)
     prjctDb.run(
       proj.value,
@@ -89,24 +87,21 @@ export class CeremonyCommands extends PrjctCommandsBase {
   ): Promise<CommandResult> {
     const proj = await requireProject(projectPath, options)
     if (!proj.ok) return proj.result
-    let taskId = (input ?? '').trim() || undefined
-    let description: string | undefined
-    if (!taskId) {
-      const overview = await collectActiveTasks(proj.value, projectPath).catch(() => null)
-      taskId = overview?.current?.id
-      description = overview?.current?.description
-    }
+    const inputTaskId = (input ?? '').trim() || undefined
+    const activeTask = !inputTaskId
+      ? (await collectActiveTasks(proj.value, projectPath).catch(() => null))?.current
+      : undefined
+    const taskId = inputTaskId ?? activeTask?.id
     if (!taskId) return this.fail('No active work cycle — pass a task id', options)
-    if (!description) {
-      description =
-        (await queueStorage.getTasks(proj.value)).find((t) => t.id === taskId)?.description ??
-        prjctDb.get<{ description: string }>(
-          proj.value,
-          'SELECT description FROM tasks WHERE id = ?',
-          taskId
-        )?.description ??
+    const description =
+      activeTask?.description ??
+      (await queueStorage.getTasks(proj.value)).find((task) => task.id === taskId)?.description ??
+      prjctDb.get<{ description: string }>(
+        proj.value,
+        'SELECT description FROM tasks WHERE id = ?',
         taskId
-    }
+      )?.description ??
+      taskId
 
     const sections: string[] = [`# Brief — ${description}`, '']
 
@@ -307,13 +302,9 @@ export class CeremonyCommands extends PrjctCommandsBase {
       }
     }
 
-    let taskId: string | null = null
-    try {
-      const overview = await collectActiveTasks(projectId, projectPath)
-      taskId = overview?.current?.id ?? null
-    } catch {
-      taskId = null
-    }
+    const taskId = await collectActiveTasks(projectId, projectPath)
+      .then((overview) => overview?.current?.id ?? null)
+      .catch(() => null)
 
     const plan = planStorage.start(projectId, title, taskId)
     this.printPlan(plan, options)
@@ -444,28 +435,23 @@ export class CeremonyCommands extends PrjctCommandsBase {
     const overview = await collectActiveTasks(proj.value, projectPath).catch(() => null)
 
     // Managed session resume card (land → prime continuity).
-    let journal: string[] = []
-    if (overview?.current) {
-      journal = prjctDb
-        .query<{ content: string }>(
-          proj.value,
-          'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 3',
-          overview.current.id
-        )
-        .map((j) => j.content)
-        .reverse()
-    }
+    const journal = overview?.current
+      ? prjctDb
+          .query<{ content: string }>(
+            proj.value,
+            'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 3',
+            overview.current.id
+          )
+          .map((entry) => entry.content)
+          .reverse()
+      : []
     const { loadSessionContinuity, loadLastSessionCloseContent, formatSessionResumeCard } =
       await import('../services/session-continuity')
     const stamp = loadSessionContinuity(proj.value)
     const sessionClose = loadLastSessionCloseContent(proj.value)
-    let pendingHandoffCue: string | null = null
-    try {
-      const { formatPendingHandoffCue } = await import('../services/agent-switch')
-      pendingHandoffCue = formatPendingHandoffCue(proj.value)
-    } catch {
-      pendingHandoffCue = null
-    }
+    const pendingHandoffCue = await import('../services/agent-switch')
+      .then(({ formatPendingHandoffCue }) => formatPendingHandoffCue(proj.value))
+      .catch(() => null)
     const lines: string[] = [
       formatSessionResumeCard({
         stamp,
@@ -590,35 +576,32 @@ export class CeremonyCommands extends PrjctCommandsBase {
     }).catch(() => null)
 
     // Managed session stamp — next `prjct prime` restores this SoT.
-    let continuityStamp: import('../services/session-continuity').SessionContinuityStamp | null =
-      null
-    try {
-      const { default: configManager } = await import('../infrastructure/config-manager')
-      const cfg = await configManager.readConfig(projectPath).catch(() => null)
-      const { stateStorage } = await import('../storage/state-storage')
-      const task = overview?.current
-        ? await stateStorage.getCurrentTask(proj.value).catch(() => null)
-        : null
-      const { stampSessionContinuity, formatLandContinuityFooter } = await import(
-        '../services/session-continuity'
-      )
-      continuityStamp = stampSessionContinuity({
-        projectId: proj.value,
-        projectPath,
-        config: cfg,
-        cycleId: overview?.current?.id ?? null,
-        cycleDescription: overview?.current?.description ?? null,
-        turns: task?.turnCount ?? null,
-        tokensIn: task?.tokensIn ?? null,
-        tokensOut: task?.tokensOut ?? null,
-        handoffWrote: handoff?.wrote ?? false,
-        receiptWrote: receipt?.wrote ?? false,
-        handoffContent: handoff?.content ?? null,
-      })
-      void formatLandContinuityFooter
-    } catch {
-      continuityStamp = null
-    }
+    const continuityStamp = await (async () => {
+      try {
+        const { default: configManager } = await import('../infrastructure/config-manager')
+        const cfg = await configManager.readConfig(projectPath).catch(() => null)
+        const { stateStorage } = await import('../storage/state-storage')
+        const task = overview?.current
+          ? await stateStorage.getCurrentTask(proj.value).catch(() => null)
+          : null
+        const { stampSessionContinuity } = await import('../services/session-continuity')
+        return stampSessionContinuity({
+          projectId: proj.value,
+          projectPath,
+          config: cfg,
+          cycleId: overview?.current?.id ?? null,
+          cycleDescription: overview?.current?.description ?? null,
+          turns: task?.turnCount ?? null,
+          tokensIn: task?.tokensIn ?? null,
+          tokensOut: task?.tokensOut ?? null,
+          handoffWrote: handoff?.wrote ?? false,
+          receiptWrote: receipt?.wrote ?? false,
+          handoffContent: handoff?.content ?? null,
+        })
+      } catch {
+        return null
+      }
+    })()
 
     if (overview?.current) {
       todo.push(
@@ -660,35 +643,33 @@ export class CeremonyCommands extends PrjctCommandsBase {
     }
 
     // Dynasty D5: Rho dry-run — show memory mass Δ so vault never grows silently.
-    let rhoLine: string | null = null
-    try {
-      const { runLandRhoDryRun } = await import('../services/land-rho')
-      const rho = runLandRhoDryRun(proj.value)
-      if (rho) {
-        rhoLine = rho.line
+    const rhoLine = await (async (): Promise<string | null> => {
+      try {
+        const { runLandRhoDryRun } = await import('../services/land-rho')
+        const rho = runLandRhoDryRun(proj.value)
+        if (!rho) return null
         if (options.md) lines.push(rho.md)
         else lines.push(`- [x] ${rho.line}`, '')
+        return rho.line
+      } catch {
+        return null
       }
-    } catch {
-      /* best-effort */
-    }
+    })()
 
     // Claude Code steal: auto-dream when time+session gates open (bumps session
     // counter always). Best-effort — never block land.
-    let dreamLine: string | null = null
-    try {
-      const { maybeDreamOnLand } = await import('../services/memory-dream')
-      const dream = maybeDreamOnLand(proj.value)
-      if (dream) {
-        dreamLine = dream.line
+    const dreamLine = await (async (): Promise<string | null> => {
+      try {
+        const { maybeDreamOnLand } = await import('../services/memory-dream')
+        const dream = maybeDreamOnLand(proj.value)
+        if (!dream) return null
         if (options.md) lines.push(dream.md)
-        else if (dream.ran) lines.push(`- [x] ${dream.line}`, '')
-        else if (!dream.skipped) lines.push(`- [x] ${dream.line}`, '')
-        // Skipped dreams are silent on non-md land (session counter is enough).
+        else if (dream.ran || !dream.skipped) lines.push(`- [x] ${dream.line}`, '')
+        return dream.line
+      } catch {
+        return null
       }
-    } catch {
-      /* best-effort */
-    }
+    })()
 
     // Always refresh L0 index on land when dream did not rebuild it.
     try {

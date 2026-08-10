@@ -284,19 +284,18 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const mdMode = args.includes('--md')
     const { SeedCommands } = await import('../commands/seed')
     const cmd = new SeedCommands()
-    let result: { success: boolean; error?: string } = { success: false, error: 'unknown' }
-    if (sub === 'add') result = await cmd.add(rest || null, process.cwd(), { md: mdMode })
-    else if (sub === 'remove')
-      result = await cmd.remove(rest || null, process.cwd(), { md: mdMode })
-    else if (sub === 'list') result = await cmd.list(null, process.cwd(), { md: mdMode })
-    else if (sub === 'suggest') result = await cmd.suggest(null, process.cwd(), { md: mdMode })
-    else if (sub === 'catalog') result = await cmd.catalog(null, process.cwd(), { md: mdMode })
-    else if (sub === 'verify') result = await cmd.verify(null, process.cwd(), { md: mdMode })
-    else {
+    const result: { success: boolean; error?: string } = await (async () => {
+      if (sub === 'add') return cmd.add(rest || null, process.cwd(), { md: mdMode })
+      if (sub === 'remove') return cmd.remove(rest || null, process.cwd(), { md: mdMode })
+      if (sub === 'list') return cmd.list(null, process.cwd(), { md: mdMode })
+      if (sub === 'suggest') return cmd.suggest(null, process.cwd(), { md: mdMode })
+      if (sub === 'catalog') return cmd.catalog(null, process.cwd(), { md: mdMode })
+      if (sub === 'verify') return cmd.verify(null, process.cwd(), { md: mdMode })
       console.error(
         `Unknown seed subcommand: ${sub}. Use: add, remove, list, suggest, catalog, verify.`
       )
-    }
+      return { success: false, error: 'unknown' }
+    })()
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'context-save') {
     // `prjct context-save [title] [--notes "..."]` — checkpoint working
@@ -383,11 +382,9 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const { InstallCommands } = await import('../commands/install')
     const cmd = new InstallCommands()
     const mdMode = args.includes('--md')
-    let result: Awaited<ReturnType<typeof cmd.install>> | undefined
-    if (subcommand === 'install') result = await cmd.install(null, process.cwd(), { md: mdMode })
-    else if (subcommand === 'uninstall')
-      result = await cmd.uninstall(null, process.cwd(), { md: mdMode })
-    else {
+    const result: Awaited<ReturnType<typeof cmd.install>> = await (async () => {
+      if (subcommand === 'install') return cmd.install(null, process.cwd(), { md: mdMode })
+      if (subcommand === 'uninstall') return cmd.uninstall(null, process.cwd(), { md: mdMode })
       const s = await cmd.status()
       if (s.success) {
         console.log(
@@ -395,12 +392,11 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
             ? `# prjct Claude Code hooks\n\n- installed: ${s.installed}\n- expected: ${s.expected}\n`
             : `installed: ${s.installed}/${s.expected}`
         )
-        result = s
       } else {
         console.error(s.error)
-        result = s
       }
-    }
+      return s
+    })()
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'hook') {
     // `prjct hook <name>` — runs a single Claude Code hook. Invoked by
@@ -499,38 +495,36 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
       }
       return undefined
     }
-    let result: { success: boolean; error?: string } = { success: false }
-    if (subcommand === 'install') {
-      result = await cmd.install(null, process.cwd(), { md: mdMode })
-    } else if (subcommand === 'uninstall') {
-      result = await cmd.uninstall(null, process.cwd(), { md: mdMode })
-    } else if (subcommand === 'status') {
-      result = await cmd.status(null, process.cwd(), { md: mdMode })
-    } else if (subcommand === 'checkpoints') {
-      // `prjct crew checkpoints [show|set|reset|export] [--content|--file]`
-      const checkpointsSub = args[2] ?? 'show'
-      result = await cmd.checkpoints(checkpointsSub, process.cwd(), {
-        md: mdMode,
-        content: getFlag('content'),
-        file: getFlag('file'),
-      })
-    } else if (subcommand === 'record-run') {
-      result = await cmd.recordRun(process.cwd(), {
-        md: mdMode,
-        spec: getFlag('spec'),
-        task: getFlag('task'),
-        'implementer-summary': getFlag('implementer-summary'),
-        files: getFlag('files'),
-        'reviewer-verdict': getFlag('reviewer-verdict'),
-        'reviewer-notes': getFlag('reviewer-notes'),
-        'run-id': getFlag('run-id'),
-      })
-    } else {
+    const result: { success: boolean; error?: string } = await (async () => {
+      if (subcommand === 'install') return cmd.install(null, process.cwd(), { md: mdMode })
+      if (subcommand === 'uninstall') return cmd.uninstall(null, process.cwd(), { md: mdMode })
+      if (subcommand === 'status') return cmd.status(null, process.cwd(), { md: mdMode })
+      if (subcommand === 'checkpoints') {
+        // `prjct crew checkpoints [show|set|reset|export] [--content|--file]`
+        const checkpointsSub = args[2] ?? 'show'
+        return cmd.checkpoints(checkpointsSub, process.cwd(), {
+          md: mdMode,
+          content: getFlag('content'),
+          file: getFlag('file'),
+        })
+      }
+      if (subcommand === 'record-run') {
+        return cmd.recordRun(process.cwd(), {
+          md: mdMode,
+          spec: getFlag('spec'),
+          task: getFlag('task'),
+          'implementer-summary': getFlag('implementer-summary'),
+          files: getFlag('files'),
+          'reviewer-verdict': getFlag('reviewer-verdict'),
+          'reviewer-notes': getFlag('reviewer-notes'),
+          'run-id': getFlag('run-id'),
+        })
+      }
       console.error(
         `Unknown crew subcommand: ${subcommand}. Use: install, uninstall, status, checkpoints, record-run.`
       )
-      result = { success: false, error: `unknown subcommand: ${subcommand}` }
-    }
+      return { success: false, error: `unknown subcommand: ${subcommand}` }
+    })()
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'harness') {
     // score | learn-from | list | use <rig>
@@ -538,21 +532,16 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const { HarnessCommands } = await import('../commands/harness')
     const cmd = new HarnessCommands()
     const mdMode = args.includes('--md')
-    let result: { success: boolean; error?: string } = { success: false }
-    if (subcommand === 'score') {
-      result = await cmd.score(process.cwd(), { md: mdMode })
-    } else if (subcommand === 'learn-from') {
-      result = await cmd.learnFrom(process.cwd(), { md: mdMode })
-    } else if (subcommand === 'list') {
-      result = await cmd.list({ md: mdMode })
-    } else if (subcommand === 'use') {
-      result = await cmd.use(args[2] ?? null, process.cwd(), { md: mdMode })
-    } else {
+    const result: { success: boolean; error?: string } = await (async () => {
+      if (subcommand === 'score') return cmd.score(process.cwd(), { md: mdMode })
+      if (subcommand === 'learn-from') return cmd.learnFrom(process.cwd(), { md: mdMode })
+      if (subcommand === 'list') return cmd.list({ md: mdMode })
+      if (subcommand === 'use') return cmd.use(args[2] ?? null, process.cwd(), { md: mdMode })
       console.error(
         `Unknown harness subcommand: ${subcommand}. Use: score, learn-from, list, use <rig>.`
       )
-      result = { success: false, error: `unknown subcommand: ${subcommand}` }
-    }
+      return { success: false, error: `unknown subcommand: ${subcommand}` }
+    })()
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'doctor') {
     const done = await ctx.trackSession('doctor')

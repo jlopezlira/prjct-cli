@@ -111,7 +111,7 @@ async function getGitRecency(
       `git log -30 --pretty=format:"%H %ct" --name-only | awk '
         /^[a-f0-9]{40}/ { commit=$1; timestamp=$2; next }
         NF { files[$0]++; if (!lastmod[$0]) lastmod[$0]=timestamp }
-        END { for (f in files) print files[f], lastmod[f], f }
+        END { for (const f in files) print files[f], lastmod[f], f }
       '`,
       { cwd: projectPath, maxBuffer: 10 * 1024 * 1024 }
     )
@@ -143,11 +143,6 @@ function scoreFile(
   historicalBoosts?: Map<string, number>
 ): ScoredFile {
   const reasons: ScoreReason[] = []
-  let keywordScore = 0
-  let domainScore = 0
-  let recencyScore = 0
-  let importScore = 0
-  let historyScore = 0
 
   const pathLower = filePath.toLowerCase()
   const pathParts = pathLower
@@ -156,89 +151,77 @@ function scoreFile(
     .split(/[^a-z0-9]+/)
 
   // Keyword matching (60% weight)
-  for (const keyword of keywords) {
-    if (pathLower.includes(keyword)) {
-      keywordScore += 0.3
-      reasons.push(`keyword:${keyword}`)
-    }
-    for (const part of pathParts) {
-      if (part.includes(keyword) || keyword.includes(part)) {
-        keywordScore += 0.15
-        break
-      }
-    }
-  }
-  keywordScore = Math.min(1, keywordScore)
+  const keywordScore = Math.min(
+    1,
+    keywords.reduce((score, keyword) => {
+      const direct = pathLower.includes(keyword)
+      if (direct) reasons.push(`keyword:${keyword}`)
+      const partial = pathParts.some((part) => part.includes(keyword) || keyword.includes(part))
+      return score + (direct ? 0.3 : 0) + (partial ? 0.15 : 0)
+    }, 0)
+  )
 
   // Domain matching (20% weight)
-  for (const [domain, domainKeywords] of Object.entries(DOMAIN_KEYWORDS)) {
-    for (const domainKw of domainKeywords) {
-      if (pathLower.includes(domainKw)) {
-        const taskRelatesToDomain = keywords.some(
-          (k) => domainKeywords.includes(k) || k.includes(domain) || domain.includes(k)
-        )
-        if (taskRelatesToDomain) {
-          domainScore += 0.4
-          reasons.push(`domain:${domain}`)
-          break
-        }
-      }
-    }
-  }
-  domainScore = Math.min(1, domainScore)
+  const domainScore = Math.min(
+    1,
+    Object.entries(DOMAIN_KEYWORDS).reduce((score, [domain, domainKeywords]) => {
+      const pathMatches = domainKeywords.some((keyword) => pathLower.includes(keyword))
+      const taskMatches = keywords.some(
+        (keyword) =>
+          domainKeywords.includes(keyword) || keyword.includes(domain) || domain.includes(keyword)
+      )
+      if (pathMatches && taskMatches) reasons.push(`domain:${domain}`)
+      return score + (pathMatches && taskMatches ? 0.4 : 0)
+    }, 0)
+  )
 
   // Git recency (15% weight)
   const recencyData = gitRecency.get(filePath)
-  if (recencyData) {
-    if (recencyData.daysAgo <= 1) {
-      recencyScore = 1.0
-      reasons.push('recent:1d')
-    } else if (recencyData.daysAgo <= 3) {
-      recencyScore = 0.8
-      reasons.push('recent:3d')
-    } else if (recencyData.daysAgo <= 7) {
-      recencyScore = 0.6
-      reasons.push('recent:1w')
-    } else if (recencyData.daysAgo <= 30) {
-      recencyScore = 0.3
-      reasons.push('recent:1m')
-    }
-
-    if (recencyData.commits >= 5) {
-      recencyScore = Math.min(1, recencyScore + 0.2)
-    }
-  }
+  const recencyBase = !recencyData
+    ? 0
+    : recencyData.daysAgo <= 1
+      ? 1
+      : recencyData.daysAgo <= 3
+        ? 0.8
+        : recencyData.daysAgo <= 7
+          ? 0.6
+          : recencyData.daysAgo <= 30
+            ? 0.3
+            : 0
+  const recencyLabel =
+    recencyBase === 1
+      ? 'recent:1d'
+      : recencyBase === 0.8
+        ? 'recent:3d'
+        : recencyBase === 0.6
+          ? 'recent:1w'
+          : recencyBase === 0.3
+            ? 'recent:1m'
+            : null
+  if (recencyLabel) reasons.push(recencyLabel)
+  const recencyScore = Math.min(
+    1,
+    recencyBase + (recencyData && recencyData.commits >= 5 ? 0.2 : 0)
+  )
 
   // Import distance — simplified heuristic (5% weight)
   const filename = path.basename(filePath).toLowerCase()
-  if (
+  const isEntry =
     filename.includes('index') ||
     filename.includes('main') ||
     filename.includes('app') ||
     filename.includes('entry')
-  ) {
-    importScore = 0.5
-    reasons.push('import:0')
-  }
-  if (
-    pathLower.includes('/core/') ||
-    pathLower.includes('/shared/') ||
-    pathLower.includes('/lib/')
-  ) {
-    importScore = Math.max(importScore, 0.3)
-    if (!reasons.some((r) => r.startsWith('import:'))) reasons.push('import:1')
-  }
+  const isCore =
+    pathLower.includes('/core/') || pathLower.includes('/shared/') || pathLower.includes('/lib/')
+  const importScore = isEntry ? 0.5 : isCore ? 0.3 : 0
+  if (isEntry) reasons.push('import:0')
+  else if (isCore) reasons.push('import:1')
 
   // Historical feedback signal (10% weight when available)
-  if (historicalBoosts) {
-    const boost = historicalBoosts.get(filePath)
-    if (boost !== undefined) {
-      // Map [-1, 1] to [0, 1] for scoring
-      historyScore = (boost + 1) / 2
-      if (boost > 0) reasons.push('history:boosted')
-      else if (boost < 0) reasons.push('history:penalized')
-    }
-  }
+  const boost = historicalBoosts?.get(filePath)
+  const historyScore = boost === undefined ? 0 : (boost + 1) / 2
+  if (boost !== undefined && boost > 0) reasons.push('history:boosted')
+  else if (boost !== undefined && boost < 0) reasons.push('history:penalized')
 
   // Calculate weighted score
   // With history: 54% keywords, 18% domain, 13% recency, 5% imports, 10% history

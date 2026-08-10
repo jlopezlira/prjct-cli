@@ -33,11 +33,10 @@ export interface NyquistLiteReport {
 
 export function assessAcceptanceCriteria(criteria: string[]): NyquistLiteReport {
   const vague: string[] = []
-  let verifiable = 0
   for (const c of criteria) {
-    if (isVerifiableAcceptance(c)) verifiable++
-    else vague.push(c.slice(0, 120))
+    if (!isVerifiableAcceptance(c)) vague.push(c.slice(0, 120))
   }
+  const verifiable = criteria.length - vague.length
   const total = criteria.length
   const ok = total === 0 || vague.length === 0
   const message = ok

@@ -88,18 +88,13 @@ export async function detectFriction(
   sessionId: string | null,
   opts: { preloadedLines?: TranscriptJsonlLine[] } = {}
 ): Promise<FrictionResult> {
-  let lines: TranscriptLine[]
-  if (opts.preloadedLines) {
-    lines = opts.preloadedLines as TranscriptLine[]
-  } else {
-    let raw = ''
-    try {
-      raw = await fs.readFile(transcriptPath, 'utf-8')
-    } catch {
-      return { signalsRecorded: 0, signalsSkipped: 0 }
-    }
-    lines = parseJsonl(raw)
-  }
+  const lines: TranscriptLine[] | null = opts.preloadedLines
+    ? (opts.preloadedLines as TranscriptLine[])
+    : await fs
+        .readFile(transcriptPath, 'utf-8')
+        .then(parseJsonl)
+        .catch(() => null)
+  if (!lines) return { signalsRecorded: 0, signalsSkipped: 0 }
   const signals = extractSignals(lines)
   if (signals.length === 0) {
     return { signalsRecorded: 0, signalsSkipped: 0 }
@@ -108,41 +103,38 @@ export async function detectFriction(
   // Dedup against signals already in memory (hashing on excerpt).
   const existing = projectMemoryHashes(projectPath)
   const projectId = projectIdFromPath(projectPath) ?? undefined
-  let recorded = 0
-  let skipped = 0
-  for (const signal of signals.slice(0, MAX_SIGNALS_PER_SESSION)) {
-    // `existing` holds the 12-char keys stored on prior signals (see
-    // projectMemoryHashes), so the comparison unit MUST be the same 12-char
-    // slice — comparing the full 64-char hash here silently never matched,
-    // re-recording the same pushback every session (the 5-9× dup bloat).
-    const dedupKey = hashSignal(signal.excerpt).slice(0, 12)
-    if (existing.has(dedupKey)) {
-      skipped++
-      // Same pushback again = standing law. Promote concrete constraints
-      // to feedback so SessionStart treats them as developer preference.
-      await maybePromoteStandingPreference(projectPath, projectId, signal).catch(() => {})
-      continue
-    }
-    try {
-      await projectMemory.remember(projectPath, {
-        type: 'improvement-signal',
-        content: formatSignal(signal),
-        tags: {
-          source: SOURCE_TAG,
-          category: signal.category,
-          ...(sessionId ? { session: sessionId } : {}),
-          key: dedupKey, // dedup key for the (type, key) latest-winner rule
-        },
-        provenance: 'extracted',
-        projectId,
-      })
-      recorded++
-      existing.add(dedupKey)
-    } catch {
-      skipped++
-    }
-  }
-  return { signalsRecorded: recorded, signalsSkipped: skipped }
+  return signals.slice(0, MAX_SIGNALS_PER_SESSION).reduce<Promise<FrictionResult>>(
+    async (pendingCounts, signal) => {
+      const counts = await pendingCounts
+      // `existing` holds the 12-char keys stored on prior signals (see
+      // projectMemoryHashes), so the comparison unit MUST be the same 12-char
+      // slice — comparing the full 64-char hash here silently never matched.
+      const dedupKey = hashSignal(signal.excerpt).slice(0, 12)
+      if (existing.has(dedupKey)) {
+        await maybePromoteStandingPreference(projectPath, projectId, signal).catch(() => {})
+        return { ...counts, signalsSkipped: counts.signalsSkipped + 1 }
+      }
+      try {
+        await projectMemory.remember(projectPath, {
+          type: 'improvement-signal',
+          content: formatSignal(signal),
+          tags: {
+            source: SOURCE_TAG,
+            category: signal.category,
+            ...(sessionId ? { session: sessionId } : {}),
+            key: dedupKey,
+          },
+          provenance: 'extracted',
+          projectId,
+        })
+        existing.add(dedupKey)
+        return { ...counts, signalsRecorded: counts.signalsRecorded + 1 }
+      } catch {
+        return { ...counts, signalsSkipped: counts.signalsSkipped + 1 }
+      }
+    },
+    Promise.resolve({ signalsRecorded: 0, signalsSkipped: 0 })
+  )
 }
 
 // Helpers — exported for tests via _internal.
@@ -157,32 +149,28 @@ function parseJsonl(raw: string): TranscriptLine[] {
  * preceding ASSISTANT turn as context.
  */
 function extractSignals(lines: TranscriptLine[]): FrictionSignal[] {
-  const signals: FrictionSignal[] = []
-  let lastAssistantText = ''
-
+  const state: { signals: FrictionSignal[]; lastAssistantText: string } = {
+    signals: [],
+    lastAssistantText: '',
+  }
   for (const line of lines) {
     const role = line.role ?? line.message?.role
     const content = textOf(line.content ?? line.message?.content)
     if (!content) continue
-
     if (role === 'assistant') {
-      lastAssistantText = content
+      state.lastAssistantText = content
       continue
     }
     if (role !== 'user') continue
-
-    const head = content.slice(0, 300)
-    const category = classify(head)
+    const category = classify(content.slice(0, 300))
     if (!category) continue
-
-    signals.push({
+    state.signals.push({
       excerpt: content.slice(0, MAX_EXCERPT_CHARS).trim(),
       category,
-      precedingAssistantPreview: lastAssistantText.slice(0, MAX_EXCERPT_CHARS).trim(),
+      precedingAssistantPreview: state.lastAssistantText.slice(0, MAX_EXCERPT_CHARS).trim(),
     })
   }
-
-  return signals
+  return state.signals
 }
 
 function classify(text: string): FrictionSignal['category'] | null {
@@ -236,11 +224,11 @@ function formatSignal(signal: FrictionSignal): string {
  * Returns null → fall back to category template (still better than silence).
  */
 function extractSpecificConstraint(excerpt: string): string | null {
-  let t = excerpt.replace(/\s+/g, ' ').trim()
-  if (!t) return null
+  const normalized = excerpt.replace(/\s+/g, ' ').trim()
+  if (!normalized) return null
 
   // Drop leading rejection particles so the remainder is the rule.
-  t = t.replace(/^\s*(?:nope|no|stop|wait|cancel)[,.!\s:—-]*/i, '').trim()
+  const t = normalized.replace(/^\s*(?:nope|no|stop|wait|cancel)[,.!\s:—-]*/i, '').trim()
 
   const shouldBe = t.match(/\bshould be\b\s+(.+?)$/i)
   if (shouldBe?.[1]) return cleanConstraint(`Prefer ${shouldBe[1]}`)

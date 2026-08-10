@@ -256,7 +256,7 @@ function formatRestoreText(c: ContextCheckpoint, filename: string): string {
   if (c.git.recentLog.length > 0) {
     lines.push('')
     lines.push('Recent commits:')
-    for (const l of c.git.recentLog) lines.push(`  ${l}`)
+    for (const l2 of c.git.recentLog) lines.push(`  ${l2}`)
   }
   return lines.join('\n')
 }
@@ -286,7 +286,7 @@ function formatRestoreMarkdown(c: ContextCheckpoint, filename: string): string {
   if (c.git.recentLog.length > 0) {
     lines.push('### Recent commits')
     lines.push('')
-    for (const l of c.git.recentLog) lines.push(`- ${l}`)
+    for (const l2 of c.git.recentLog) lines.push(`- ${l2}`)
   }
   return lines.join('\n')
 }

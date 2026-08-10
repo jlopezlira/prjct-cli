@@ -92,12 +92,12 @@ export async function buildInventory(
   // Group specs by inferred module (top 2 path segments of first scope entry).
   const specsByModule = new Map<string, Spec[]>()
   const allModuleDirs = new Set<string>()
-  for (const s of allSpecs) {
-    const mod = inferModule(s)
+  for (const s2 of allSpecs) {
+    const mod = inferModule(s2)
     if (!mod) continue
     allModuleDirs.add(mod)
     const bucket = specsByModule.get(mod) ?? []
-    bucket.push(s)
+    bucket.push(s2)
     specsByModule.set(mod, bucket)
   }
 
@@ -115,20 +115,24 @@ export async function buildInventory(
     const lastUpdated =
       specs.length > 0 ? specs.reduce((m, s) => (s.updatedAt > m ? s.updatedAt : m), '') : null
 
-    let drift: DriftStatus = false
-    for (const s of specs.filter((sp) => sp.status === 'shipped')) {
-      const detail = await driftForSpec(projectPath, s)
+    const shippedDrift: DriftStatus[] = []
+    for (const s3 of specs.filter((sp) => sp.status === 'shipped')) {
+      const detail = await driftForSpec(projectPath, s3)
+      shippedDrift.push(detail.drift)
       driftDetail.push({
-        specId: s.id,
-        title: s.title,
-        status: s.status,
+        specId: s3.id,
+        title: s3.title,
+        status: s3.status,
         drift: detail.drift,
         locChanged: detail.locChanged,
         cosmeticOnly: detail.cosmeticOnly,
       })
-      if (detail.drift === true) drift = true
-      else if (detail.drift === 'unknown' && drift === false) drift = 'unknown'
     }
+    const drift: DriftStatus = shippedDrift.includes(true)
+      ? true
+      : shippedDrift.includes('unknown')
+        ? 'unknown'
+        : false
 
     modules.push({
       module: mod,
@@ -181,18 +185,18 @@ async function listTopLevelModules(projectPath: string): Promise<string[]> {
 
 async function countModuleFiles(projectPath: string, mod: string): Promise<number> {
   const dir = path.join(projectPath, mod)
-  let total = 0
+  const files: string[] = []
   try {
     await walk(dir, async (full) => {
       const rel = path.relative(projectPath, full)
       if (excluded(rel)) return
       if (!isCodeFile(rel)) return
-      total++
+      files.push(rel)
     })
   } catch {
     // Directory missing — counts as 0
   }
-  return total
+  return files.length
 }
 
 async function countCoveredFiles(projectPath: string, mod: string, specs: Spec[]): Promise<number> {
@@ -206,7 +210,7 @@ async function countCoveredFiles(projectPath: string, mod: string, specs: Spec[]
       if (m) refs.add(m[0])
     }
   }
-  let covered = 0
+  const covered = new Set<string>()
   try {
     await walk(dir, async (full) => {
       const rel = path.relative(projectPath, full)
@@ -214,7 +218,7 @@ async function countCoveredFiles(projectPath: string, mod: string, specs: Spec[]
       if (!isCodeFile(rel)) return
       for (const ref of refs) {
         if (rel === ref || rel.startsWith(ref.endsWith('/') ? ref : `${ref}/`)) {
-          covered++
+          covered.add(rel)
           break
         }
       }
@@ -222,16 +226,11 @@ async function countCoveredFiles(projectPath: string, mod: string, specs: Spec[]
   } catch {
     // Directory missing
   }
-  return covered
+  return covered.size
 }
 
 async function walk(dir: string, visit: (full: string) => Promise<void>): Promise<void> {
-  let entries: import('node:fs').Dirent[]
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch {
-    return
-  }
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
   for (const e of entries) {
     if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === 'dist') continue
     const full = path.join(dir, e.name)
@@ -263,39 +262,37 @@ async function driftForSpec(
   if (scopePaths.length === 0) return { drift: 'unknown' }
 
   // Total LOC delta in the scope between shipped_sha and HEAD.
-  let locChanged = 0
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['diff', '--shortstat', `${spec.shippedSha}..HEAD`, '--', ...scopePaths],
-      { cwd: projectPath }
-    )
-    // Format: " 3 files changed, 42 insertions(+), 17 deletions(-)"
-    const ins = stdout.match(/(\d+) insertions?/)
-    const del = stdout.match(/(\d+) deletions?/)
-    locChanged = (ins ? Number.parseInt(ins[1], 10) : 0) + (del ? Number.parseInt(del[1], 10) : 0)
-  } catch {
-    return { drift: 'unknown' }
-  }
+  const locChanged = await execFileAsync(
+    'git',
+    ['diff', '--shortstat', `${spec.shippedSha}..HEAD`, '--', ...scopePaths],
+    { cwd: projectPath }
+  )
+    .then(({ stdout }) => {
+      // Format: " 3 files changed, 42 insertions(+), 17 deletions(-)"
+      const ins = stdout.match(/(\d+) insertions?/)
+      const del = stdout.match(/(\d+) deletions?/)
+      return (ins ? Number.parseInt(ins[1], 10) : 0) + (del ? Number.parseInt(del[1], 10) : 0)
+    })
+    .catch(() => null)
+  if (locChanged === null) return { drift: 'unknown' }
 
   if (locChanged <= DRIFT_LOC_THRESHOLD) {
     return { drift: false, locChanged, cosmeticOnly: false }
   }
 
   // Check if all the commits that touched the scope are cosmetic-only.
-  let cosmeticOnly = true
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['log', '--format=%s', `${spec.shippedSha}..HEAD`, '--', ...scopePaths],
-      { cwd: projectPath }
+  const cosmeticOnly = await execFileAsync(
+    'git',
+    ['log', '--format=%s', `${spec.shippedSha}..HEAD`, '--', ...scopePaths],
+    { cwd: projectPath }
+  )
+    .then(({ stdout }) =>
+      stdout
+        .split('\n')
+        .filter(Boolean)
+        .every((s) => COSMETIC_COMMIT_RE.test(s))
     )
-    const subjects = stdout.split('\n').filter(Boolean)
-    if (subjects.length === 0) return { drift: false, locChanged, cosmeticOnly: true }
-    cosmeticOnly = subjects.every((s) => COSMETIC_COMMIT_RE.test(s))
-  } catch {
-    cosmeticOnly = false
-  }
+    .catch(() => false)
 
   return {
     drift: !cosmeticOnly,
@@ -338,7 +335,7 @@ export function renderInventoryMd(report: InventoryReport): string {
   if (report.uncoveredModules.length > 0) {
     lines.push('')
     lines.push('## Modules with NO specs')
-    for (const m of report.uncoveredModules) lines.push(`- \`${m}\``)
+    for (const m2 of report.uncoveredModules) lines.push(`- \`${m2}\``)
   }
 
   return lines.join('\n')

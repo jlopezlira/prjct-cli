@@ -44,37 +44,38 @@ function addStep(projectId: string, action: string, sortOrder = 0): void {
 }
 
 describe('action prefix: version:bump', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture = { projectPath: '', projectId: '' }
 
   beforeEach(async () => {
-    ;({ projectPath, projectId } = await freshProject())
+    Object.assign(fixture, await freshProject())
   })
 
   afterEach(async () => {
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true })
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('bumps package.json version AND writes the new version into runContext', async () => {
     await fs.writeFile(
-      path.join(projectPath, 'package.json'),
+      path.join(fixture.projectPath, 'package.json'),
       JSON.stringify({ name: 'tmp', version: '1.2.3' }, null, 2)
     )
-    addStep(projectId, 'version:bump')
+    addStep(fixture.projectId, 'version:bump')
 
     const runCtx: WorkflowRunContext = {}
-    const result = await executeWorkflowRules(projectId, 'ship', 'before', {
-      projectPath,
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
       runContext: runCtx,
     })
 
     expect(result.success).toBe(true)
     expect(runCtx.version).toBe('1.2.4')
-    const pkg = JSON.parse(await fs.readFile(path.join(projectPath, 'package.json'), 'utf-8'))
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(fixture.projectPath, 'package.json'), 'utf-8')
+    )
     expect(pkg.version).toBe('1.2.4')
   })
 
-  test('does not touch a different cwd when projectPath is explicit', async () => {
+  test('does not touch a different cwd when fixture.projectPath is explicit', async () => {
     // Build a SECOND project that should remain untouched.
     const otherPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-prefix-other-'))
     await fs.writeFile(
@@ -83,13 +84,16 @@ describe('action prefix: version:bump', () => {
     )
 
     await fs.writeFile(
-      path.join(projectPath, 'package.json'),
+      path.join(fixture.projectPath, 'package.json'),
       JSON.stringify({ name: 'tmp', version: '1.2.3' }, null, 2)
     )
-    addStep(projectId, 'version:bump')
+    addStep(fixture.projectId, 'version:bump')
 
     const runCtx: WorkflowRunContext = {}
-    await executeWorkflowRules(projectId, 'ship', 'before', { projectPath, runContext: runCtx })
+    await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
+      runContext: runCtx,
+    })
 
     const other = JSON.parse(await fs.readFile(path.join(otherPath, 'package.json'), 'utf-8'))
     expect(other.version).toBe('9.9.9')
@@ -98,22 +102,21 @@ describe('action prefix: version:bump', () => {
 })
 
 describe('action prefix: changelog:add', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture = { projectPath: '', projectId: '' }
 
   beforeEach(async () => {
-    ;({ projectPath, projectId } = await freshProject())
+    Object.assign(fixture, await freshProject())
   })
 
   afterEach(async () => {
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true })
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('requires version + feature in runContext', async () => {
-    addStep(projectId, 'changelog:add')
+    addStep(fixture.projectId, 'changelog:add')
 
-    const result = await executeWorkflowRules(projectId, 'ship', 'before', {
-      projectPath,
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
       runContext: {},
     })
     expect(result.success).toBe(false)
@@ -122,20 +125,20 @@ describe('action prefix: changelog:add', () => {
 
   test('appends a CHANGELOG entry when version + feature are present', async () => {
     await fs.writeFile(
-      path.join(projectPath, 'package.json'),
+      path.join(fixture.projectPath, 'package.json'),
       JSON.stringify({ name: 'tmp', version: '1.0.0' }, null, 2)
     )
-    addStep(projectId, 'version:bump', 0)
-    addStep(projectId, 'changelog:add', 1)
+    addStep(fixture.projectId, 'version:bump', 0)
+    addStep(fixture.projectId, 'changelog:add', 1)
 
     const runCtx: WorkflowRunContext = { feature: 'flux capacitor' }
-    const result = await executeWorkflowRules(projectId, 'ship', 'before', {
-      projectPath,
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
       runContext: runCtx,
     })
 
     expect(result.success).toBe(true)
-    const changelog = await fs.readFile(path.join(projectPath, 'CHANGELOG.md'), 'utf-8')
+    const changelog = await fs.readFile(path.join(fixture.projectPath, 'CHANGELOG.md'), 'utf-8')
     // A described feature ("flux capacitor", no fix/chore prefix) bumps MINOR.
     expect(changelog).toContain('1.1.0')
     expect(changelog).toContain('flux capacitor')
@@ -143,55 +146,54 @@ describe('action prefix: changelog:add', () => {
 })
 
 describe('action prefix: git:commit / git:push', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture = { projectPath: '', projectId: '' }
 
   beforeEach(async () => {
-    ;({ projectPath, projectId } = await freshProject())
+    Object.assign(fixture, await freshProject())
   })
 
   afterEach(async () => {
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true })
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('git:commit runs against projectPath, not process.cwd()', async () => {
-    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: projectPath })
-    execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: projectPath })
-    execFileSync('git', ['config', 'user.name', 'test'], { cwd: projectPath })
-    await fs.writeFile(path.join(projectPath, 'README.md'), '# tmp\n')
-    execFileSync('git', ['add', '.'], { cwd: projectPath })
-    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: projectPath })
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: fixture.projectPath })
+    await fs.writeFile(path.join(fixture.projectPath, 'README.md'), '# tmp\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.projectPath })
 
     // Stage a new file via the rule.
-    await fs.writeFile(path.join(projectPath, 'new.txt'), 'hi\n')
-    addStep(projectId, 'git:commit')
+    await fs.writeFile(path.join(fixture.projectPath, 'new.txt'), 'hi\n')
+    addStep(fixture.projectId, 'git:commit')
 
     const runCtx: WorkflowRunContext = { feature: 'welcome' }
-    const result = await executeWorkflowRules(projectId, 'ship', 'before', {
-      projectPath,
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
       runContext: runCtx,
     })
 
     expect(result.success).toBe(true)
     const log = execFileSync('git', ['log', '-1', '--pretty=%s'], {
-      cwd: projectPath,
+      cwd: fixture.projectPath,
       encoding: 'utf-8',
     })
     expect(log.trim()).toMatch(/welcome/)
   })
 
   test('git:push surfaces the real error when no remote is configured', async () => {
-    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: projectPath })
-    execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: projectPath })
-    execFileSync('git', ['config', 'user.name', 'test'], { cwd: projectPath })
-    await fs.writeFile(path.join(projectPath, 'README.md'), '# tmp\n')
-    execFileSync('git', ['add', '.'], { cwd: projectPath })
-    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: projectPath })
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: fixture.projectPath })
+    await fs.writeFile(path.join(fixture.projectPath, 'README.md'), '# tmp\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.projectPath })
 
-    addStep(projectId, 'git:push')
+    addStep(fixture.projectId, 'git:push')
 
-    const result = await executeWorkflowRules(projectId, 'ship', 'before', {
-      projectPath,
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
       runContext: {},
     })
     expect(result.success).toBe(false)
@@ -206,20 +208,20 @@ describe('action prefix: git:commit / git:push', () => {
     const remotePath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-prefix-remote-'))
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: remotePath })
 
-    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: projectPath })
-    execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: projectPath })
-    execFileSync('git', ['config', 'user.name', 'test'], { cwd: projectPath })
-    execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: projectPath })
-    await fs.writeFile(path.join(projectPath, 'README.md'), '# tmp\n')
-    execFileSync('git', ['add', '.'], { cwd: projectPath })
-    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: projectPath })
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: fixture.projectPath })
+    execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: fixture.projectPath })
+    await fs.writeFile(path.join(fixture.projectPath, 'README.md'), '# tmp\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.projectPath })
     // Feature branch with NO upstream — the case a bare `git push` choked on.
-    execFileSync('git', ['checkout', '-q', '-b', 'feat/x'], { cwd: projectPath })
+    execFileSync('git', ['checkout', '-q', '-b', 'feat/x'], { cwd: fixture.projectPath })
 
-    addStep(projectId, 'git:push')
+    addStep(fixture.projectId, 'git:push')
 
-    const result = await executeWorkflowRules(projectId, 'ship', 'before', {
-      projectPath,
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
       runContext: {},
     })
 
@@ -228,7 +230,7 @@ describe('action prefix: git:commit / git:push', () => {
     const upstream = execFileSync(
       'git',
       ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
-      { cwd: projectPath, encoding: 'utf-8' }
+      { cwd: fixture.projectPath, encoding: 'utf-8' }
     )
     expect(upstream.trim()).toBe('origin/feat/x')
 

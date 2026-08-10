@@ -29,23 +29,21 @@ import type { ValidationSchema } from '../types/storage/extended'
  * @returns Validated data or null if file is missing/corrupted
  */
 export async function safeRead<T>(filePath: string, schema: ValidationSchema): Promise<T | null> {
-  let content: string
-
-  // Step 1: Read file
-  try {
-    content = await fs.readFile(filePath, 'utf-8')
-  } catch (error) {
-    if (isNotFoundError(error)) {
-      return null
-    }
+  const content = await fs.readFile(filePath, 'utf-8').catch((error) => {
+    if (isNotFoundError(error)) return null
     throw error
-  }
+  })
+  if (content === null) return null
 
   // Step 2: JSON.parse
-  let raw: unknown
-  try {
-    raw = JSON.parse(content)
-  } catch {
+  const raw = (() => {
+    try {
+      return JSON.parse(content) as unknown
+    } catch {
+      return null
+    }
+  })()
+  if (raw === null) {
     // Malformed JSON — backup and return null
     await createBackup(filePath, content)
     logCorruption(filePath, 'Malformed JSON')

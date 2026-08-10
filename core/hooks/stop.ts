@@ -73,42 +73,44 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // Read + parse the transcript ONCE. Three consumers below
         // (transcript-learner, friction-detector, skill-miss-detector) each
         // used to re-read and re-tokenize the same multi-hundred-KB JSONL.
-        let transcriptLines: TranscriptJsonlLine[] | undefined
-        let transcriptUsage: TranscriptUsage | undefined
-        let activeTaskId: string | undefined
-        let activeTaskDescription: string | undefined
+        const stopContext: {
+          transcriptLines?: TranscriptJsonlLine[]
+          transcriptUsage?: TranscriptUsage
+          activeTaskId?: string
+          activeTaskDescription?: string
+        } = {}
         if (input.transcript_path) {
           const raw = await fs.readFile(input.transcript_path, 'utf-8').catch(() => null)
-          if (raw !== null) transcriptLines = parseTranscriptJsonl(raw)
+          if (raw !== null) stopContext.transcriptLines = parseTranscriptJsonl(raw)
         }
 
         // Measure the work cycle's token cost: sum the transcript usage and
         // write it onto the active task. Closes the work-cost coverage gap so
         // `prjct performance` can prove prjct's net token savings. Best-effort.
-        if (transcriptLines && transcriptLines.length > 0) {
+        if (stopContext.transcriptLines && stopContext.transcriptLines.length > 0) {
           try {
             // Session total (for the agent-session record below) is unwindowed;
             // the TASK attribution is windowed to the cycle's start — a task
             // active for 5 minutes of a 10M-token session must not be billed
             // the whole session.
-            transcriptUsage = sumTranscriptUsage(transcriptLines)
-            if (transcriptUsage.tokensIn + transcriptUsage.tokensOut > 0) {
+            stopContext.transcriptUsage = sumTranscriptUsage(stopContext.transcriptLines)
+            if (stopContext.transcriptUsage.tokensIn + stopContext.transcriptUsage.tokensOut > 0) {
               const { collectActiveTasks } = await import('../services/task-overview')
               const overview = await collectActiveTasks(config.projectId, p)
-              activeTaskId = overview.current?.id
-              activeTaskDescription = overview.current?.description
+              stopContext.activeTaskId = overview.current?.id
+              stopContext.activeTaskDescription = overview.current?.description
               const taskWindow = overview.current?.startedAt
                 ? { sinceIso: overview.current.startedAt }
                 : undefined
-              const taskUsage = sumTranscriptUsage(transcriptLines, taskWindow)
-              if (activeTaskId && taskUsage.tokensIn + taskUsage.tokensOut > 0) {
+              const taskUsage = sumTranscriptUsage(stopContext.transcriptLines, taskWindow)
+              if (stopContext.activeTaskId && taskUsage.tokensIn + taskUsage.tokensOut > 0) {
                 recordTaskTokenUsage(
                   config.projectId,
-                  activeTaskId,
+                  stopContext.activeTaskId,
                   taskUsage.tokensIn,
                   taskUsage.tokensOut,
                   {
-                    description: activeTaskDescription,
+                    description: stopContext.activeTaskDescription,
                     agent: 'claude',
                     // Distinct source so this exact transcript-derived measurement
                     // never shares an event_key with the agent-agnostic manual
@@ -124,13 +126,22 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
                 // the data that PROVES whether model routing saves money.
                 try {
                   const { sumTranscriptUsageByModel } = await import('../services/transcript-jsonl')
-                  for (const [model, u] of sumTranscriptUsageByModel(transcriptLines, taskWindow)) {
+                  for (const [model, u] of sumTranscriptUsageByModel(
+                    stopContext.transcriptLines,
+                    taskWindow
+                  )) {
                     if (u.tokensIn + u.tokensOut <= 0) continue
-                    recordTaskTokenUsage(config.projectId, activeTaskId, u.tokensIn, u.tokensOut, {
-                      model,
-                      agent: 'claude',
-                      source: `claude-transcript:${model}`,
-                    })
+                    recordTaskTokenUsage(
+                      config.projectId,
+                      stopContext.activeTaskId,
+                      u.tokensIn,
+                      u.tokensOut,
+                      {
+                        model,
+                        agent: 'claude',
+                        source: `claude-transcript:${model}`,
+                      }
+                    )
                   }
                 } catch {
                   /* per-model breakdown is additive telemetry — never blocks */
@@ -146,10 +157,10 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           projectId: config.projectId,
           sessionId: input.session_id,
           directory: p,
-          taskId: activeTaskId,
-          goal: activeTaskDescription,
-          tokensIn: transcriptUsage?.tokensIn,
-          tokensOut: transcriptUsage?.tokensOut,
+          taskId: stopContext.activeTaskId,
+          goal: stopContext.activeTaskDescription,
+          tokensIn: stopContext.transcriptUsage?.tokensIn,
+          tokensOut: stopContext.transcriptUsage?.tokensOut,
           agent: 'claude',
         })
 
@@ -159,7 +170,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           try {
             await ingestTranscript(p, input.transcript_path, input.session_id ?? null, {
               preloadedConfig: config,
-              preloadedLines: transcriptLines,
+              preloadedLines: stopContext.transcriptLines,
             })
           } catch {
             // Failed parse / unexpected format → swallow. The user can
@@ -215,7 +226,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
               input.transcript_path,
               input.session_id ?? null,
               {
-                preloadedLines: transcriptLines,
+                preloadedLines: stopContext.transcriptLines,
               }
             )
             // AUTOMATIC negative reinforcement (no command): if the user
@@ -245,7 +256,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         if (input.transcript_path) {
           try {
             await detectSkillMisses(p, input.transcript_path, input.session_id ?? null, {
-              preloadedLines: transcriptLines,
+              preloadedLines: stopContext.transcriptLines,
             })
           } catch {
             /* silent best-effort — must never block session end */
@@ -273,16 +284,16 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // Land auto-synthesis: when a cycle is open, write the Session close
         // hand-off without asking the agent to remember. Cooldown-aligned
         // with heavy steps so we don't re-write every assistant turn.
-        if (runHeavySteps && activeTaskId) {
+        if (runHeavySteps && stopContext.activeTaskId) {
           try {
             const { synthesizeLandHandoff } = await import('../services/land-synthesis')
             await synthesizeLandHandoff({
               projectId: config.projectId,
               projectPath: p,
-              cycleDescription: activeTaskDescription ?? null,
-              cycleId: activeTaskId,
-              tokensIn: transcriptUsage?.tokensIn,
-              tokensOut: transcriptUsage?.tokensOut,
+              cycleDescription: stopContext.activeTaskDescription ?? null,
+              cycleId: stopContext.activeTaskId,
+              tokensIn: stopContext.transcriptUsage?.tokensIn,
+              tokensOut: stopContext.transcriptUsage?.tokensOut,
               model: 'claude',
             })
           } catch {
@@ -293,10 +304,10 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
             await synthesizeJudgmentReceipt({
               projectId: config.projectId,
               projectPath: p,
-              cycleDescription: activeTaskDescription ?? null,
-              cycleId: activeTaskId,
-              tokensIn: transcriptUsage?.tokensIn,
-              tokensOut: transcriptUsage?.tokensOut,
+              cycleDescription: stopContext.activeTaskDescription ?? null,
+              cycleId: stopContext.activeTaskId,
+              tokensIn: stopContext.transcriptUsage?.tokensIn,
+              tokensOut: stopContext.transcriptUsage?.tokensOut,
               model: 'claude',
             })
           } catch {

@@ -40,22 +40,24 @@ export async function repairContextQuality(
 ): Promise<ContextQualityReport> {
   const threshold = options.threshold ?? DEFAULT_THRESHOLD
   const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
-  let report = evaluateContextQuality(projectId, threshold)
-  let removed = 0
-  let created = 0
 
   // Retention scores inform which "irrelevant" rows are safe to drop:
   // keep entries the scorer still ranks active+strong (false-positive noise).
-  let retentionById: Map<string, { verdict: string; score: number }> | null = null
-  try {
-    const { evaluateRetention } = await import('./retention')
-    const ret = evaluateRetention(projectId, Date.now())
-    retentionById = ret.byId
-  } catch {
-    retentionById = null
-  }
+  const retentionById: Map<string, { verdict: string; score: number }> | null = await import(
+    './retention'
+  )
+    .then(({ evaluateRetention }) => evaluateRetention(projectId, Date.now()).byId)
+    .catch(() => null)
 
-  for (let i = 0; i < maxIterations && report.score < threshold; i++) {
+  const repairIteration = async (
+    iteration: number,
+    report: ContextQualityReport,
+    removed: number,
+    created: number
+  ): Promise<ContextQualityReport> => {
+    if (iteration >= maxIterations || report.score >= threshold) {
+      return { ...report, irrelevantRemoved: removed, repairEntriesCreated: created }
+    }
     const entries = projectMemory.allEntriesForIndex(projectId)
     const irrelevant = entries.filter((entry) => {
       if (!isIrrelevantGeneratedContext(entry)) return false
@@ -65,7 +67,8 @@ export async function repairContextQuality(
       return true
     })
 
-    if (!hasUsableLivingContext(entries)) {
+    const createdThisIteration = hasUsableLivingContext(entries) ? 0 : 1
+    if (createdThisIteration > 0) {
       await projectMemory.remember(projectPath, {
         type: 'context',
         content: buildRepairContext(entries, report),
@@ -81,12 +84,12 @@ export async function repairContextQuality(
         provenance: 'inferred',
         projectId,
       })
-      created++
     }
 
+    const removedIds: string[] = []
     for (const entry of irrelevant) {
       if (projectMemory.forget(projectId, entry.id)) {
-        removed++
+        removedIds.push(entry.id)
         await publishCRUD({
           projectId,
           entityType: 'memories',
@@ -104,20 +107,22 @@ export async function repairContextQuality(
     }
 
     const next = evaluateContextQuality(projectId, threshold)
-    report = {
+    const nextReport = {
       ...next,
-      iterations: i + 1,
-      irrelevantRemoved: removed,
-      repairEntriesCreated: created,
+      iterations: iteration + 1,
+      irrelevantRemoved: removed + removedIds.length,
+      repairEntriesCreated: created + createdThisIteration,
     }
-    if (irrelevant.length === 0 && created === 0) break
+    if (irrelevant.length === 0 && createdThisIteration === 0) return nextReport
+    return repairIteration(
+      iteration + 1,
+      nextReport,
+      removed + removedIds.length,
+      created + createdThisIteration
+    )
   }
 
-  return {
-    ...report,
-    irrelevantRemoved: removed,
-    repairEntriesCreated: created,
-  }
+  return repairIteration(0, evaluateContextQuality(projectId, threshold), 0, 0)
 }
 
 export function evaluateContextQuality(
@@ -131,17 +136,17 @@ export function evaluateContextQuality(
   const irrelevant = entries.filter(isIrrelevantGeneratedContext)
   const issues: string[] = []
 
-  let score = 100
+  const penalties: number[] = []
   if (entries.length > 0 && living.length === 0) {
-    score -= 35
+    penalties.push(35)
     issues.push('missing living-v2 context synthesis')
   }
   if (irrelevant.length > 0) {
-    score -= Math.min(40, irrelevant.length * 8)
+    penalties.push(Math.min(40, irrelevant.length * 8))
     issues.push(`${irrelevant.length} irrelevant generated entries in active context`)
   }
   if (legacy.length > 0) {
-    score -= Math.min(20, legacy.length * 5)
+    penalties.push(Math.min(20, legacy.length * 5))
     issues.push(`${legacy.length} legacy context entries need cleanup`)
   }
 
@@ -157,12 +162,12 @@ export function evaluateContextQuality(
     ]
     const missing = required.filter((v) => !v).length
     if (missing > 0) {
-      score -= missing * 4
+      penalties.push(missing * 4)
       issues.push('latest living context is missing structured UI/LLM fields')
     }
   }
 
-  score = Math.max(0, Math.min(100, score))
+  const score = Math.max(0, Math.min(100, 100 - penalties.reduce((sum, value) => sum + value, 0)))
   return {
     score,
     threshold,

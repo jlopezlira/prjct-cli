@@ -19,33 +19,39 @@ import {
   startWorkflowRun,
 } from '../../workflow-engine/run-recorder'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
+
 const original = pathManager.getGlobalProjectPath.bind(pathManager)
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-wfrun-'))
-  projectId = `wfrun-${Math.random().toString(36).slice(2, 10)}`
-  pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-  prjctDb.getDb(projectId)
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-wfrun-'))
+  fixture.projectId = `wfrun-${Math.random().toString(36).slice(2, 10)}`
+  pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+  prjctDb.getDb(fixture.projectId)
 })
 afterEach(async () => {
   prjctDb.close()
   pathManager.getGlobalProjectPath = original
-  await fs.rm(tmpRoot, { recursive: true, force: true })
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
 })
 
 describe('workflow run recorder (C8)', () => {
   it('persists a run with a gate eval and a step, then finalizes status', () => {
-    const runId = startWorkflowRun(projectId, 'before:ship', 'task-1')
+    const runId = startWorkflowRun(fixture.projectId, 'before:ship', 'task-1')
     expect(runId).toBeTruthy()
-    recordGateEvaluation(projectId, runId, 7, true)
-    recordGateEvaluation(projectId, runId, 8, false, 'tests red')
-    recordRunStep(projectId, runId, 9, 0, 'ok')
-    finishWorkflowRun(projectId, runId, 'passed')
+    recordGateEvaluation(fixture.projectId, runId, 7, true)
+    recordGateEvaluation(fixture.projectId, runId, 8, false, 'tests red')
+    recordRunStep(fixture.projectId, runId, 9, 0, 'ok')
+    finishWorkflowRun(fixture.projectId, runId, 'passed')
 
     const run = prjctDb.query<{ status: string; command: string; work_cycle_id: string }>(
-      projectId,
+      fixture.projectId,
       'SELECT status, command, work_cycle_id FROM workflow_runs WHERE id = ?',
       runId
     )[0]
@@ -54,7 +60,7 @@ describe('workflow run recorder (C8)', () => {
     expect(run.work_cycle_id).toBe('task-1')
 
     const gates = prjctDb.query<{ passed: number; reason: string | null }>(
-      projectId,
+      fixture.projectId,
       'SELECT passed, reason FROM gate_evaluation WHERE run_id = ? ORDER BY passed DESC',
       runId
     )
@@ -64,7 +70,7 @@ describe('workflow run recorder (C8)', () => {
     expect(gates[1].reason).toBe('tests red')
 
     const steps = prjctDb.query<{ status: string; seq: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT status, seq FROM workflow_run_step WHERE run_id = ?',
       runId
     )
@@ -74,22 +80,22 @@ describe('workflow run recorder (C8)', () => {
 
   it('recorder calls with a null runId are no-ops (never throw)', () => {
     expect(() => {
-      recordGateEvaluation(projectId, null, 1, true)
-      recordRunStep(projectId, null, 1, 0, 'ok')
-      finishWorkflowRun(projectId, null, 'passed')
+      recordGateEvaluation(fixture.projectId, null, 1, true)
+      recordRunStep(fixture.projectId, null, 1, 0, 'ok')
+      finishWorkflowRun(fixture.projectId, null, 'passed')
     }).not.toThrow()
-    const runs = prjctDb.query<{ id: string }>(projectId, 'SELECT id FROM workflow_runs')
+    const runs = prjctDb.query<{ id: string }>(fixture.projectId, 'SELECT id FROM workflow_runs')
     expect(runs.length).toBe(0)
   })
 
   it('getRecentWorkflowRuns summarizes runs with step + gate counts', () => {
-    const runId = startWorkflowRun(projectId, 'before:ship', 'task-x')
-    recordGateEvaluation(projectId, runId, 1, true)
-    recordGateEvaluation(projectId, runId, 2, false, 'red')
-    recordRunStep(projectId, runId, 3, 0, 'ok')
-    finishWorkflowRun(projectId, runId, 'blocked')
+    const runId = startWorkflowRun(fixture.projectId, 'before:ship', 'task-x')
+    recordGateEvaluation(fixture.projectId, runId, 1, true)
+    recordGateEvaluation(fixture.projectId, runId, 2, false, 'red')
+    recordRunStep(fixture.projectId, runId, 3, 0, 'ok')
+    finishWorkflowRun(fixture.projectId, runId, 'blocked')
 
-    const summary = getRecentWorkflowRuns(projectId, 10)
+    const summary = getRecentWorkflowRuns(fixture.projectId, 10)
     expect(summary.length).toBe(1)
     expect(summary[0].command).toBe('before:ship')
     expect(summary[0].status).toBe('blocked')

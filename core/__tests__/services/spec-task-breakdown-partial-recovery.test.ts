@@ -27,24 +27,30 @@ import prjctDb from '../../storage/database'
 import { queueStorage } from '../../storage/queue-storage'
 import { specStorage } from '../../storage/spec-storage'
 
-let projectPath: string
-let projectId: string
-let originalProjectsDir: string | undefined
+const fixture: {
+  projectPath: string
+  projectId: string
+  originalProjectsDir: string | undefined
+} = {
+  projectPath: '',
+  projectId: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+}
 
 async function freshProject(): Promise<void> {
   const tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-pbr-pd-'))
-  originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+  fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
   process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
 
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-pbr-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `pbr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-pbr-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `pbr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+  await pathManager.ensureProjectStructure(fixture.projectId)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
 }
 
 beforeEach(async () => {
@@ -53,15 +59,16 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-  else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-  if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+  if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+  else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+  if (fixture.projectPath)
+    await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   prjctDb.close()
 })
 
 describe('breakdownSpecToTasks partial-recovery', () => {
   test('fresh breakdown: creates one task per AC + sets marker', async () => {
-    const spec = await specService.create(projectPath, {
+    const spec = await specService.create(fixture.projectPath, {
       title: 'fresh-breakdown',
       content: {
         goal: 'three criteria',
@@ -70,20 +77,20 @@ describe('breakdownSpecToTasks partial-recovery', () => {
       autoContext: false,
     })
 
-    const result = await breakdownSpecToTasks(projectId, projectPath, spec)
+    const result = await breakdownSpecToTasks(fixture.projectId, fixture.projectPath, spec)
     expect(result.taskIds).toHaveLength(3)
     expect(result.recoveredFromPartial).toBeUndefined()
 
-    const after = specStorage.get(projectId, spec.id)!
+    const after = specStorage.get(fixture.projectId, spec.id)!
     expect(after.content.tasks_created_at).not.toBeNull()
     expect(after.content.linked_tasks).toHaveLength(3)
 
-    const queued = await queueStorage.getTasks(projectId)
+    const queued = await queueStorage.getTasks(fixture.projectId)
     expect(queued.filter((t) => t.featureId === spec.id)).toHaveLength(3)
   })
 
   test('re-entry on a completed spec is a no-op (marker guards it)', async () => {
-    const spec = await specService.create(projectPath, {
+    const spec = await specService.create(fixture.projectPath, {
       title: 'idempotent-re-entry',
       content: {
         goal: 'two criteria',
@@ -91,15 +98,15 @@ describe('breakdownSpecToTasks partial-recovery', () => {
       },
       autoContext: false,
     })
-    const first = await breakdownSpecToTasks(projectId, projectPath, spec)
+    const first = await breakdownSpecToTasks(fixture.projectId, fixture.projectPath, spec)
     expect(first.taskIds).toHaveLength(2)
 
-    const refreshed = specStorage.get(projectId, spec.id)!
-    const second = await breakdownSpecToTasks(projectId, projectPath, refreshed)
+    const refreshed = specStorage.get(fixture.projectId, spec.id)!
+    const second = await breakdownSpecToTasks(fixture.projectId, fixture.projectPath, refreshed)
     expect(second.taskIds).toHaveLength(0)
     expect(second.skippedReason).toBe('already_broken_down')
 
-    const queued = await queueStorage.getTasks(projectId)
+    const queued = await queueStorage.getTasks(fixture.projectId)
     expect(queued.filter((t) => t.featureId === spec.id)).toHaveLength(2)
   })
 
@@ -107,7 +114,7 @@ describe('breakdownSpecToTasks partial-recovery', () => {
     // Simulate a crash MID-LOOP: we'll create the spec, run a full
     // breakdown, then manually clear the marker AND add an extra
     // orphan queue row to imitate the partial state.
-    const spec = await specService.create(projectPath, {
+    const spec = await specService.create(fixture.projectPath, {
       title: 'partial-breakdown',
       content: {
         goal: 'five criteria',
@@ -116,14 +123,14 @@ describe('breakdownSpecToTasks partial-recovery', () => {
       autoContext: false,
     })
 
-    const first = await breakdownSpecToTasks(projectId, projectPath, spec)
+    const first = await breakdownSpecToTasks(fixture.projectId, fixture.projectPath, spec)
     expect(first.taskIds).toHaveLength(5)
 
     // Force partial-state shape: marker=null AND linked_tasks
     // intentionally truncated to 2 of 5 (the crash window) AND queue
     // still carries 3 leftover rows the recovery must wipe.
-    const baseline = specStorage.get(projectId, spec.id)!
-    specStorage.updateContent(projectId, spec.id, {
+    const baseline = specStorage.get(fixture.projectId, spec.id)!
+    specStorage.updateContent(fixture.projectId, spec.id, {
       ...baseline.content,
       tasks_created_at: null,
       linked_tasks: baseline.content.linked_tasks.slice(0, 2),
@@ -131,21 +138,21 @@ describe('breakdownSpecToTasks partial-recovery', () => {
 
     // Sanity: queue still has 5 rows tagged with this featureId before
     // the recovery wipe.
-    const before = await queueStorage.getTasks(projectId)
+    const before = await queueStorage.getTasks(fixture.projectId)
     expect(before.filter((t) => t.featureId === spec.id)).toHaveLength(5)
 
-    const partial = specStorage.get(projectId, spec.id)!
-    const second = await breakdownSpecToTasks(projectId, projectPath, partial)
+    const partial = specStorage.get(fixture.projectId, spec.id)!
+    const second = await breakdownSpecToTasks(fixture.projectId, fixture.projectPath, partial)
     expect(second.recoveredFromPartial).toBe(true)
     expect(second.taskIds).toHaveLength(5)
 
     // After recovery: queue carries exactly 5 (no duplicates from the
     // pre-wipe rows), spec.linked_tasks is full, marker is set.
-    const after = specStorage.get(projectId, spec.id)!
+    const after = specStorage.get(fixture.projectId, spec.id)!
     expect(after.content.tasks_created_at).not.toBeNull()
     expect(after.content.linked_tasks).toHaveLength(5)
 
-    const queued = await queueStorage.getTasks(projectId)
+    const queued = await queueStorage.getTasks(fixture.projectId)
     expect(queued.filter((t) => t.featureId === spec.id)).toHaveLength(5)
   })
 })

@@ -109,7 +109,7 @@ class SyncVerifier {
     const totalStart = Date.now()
     const checks: VerificationCheckResult[] = []
     const failFast = config?.failFast ?? false
-    let skipped = 0
+    const skippedChecks: string[] = []
 
     // 1. Run built-in checks
     const builtinChecks = [
@@ -121,7 +121,9 @@ class SyncVerifier {
       const result = await checkPromise
       checks.push(result)
       if (!result.passed && failFast) {
-        skipped = config?.checks?.filter((c) => c.enabled !== false).length ?? 0
+        skippedChecks.push(
+          ...(config?.checks?.filter((c) => c.enabled !== false).map((c) => c.name) ?? [])
+        )
         break
       }
     }
@@ -129,19 +131,19 @@ class SyncVerifier {
     // 2. Run custom checks (if configured and not fail-fast-stopped)
     const shouldContinue = !failFast || checks.every((c) => c.passed)
     if (shouldContinue && config?.checks) {
-      for (const check of config.checks) {
-        if (check.enabled === false) {
-          skipped++
+      for (const check2 of config.checks) {
+        if (check2.enabled === false) {
+          skippedChecks.push(check2.name)
           continue
         }
 
-        const result = await this.runCustomCheck(check, projectPath)
+        const result = await this.runCustomCheck(check2, projectPath)
         checks.push(result)
 
         if (!result.passed && failFast) {
           // Count remaining enabled checks as skipped
-          const remaining = config.checks.slice(config.checks.indexOf(check) + 1)
-          skipped += remaining.filter((c) => c.enabled !== false).length
+          const remaining = config.checks.slice(config.checks.indexOf(check2) + 1)
+          skippedChecks.push(...remaining.filter((c) => c.enabled !== false).map((c) => c.name))
           break
         }
       }
@@ -156,7 +158,7 @@ class SyncVerifier {
       totalMs: Date.now() - totalStart,
       failedCount,
       passedCount,
-      skippedCount: skipped,
+      skippedCount: skippedChecks.length,
     }
   }
 

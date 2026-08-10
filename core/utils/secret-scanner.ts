@@ -61,27 +61,27 @@ export function flattenToolInputText(input: unknown, maxChars = 200_000): string
   const limit = Math.max(0, maxChars)
   const headLimit = Math.ceil(limit / 2)
   const tailLimit = Math.floor(limit / 2)
-  let head = ''
-  let tail = ''
-  let full: string | null = ''
-  let totalChars = 0
-  let hasPart = false
+  const text = { head: '', tail: '', full: '' as string | null, totalChars: 0, hasPart: false }
 
   const push = (s: string) => {
     if (!s || limit === 0) return
-    const chunk = `${hasPart ? '\n' : ''}${s}`
-    hasPart = true
-    totalChars += chunk.length
+    const chunk = `${text.hasPart ? '\n' : ''}${s}`
+    text.hasPart = true
+    text.totalChars += chunk.length
 
-    if (full !== null) {
-      if (totalChars <= limit) full += chunk
-      else full = null
+    if (text.full !== null) {
+      if (text.totalChars <= limit) text.full += chunk
+      else text.full = null
     }
 
-    if (head.length < headLimit) head += chunk.slice(0, headLimit - head.length)
+    if (text.head.length < headLimit) {
+      text.head += chunk.slice(0, headLimit - text.head.length)
+    }
     if (tailLimit > 0) {
-      tail =
-        chunk.length >= tailLimit ? chunk.slice(-tailLimit) : `${tail}${chunk}`.slice(-tailLimit)
+      text.tail =
+        chunk.length >= tailLimit
+          ? chunk.slice(-tailLimit)
+          : `${text.tail}${chunk}`.slice(-tailLimit)
     }
   }
 
@@ -108,8 +108,8 @@ export function flattenToolInputText(input: unknown, maxChars = 200_000): string
   }
 
   walk(input, 0)
-  if (full !== null) return full
-  return totalChars > limit ? `${head}\n${tail}` : head
+  if (text.full !== null) return text.full
+  return text.totalChars > limit ? `${text.head}\n${text.tail}` : text.head
 }
 
 const TOOL_INPUT_CHUNK_CHARS = 64 * 1024
@@ -123,9 +123,10 @@ function addSecretHits(text: string, hits: Set<string>): void {
   }
 
   const step = TOOL_INPUT_CHUNK_CHARS - TOOL_INPUT_CHUNK_OVERLAP
-  for (let start = 0; start < text.length; start += step) {
+  const starts = Array.from({ length: Math.ceil(text.length / step) }, (_, index) => index * step)
+  for (const start of starts) {
     const end = Math.min(text.length, start + TOOL_INPUT_CHUNK_CHARS)
-    for (const hit of scanForSecrets(text.slice(start, end))) hits.add(hit)
+    for (const hit2 of scanForSecrets(text.slice(start, end))) hits.add(hit2)
     if (end === text.length) break
   }
 }
@@ -145,13 +146,12 @@ function scanUnknownStrings(input: unknown, hits: Set<string>): void {
     seen.add(value)
 
     if (Array.isArray(value)) {
-      for (let i = value.length - 1; i >= 0; i--) stack.push(value[i])
+      for (const nested of [...value].reverse()) stack.push(nested)
       continue
     }
 
     const entries = Object.entries(value as Record<string, unknown>)
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const [key, nested] = entries[i]
+    for (const [key, nested] of entries.reverse()) {
       if (
         /token|secret|password|api[_-]?key|authorization/i.test(key) &&
         typeof nested === 'string'

@@ -49,25 +49,22 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
       const { loadSessionContinuity, loadLastSessionCloseContent, formatSessionResumeCard } =
         await import('../../services/session-continuity')
       const stamp = loadSessionContinuity(projectId)
-      let journal: string[] = []
-      if (overview.current) {
-        const { prjctDb } = await import('../../storage/database')
-        journal = prjctDb
-          .query<{ content: string }>(
-            projectId,
-            'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 3',
-            overview.current.id
+      const current = overview.current
+      const journal = current
+        ? await import('../../storage/database').then(({ prjctDb }) =>
+            prjctDb
+              .query<{ content: string }>(
+                projectId,
+                'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 3',
+                current.id
+              )
+              .map((j) => j.content)
+              .reverse()
           )
-          .map((j) => j.content)
-          .reverse()
-      }
-      let pendingHandoffCue: string | null = null
-      try {
-        const { formatPendingHandoffCue } = await import('../../services/agent-switch')
-        pendingHandoffCue = formatPendingHandoffCue(projectId)
-      } catch {
-        pendingHandoffCue = null
-      }
+        : []
+      const pendingHandoffCue = await import('../../services/agent-switch')
+        .then(({ formatPendingHandoffCue }) => formatPendingHandoffCue(projectId))
+        .catch(() => null)
       const md = formatSessionResumeCard({
         stamp,
         liveCycleDescription: overview.current?.description ?? null,
@@ -305,7 +302,7 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
           }
           if (rel.commands.length) {
             out.push(`\n### Commands (${rel.commands.length})`)
-            for (const c of rel.commands) out.push(`- **${c.name}**: \`${c.command}\``)
+            for (const c2 of rel.commands) out.push(`- **${c2.name}**: \`${c2.command}\``)
           }
           return { content: [{ type: 'text', text: out.join('\n') }] }
         }
@@ -344,15 +341,15 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
 
         if (analysis.antiPatterns?.length) {
           parts.push(`\n### Anti-Patterns (${analysis.antiPatterns.length})`)
-          for (const a of analysis.antiPatterns) {
-            parts.push(`- **${a.issue}**: ${a.suggestion}`)
+          for (const a2 of analysis.antiPatterns) {
+            parts.push(`- **${a2.issue}**: ${a2.suggestion}`)
           }
         }
 
         if (analysis.conventions?.length) {
           parts.push(`\n### Conventions (${analysis.conventions.length})`)
-          for (const c of analysis.conventions) {
-            parts.push(`- [${c.category}] ${c.rule}`)
+          for (const c3 of analysis.conventions) {
+            parts.push(`- [${c3.category}] ${c3.rule}`)
           }
         }
 
@@ -366,7 +363,7 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
         const insights = analysis.projectInsights ?? []
         if (insights.length) {
           parts.push(`\n### Insights (${insights.length})`)
-          for (const i of insights) parts.push(`- ${i}`)
+          for (const i2 of insights) parts.push(`- ${i2}`)
         }
 
         return { content: [{ type: 'text', text: parts.join('\n') }] }
@@ -402,12 +399,11 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
         }) => {
           const path = resolveProjectPath(args.projectPath)
           const projectId = await resolveProjectId(path)
-          let taskId = args.workCycleId
-          if (!taskId) {
-            const { resolveActiveTask } = await import('../../services/task-service')
-            const active = await resolveActiveTask(projectId, path)
-            taskId = active?.id
-          }
+          const taskId =
+            args.workCycleId ??
+            (await import('../../services/task-service').then(({ resolveActiveTask }) =>
+              resolveActiveTask(projectId, path).then((active) => active?.id)
+            ))
           if (!taskId) {
             return {
               content: [

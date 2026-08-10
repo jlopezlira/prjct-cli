@@ -478,12 +478,13 @@ function buildMemoryDoctor(projectId: string): {
   )
 
   // Precision + density substrate (signal-quality plan): pure over live index.
-  let substrate: SubstrateHealth | null = null
-  try {
-    substrate = computeSubstrateHealth(projectMemory.allEntriesForIndex(projectId))
-  } catch {
-    substrate = null
-  }
+  const substrate = (() => {
+    try {
+      return computeSubstrateHealth(projectMemory.allEntriesForIndex(projectId))
+    } catch {
+      return null
+    }
+  })()
 
   const issues: string[] = []
   if (duplicateGroups > 0) issues.push(`${duplicateGroups} duplicate memory group(s) need review.`)
@@ -832,8 +833,8 @@ async function changedFiles(projectPath: string): Promise<string[]> {
     cwd: projectPath,
   })
   if (untracked.ok) {
-    for (const line of untracked.stdout.split('\n')) {
-      const value = line.trim()
+    for (const line2 of untracked.stdout.split('\n')) {
+      const value = line2.trim()
       if (value) names.add(value)
     }
   } else if (untracked.kind !== 'exit') {
@@ -1004,8 +1005,8 @@ function memoryFixPlan(report: ReturnType<typeof buildMemoryDoctor>): string[] {
       `Review ${row.id}: promote old inbox to decision/learning/gotcha/todo, or forget it if obsolete.`
     )
   }
-  for (const row of report.noise) {
-    actions.push(`Forget or rewrite ${row.id}: low-signal content "${summarizeMemory(row)}".`)
+  for (const row2 of report.noise) {
+    actions.push(`Forget or rewrite ${row2.id}: low-signal content "${summarizeMemory(row2)}".`)
   }
   if (report.duplicateGroups > 0) {
     actions.push(

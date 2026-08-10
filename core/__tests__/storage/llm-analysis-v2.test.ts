@@ -13,8 +13,14 @@ import { prjctDb } from '../../storage/database'
 import llmAnalysisStorage from '../../storage/llm-analysis-storage'
 import type { LLMAnalysis } from '../../types/llm-analysis'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
+
 const original = pathManager.getGlobalProjectPath.bind(pathManager)
 
 function makeAnalysis(): LLMAnalysis {
@@ -64,22 +70,22 @@ function makeAnalysis(): LLMAnalysis {
 
 describe('llm_analysis relational children (C3)', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-llm-v2-'))
-    projectId = `llmv2-${Math.random().toString(36).slice(2, 10)}`
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-    prjctDb.getDb(projectId)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-llm-v2-'))
+    fixture.projectId = `llmv2-${Math.random().toString(36).slice(2, 10)}`
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+    prjctDb.getDb(fixture.projectId)
   })
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = original
-    await fs.rm(tmpRoot, { recursive: true, force: true })
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('writes findings/conventions/stack/commands/domains as rows', () => {
-    llmAnalysisStorage.save(projectId, makeAnalysis())
+    llmAnalysisStorage.save(fixture.projectId, makeAnalysis())
 
     const kinds = prjctDb.query<{ kind: string; n: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT kind, COUNT(*) AS n FROM analysis_finding GROUP BY kind'
     )
     const byKind = new Map(kinds.map((k) => [k.kind, k.n]))
@@ -90,15 +96,15 @@ describe('llm_analysis relational children (C3)', () => {
     expect(byKind.get('refactor')).toBe(1)
     expect(byKind.get('insight')).toBe(2) // projectInsights + architecture.insights
 
-    expect(prjctDb.query(projectId, 'SELECT id FROM analysis_convention').length).toBe(1)
-    expect(prjctDb.query(projectId, 'SELECT id FROM analysis_stack_item').length).toBe(2)
-    expect(prjctDb.query(projectId, 'SELECT id FROM analysis_command').length).toBe(2)
-    expect(prjctDb.query(projectId, 'SELECT id FROM analysis_domain').length).toBe(2)
+    expect(prjctDb.query(fixture.projectId, 'SELECT id FROM analysis_convention').length).toBe(1)
+    expect(prjctDb.query(fixture.projectId, 'SELECT id FROM analysis_stack_item').length).toBe(2)
+    expect(prjctDb.query(fixture.projectId, 'SELECT id FROM analysis_command').length).toBe(2)
+    expect(prjctDb.query(fixture.projectId, 'SELECT id FROM analysis_domain').length).toBe(2)
   })
 
   it('getActiveRelational reads findings/conventions/stack from child tables', () => {
-    llmAnalysisStorage.save(projectId, makeAnalysis())
-    const rel = llmAnalysisStorage.getActiveRelational(projectId)
+    llmAnalysisStorage.save(fixture.projectId, makeAnalysis())
+    const rel = llmAnalysisStorage.getActiveRelational(fixture.projectId)
     expect(rel).not.toBeNull()
     expect(rel?.findings.some((f) => f.kind === 'pattern')).toBe(true)
     expect(rel?.findings.some((f) => f.kind === 'tech_debt')).toBe(true)
@@ -108,10 +114,10 @@ describe('llm_analysis relational children (C3)', () => {
   })
 
   it('keeps superseded analyses queryable (archive = WHERE status)', () => {
-    llmAnalysisStorage.save(projectId, makeAnalysis())
-    llmAnalysisStorage.save(projectId, makeAnalysis())
+    llmAnalysisStorage.save(fixture.projectId, makeAnalysis())
+    llmAnalysisStorage.save(fixture.projectId, makeAnalysis())
     const statuses = prjctDb.query<{ status: string; n: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT status, COUNT(*) AS n FROM llm_analysis GROUP BY status'
     )
     const byStatus = new Map(statuses.map((s) => [s.status, s.n]))
@@ -119,7 +125,7 @@ describe('llm_analysis relational children (C3)', () => {
     expect(byStatus.get('superseded')).toBe(1)
     // Each analysis kept its own finding rows.
     const totalFindings = prjctDb.query<{ n: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT COUNT(*) AS n FROM analysis_finding'
     )[0].n
     expect(totalFindings).toBe(14) // 7 findings × 2 analyses

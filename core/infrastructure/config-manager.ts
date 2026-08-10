@@ -60,13 +60,12 @@ class ConfigManager {
    */
   async readConfig(projectPath: string): Promise<LocalConfig | null> {
     const configPath = pathManager.getLocalConfigPath(projectPath)
-    let mtimeMs = -1
-    try {
-      mtimeMs = (await fs.stat(configPath)).mtimeMs
-    } catch {
+    const stat = await fs.stat(configPath).catch(() => null)
+    if (!stat) {
       configCache.delete(configPath)
       return null // no file — same result the read would produce
     }
+    const mtimeMs = stat.mtimeMs
     const cached = configCache.get(configPath)
     if (cached && cached.mtimeMs === mtimeMs) return cached.config
 
@@ -134,16 +133,19 @@ class ConfigManager {
    * Ensure global config exists, create if not
    */
   async ensureGlobalConfig(projectId: string): Promise<GlobalConfig> {
-    let globalConfig = await this.readGlobalConfig(projectId)
-
-    if (!globalConfig) {
-      const now = getTimestamp()
-      globalConfig = {
-        projectId,
-        authors: [],
-        version: VERSION,
-        lastSync: now,
-      }
+    const existing = await this.readGlobalConfig(projectId)
+    const globalConfig =
+      existing ??
+      (() => {
+        const now = getTimestamp()
+        return {
+          projectId,
+          authors: [],
+          version: VERSION,
+          lastSync: now,
+        }
+      })()
+    if (!existing) {
       await this.writeGlobalConfig(projectId, globalConfig)
     }
 

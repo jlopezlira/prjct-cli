@@ -157,11 +157,7 @@ export interface FileExtract {
 }
 
 function lineOf(content: string, index: number): number {
-  let line = 1
-  for (let i = 0; i < index && i < content.length; i++) {
-    if (content.charCodeAt(i) === 10) line++
-  }
-  return line
+  return content.slice(0, Math.min(index, content.length)).split('\n').length
 }
 
 function symbolId(file: string, kind: string, name: string, startLine: number): string {
@@ -184,90 +180,9 @@ function isSourceFile(filePath: string): boolean {
  * Linear scan (no catastrophic regex backtracking on large files).
  */
 export function stripNoise(content: string): string {
-  const out: string[] = []
-  let i = 0
-  const n = content.length
-  while (i < n) {
-    const c = content[i]!
-    const next = content[i + 1]
-
-    // line comment
-    if (c === '/' && next === '/') {
-      out.push(' ')
-      i += 2
-      while (i < n && content[i] !== '\n') {
-        out.push(' ')
-        i++
-      }
-      continue
-    }
-    // block comment
-    if (c === '/' && next === '*') {
-      out.push(' ')
-      out.push(' ')
-      i += 2
-      while (i < n) {
-        if (content[i] === '*' && content[i + 1] === '/') {
-          out.push(' ')
-          out.push(' ')
-          i += 2
-          break
-        }
-        out.push(content[i] === '\n' ? '\n' : ' ')
-        i++
-      }
-      continue
-    }
-    // single / double quoted string
-    if (c === "'" || c === '"') {
-      const q = c
-      out.push(q)
-      i++
-      while (i < n) {
-        const ch = content[i]!
-        if (ch === '\\' && i + 1 < n) {
-          out.push(' ')
-          out.push(' ')
-          i += 2
-          continue
-        }
-        if (ch === q) {
-          out.push(q)
-          i++
-          break
-        }
-        out.push(ch === '\n' ? '\n' : ' ')
-        i++
-      }
-      continue
-    }
-    // template literal (no ${} expansion handling — blank whole span)
-    if (c === '`') {
-      out.push('`')
-      i++
-      while (i < n) {
-        const ch = content[i]!
-        if (ch === '\\' && i + 1 < n) {
-          out.push(' ')
-          out.push(' ')
-          i += 2
-          continue
-        }
-        if (ch === '`') {
-          out.push('`')
-          i++
-          break
-        }
-        out.push(ch === '\n' ? '\n' : ' ')
-        i++
-      }
-      continue
-    }
-
-    out.push(c)
-    i++
-  }
-  return out.join('')
+  const noise =
+    /\/\/[^\n]*(?:\n|$)|\/\*(?:[^*]|\*(?!\/))*(?:\*\/|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)/g
+  return content.replace(noise, (match) => match.replace(/[^\n]/g, ' '))
 }
 
 function emptyExtract(filePath: string): FileExtract {
@@ -347,8 +262,7 @@ function extractTsJs(content: string, filePath: string): FileExtract {
   const seen = new Set<string>()
   for (const { re, kind, nameIdx, exported } of declPatterns) {
     re.lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = re.exec(clean)) !== null) {
+    for (const m of clean.matchAll(re)) {
       const name = m[nameIdx]
       if (!name || name.length < 2 || DECL_KEYWORDS.has(name)) continue
       const startLine = lineOf(clean, m.index)
@@ -368,8 +282,7 @@ function extractTsJs(content: string, filePath: string): FileExtract {
   // Imports MUST read original source — stripNoise blanks string literals.
   const importRe =
     /import\s+(?:type\s+)?(?:\{([^}]+)\}|(\w+)(?:\s*,\s*\{([^}]+)\})?|\*\s+as\s+(\w+))\s+from\s+['"]([^'"]+)['"]/g
-  let im: RegExpExecArray | null
-  while ((im = importRe.exec(content)) !== null) {
+  for (const im of content.matchAll(importRe)) {
     const source = im[5]!
     const bindNamed = (chunk: string | undefined) => {
       if (!chunk) return
@@ -390,15 +303,14 @@ function extractTsJs(content: string, filePath: string): FileExtract {
 
   // require('...') — also from original
   const reqRe = /(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g
-  while ((im = reqRe.exec(content)) !== null) {
-    importBindings.set(im[1]!, im[2]!)
+  for (const im2 of content.matchAll(reqRe)) {
+    importBindings.set(im2[1]!, im2[2]!)
   }
 
   // Call sites with lines — cap to avoid edge explosion on huge files
   const callRe = /\b([A-Za-z_][\w]*)\s*\(/g
-  let cm: RegExpExecArray | null
   const MAX_CALLS = 400
-  while ((cm = callRe.exec(clean)) !== null) {
+  for (const cm of clean.matchAll(callRe)) {
     const name = cm[1]!
     if (CALL_KEYWORDS.has(name) || name.length < 2) continue
     const line = lineOf(clean, cm.index)
@@ -409,8 +321,7 @@ function extractTsJs(content: string, filePath: string): FileExtract {
   // Routes — original source (paths live in strings)
   // Express/Hono/Fastify: app.get('/path'
   const routeRe = /\.(?:get|post|put|patch|delete|options|head|all)\s*\(\s*['"`](\/[^'"`]*)['"`]/gi
-  let rm: RegExpExecArray | null
-  while ((rm = routeRe.exec(content)) !== null) {
+  for (const rm of content.matchAll(routeRe)) {
     const routePath = rm[1]!
     const name = routePath.replace(/[^\w/.-]/g, '').slice(0, 64) || 'route'
     symbols.push({
@@ -424,13 +335,13 @@ function extractTsJs(content: string, filePath: string): FileExtract {
   // FastAPI / Flask decorators
   const decoRe =
     /@(?:app|router|api|bp)\.(?:get|post|put|patch|delete|options|head|api_route)\s*\(\s*['"`](\/[^'"`]*)['"`]/gi
-  while ((rm = decoRe.exec(content)) !== null) {
-    const routePath = rm[1]!
+  for (const rm2 of content.matchAll(decoRe)) {
+    const routePath = rm2[1]!
     const name = routePath.replace(/[^\w/.-]/g, '').slice(0, 64) || 'route'
     symbols.push({
       kind: 'route',
       name,
-      startLine: lineOf(content, rm.index),
+      startLine: lineOf(content, rm2.index),
       endLine: null,
       exported: true,
     })
@@ -439,11 +350,11 @@ function extractTsJs(content: string, filePath: string): FileExtract {
   if (/(?:^|\/)route\.(ts|js|tsx|jsx)$/.test(filePath.replace(/\\/g, '/'))) {
     const nextHandlers =
       /\bexport\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/g
-    while ((rm = nextHandlers.exec(content)) !== null) {
+    for (const rm3 of content.matchAll(nextHandlers)) {
       symbols.push({
         kind: 'route',
-        name: `${rm[1]} ${filePath.replace(/\\/g, '/')}`,
-        startLine: lineOf(content, rm.index),
+        name: `${rm3[1]} ${filePath.replace(/\\/g, '/')}`,
+        startLine: lineOf(content, rm3.index),
         endLine: null,
         exported: true,
       })
@@ -467,8 +378,7 @@ function extractPython(content: string, filePath: string): FileExtract {
   const clean = stripNoise(content)
   const reFn = /^(?:async\s+)?def\s+(\w+)\s*\(/gm
   const reClass = /^class\s+(\w+)/gm
-  let m: RegExpExecArray | null
-  while ((m = reFn.exec(clean)) !== null) {
+  for (const m of clean.matchAll(reFn)) {
     symbols.push({
       kind: 'function',
       name: m[1]!,
@@ -477,21 +387,21 @@ function extractPython(content: string, filePath: string): FileExtract {
       exported: !m[1]!.startsWith('_'),
     })
   }
-  while ((m = reClass.exec(clean)) !== null) {
+  for (const m2 of clean.matchAll(reClass)) {
     symbols.push({
       kind: 'class',
-      name: m[1]!,
-      startLine: lineOf(clean, m.index),
+      name: m2[1]!,
+      startLine: lineOf(clean, m2.index),
       endLine: null,
-      exported: !m[1]!.startsWith('_'),
+      exported: !m2[1]!.startsWith('_'),
     })
   }
   const callRe = /\b([A-Za-z_][\w]*)\s*\(/g
-  while ((m = callRe.exec(clean)) !== null) {
-    const name = m[1]!
+  for (const m3 of clean.matchAll(callRe)) {
+    const name = m3[1]!
     if (/^(if|for|while|return|print|len|range|str|int|list|dict|set|super|self)$/.test(name))
       continue
-    calls.push({ name, line: lineOf(clean, m.index) })
+    calls.push({ name, line: lineOf(clean, m3.index) })
   }
   const fin = finalizeCalls(calls)
   return {
@@ -509,8 +419,7 @@ function extractGo(content: string, filePath: string): FileExtract {
   const clean = stripNoise(content)
   const reFn = /^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(/gm
   const reType = /^type\s+(\w+)\s+(?:struct|interface)/gm
-  let m: RegExpExecArray | null
-  while ((m = reFn.exec(clean)) !== null) {
+  for (const m of clean.matchAll(reFn)) {
     const name = m[1]!
     symbols.push({
       kind: 'function',
@@ -520,13 +429,13 @@ function extractGo(content: string, filePath: string): FileExtract {
       exported: name[0] === name[0]!.toUpperCase(),
     })
   }
-  while ((m = reType.exec(clean)) !== null) {
+  for (const m2 of clean.matchAll(reType)) {
     symbols.push({
       kind: 'type',
-      name: m[1]!,
-      startLine: lineOf(clean, m.index),
+      name: m2[1]!,
+      startLine: lineOf(clean, m2.index),
       endLine: null,
-      exported: m[1]![0] === m[1]![0]!.toUpperCase(),
+      exported: m2[1]![0] === m2[1]![0]!.toUpperCase(),
     })
   }
   return {
@@ -546,14 +455,13 @@ function extractRust(content: string, filePath: string): FileExtract {
   const reStruct = /^(?:pub\s+)?struct\s+(\w+)/gm
   const reTrait = /^(?:pub\s+)?trait\s+(\w+)/gm
   const reEnum = /^(?:pub\s+)?enum\s+(\w+)/gm
-  let m: RegExpExecArray | null
   for (const [re, kind] of [
     [reFn, 'function'],
     [reStruct, 'class'],
     [reTrait, 'interface'],
     [reEnum, 'enum'],
   ] as const) {
-    while ((m = re.exec(clean)) !== null) {
+    for (const m of clean.matchAll(re)) {
       symbols.push({
         kind: kind as SymbolKind,
         name: m[1]!,
@@ -580,8 +488,7 @@ function extractJava(content: string, filePath: string): FileExtract {
   const reIface = /(?:public\s+)?interface\s+(\w+)/g
   const reMethod =
     /(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?[\w.<>,[\]\s]+\s+(\w+)\s*\(/g
-  let m: RegExpExecArray | null
-  while ((m = reClass.exec(clean)) !== null) {
+  for (const m of clean.matchAll(reClass)) {
     symbols.push({
       kind: 'class',
       name: m[1]!,
@@ -590,21 +497,21 @@ function extractJava(content: string, filePath: string): FileExtract {
       exported: true,
     })
   }
-  while ((m = reIface.exec(clean)) !== null) {
+  for (const m2 of clean.matchAll(reIface)) {
     symbols.push({
       kind: 'interface',
-      name: m[1]!,
-      startLine: lineOf(clean, m.index),
+      name: m2[1]!,
+      startLine: lineOf(clean, m2.index),
       endLine: null,
       exported: true,
     })
   }
-  while ((m = reMethod.exec(clean)) !== null) {
-    if (/^(if|for|while|switch|catch|return|new)$/.test(m[1]!)) continue
+  for (const m3 of clean.matchAll(reMethod)) {
+    if (/^(if|for|while|switch|catch|return|new)$/.test(m3[1]!)) continue
     symbols.push({
       kind: 'method',
-      name: m[1]!,
-      startLine: lineOf(clean, m.index),
+      name: m3[1]!,
+      startLine: lineOf(clean, m3.index),
       endLine: null,
       exported: true,
     })
@@ -677,7 +584,7 @@ function applyTsPath(specifier: string, tsPaths: TsPathMap): string[] {
       }
       void prefix
     } else if (specifier === pattern) {
-      for (const t of targets) out.push(t.replace(/\*$/, ''))
+      for (const t2 of targets) out.push(t2.replace(/\*$/, ''))
     }
   }
   return out
@@ -764,13 +671,11 @@ function enclosingSymbol(fileSyms: CodeSymbol[], callLine: number): CodeSymbol |
   const callables = fileSyms.filter(
     (s) => s.kind === 'function' || s.kind === 'method' || s.kind === 'class'
   )
-  let best: CodeSymbol | null = null
-  for (const s of callables) {
-    if (s.startLine <= callLine && (!best || s.startLine > best.startLine)) {
-      best = s
-    }
-  }
-  return best
+  return callables.reduce<CodeSymbol | null>(
+    (best, symbol) =>
+      symbol.startLine <= callLine && (!best || symbol.startLine > best.startLine) ? symbol : best,
+    null
+  )
 }
 
 function resolveCallTargets(
@@ -849,19 +754,19 @@ function buildFromExtracts(extracts: FileExtract[]): BuiltGraph {
     byFile.set(ex.filePath, fileSyms)
   }
 
-  for (const ex of extracts) {
-    const fileSyms = byFile.get(ex.filePath) ?? []
+  for (const ex2 of extracts) {
+    const fileSyms = byFile.get(ex2.filePath) ?? []
     const seenCall = new Set<string>() // src|dst per file to limit fan-out
 
-    for (const call of ex.calls) {
+    for (const call of ex2.calls) {
       // Skip call that is the declaration line of a same-name symbol
       if (fileSyms.some((s) => s.name === call.name && s.startLine === call.line)) continue
 
-      const { targets, confidence } = resolveCallTargets(call.name, ex, fileSyms, byName)
+      const { targets, confidence } = resolveCallTargets(call.name, ex2, fileSyms, byName)
       if (targets.length === 0) continue
 
       const enc = enclosingSymbol(fileSyms, call.line)
-      const srcId = enc?.id ?? `file:${ex.filePath}`
+      const srcId = enc?.id ?? `file:${ex2.filePath}`
 
       for (const t of targets) {
         if (t.id === srcId) continue
@@ -880,11 +785,11 @@ function buildFromExtracts(extracts: FileExtract[]): BuiltGraph {
 
   const edgeKey = new Set<string>()
   const uniqEdges: CodeSymbolEdge[] = []
-  for (const e of edges) {
-    const k = `${e.src}|${e.dst}|${e.edgeType}`
+  for (const e3 of edges) {
+    const k = `${e3.src}|${e3.dst}|${e3.edgeType}`
     if (edgeKey.has(k)) continue
     edgeKey.add(k)
-    uniqEdges.push(e)
+    uniqEdges.push(e3)
   }
 
   return {
@@ -983,21 +888,21 @@ function patchGraph(
     }
 
     const byName = new Map<string, CodeSymbol[]>()
-    for (const s of [...existing, ...rebuilt.symbols]) {
-      const list = byName.get(s.name) ?? []
-      list.push(s)
-      byName.set(s.name, list)
+    for (const s2 of [...existing, ...rebuilt.symbols]) {
+      const list = byName.get(s2.name) ?? []
+      list.push(s2)
+      byName.set(s2.name, list)
     }
     const byFile = new Map<string, CodeSymbol[]>()
-    for (const s of [...existing, ...rebuilt.symbols]) {
-      if (!byFile.has(s.file)) byFile.set(s.file, [])
-      byFile.get(s.file)!.push(s)
+    for (const s3 of [...existing, ...rebuilt.symbols]) {
+      if (!byFile.has(s3.file)) byFile.set(s3.file, [])
+      byFile.get(s3.file)!.push(s3)
     }
 
     for (const ex of extracts) {
       const fileSyms = byFile.get(ex.filePath) ?? []
-      for (const s of fileSyms.filter((x) => x.file === ex.filePath)) {
-        insEdge.run(`file:${ex.filePath}`, s.id, 'DEFINES', 1)
+      for (const s4 of fileSyms.filter((x) => x.file === ex.filePath)) {
+        insEdge.run(`file:${ex.filePath}`, s4.id, 'DEFINES', 1)
       }
       const seen = new Set<string>()
       for (const call of ex.calls) {
@@ -1317,8 +1222,7 @@ export function tracePath(
       id,
       depth: 0,
     }))
-    for (let qi = 0; qi < queue.length; qi++) {
-      const { id, depth } = queue[qi]!
+    for (const { id, depth } of queue) {
       if (depth >= maxD) continue
       for (const next of adj.get(id) ?? []) {
         if (visited.has(next)) continue
@@ -1406,25 +1310,27 @@ export function filesCallingInto(projectId: string, seedFiles: string[], maxDept
   }
   const files = new Set<string>()
   const visited = new Set<string>(seedSymIds)
-  let frontier = [...seedSymIds]
-  for (let d = 0; d < maxDepth; d++) {
-    const next: string[] = []
-    for (const id of frontier) {
-      for (const caller of reverse.get(id) ?? []) {
-        if (visited.has(caller)) continue
-        visited.add(caller)
-        next.push(caller)
-        if (caller.startsWith('file:')) {
-          const fp = caller.slice('file:'.length)
-          if (!seedSet.has(fp)) files.add(fp)
-        } else {
-          const sym = symbolById(projectId, caller)
-          if (sym && !seedSet.has(sym.file)) files.add(sym.file)
+  Array.from({ length: maxDepth }).reduce<string[]>(
+    (frontier) => {
+      const next: string[] = []
+      for (const id of frontier) {
+        for (const caller of reverse.get(id) ?? []) {
+          if (visited.has(caller)) continue
+          visited.add(caller)
+          next.push(caller)
+          if (caller.startsWith('file:')) {
+            const fp = caller.slice('file:'.length)
+            if (!seedSet.has(fp)) files.add(fp)
+          } else {
+            const sym = symbolById(projectId, caller)
+            if (sym && !seedSet.has(sym.file)) files.add(sym.file)
+          }
         }
       }
-    }
-    frontier = next
-  }
+      return next
+    },
+    [...seedSymIds]
+  )
   return [...files]
 }
 

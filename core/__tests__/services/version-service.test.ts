@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { describe, expect, it } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -98,70 +98,86 @@ describe('bumpPatch', () => {
 // VersionService.bump idempotency — prevents the "double-bump on ship retry"
 // failure mode where v2.4.39 → v2.4.41 → v2.4.43 stacks across runs.
 
-describe('VersionService.bump (idempotency)', () => {
-  let dir: string
+interface VersionRepositoryFixture {
+  dir: string
+  commitPkg(version: string): Promise<void>
+  readPkgVersion(): Promise<string>
+}
 
-  beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-version-'))
+async function withVersionRepository<T>(
+  prefix: string,
+  run: (fixture: VersionRepositoryFixture) => Promise<T>
+): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  try {
     await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: dir })
     await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir })
     await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: dir })
     await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir })
-  })
 
-  afterEach(async () => {
+    const commitPkg = async (version: string): Promise<void> => {
+      await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ version }, null, 2))
+      await execFileAsync('git', ['add', 'package.json'], { cwd: dir })
+      await execFileAsync('git', ['commit', '-q', '-m', `v${version}`], { cwd: dir })
+    }
+    const readPkgVersion = async (): Promise<string> => {
+      const raw = await fs.readFile(path.join(dir, 'package.json'), 'utf-8')
+      return (JSON.parse(raw) as { version: string }).version
+    }
+
+    return await run({ dir, commitPkg, readPkgVersion })
+  } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
-  })
-
-  async function commitPkg(version: string): Promise<void> {
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ version }, null, 2))
-    await execFileAsync('git', ['add', 'package.json'], { cwd: dir })
-    await execFileAsync('git', ['commit', '-q', '-m', `v${version}`], { cwd: dir })
   }
+}
 
-  async function readPkgVersion(): Promise<string> {
-    const raw = await fs.readFile(path.join(dir, 'package.json'), 'utf-8')
-    return (JSON.parse(raw) as { version: string }).version
-  }
-
+describe('VersionService.bump (idempotency)', () => {
   it('bumps normally when working tree matches HEAD', async () => {
-    await commitPkg('1.2.3')
-    const next = await new VersionService(dir).bump()
-    expect(next).toBe('1.2.4')
-    expect(await readPkgVersion()).toBe('1.2.4')
+    await withVersionRepository('prjct-version-', async ({ dir, commitPkg, readPkgVersion }) => {
+      await commitPkg('1.2.3')
+      const next = await new VersionService(dir).bump()
+      expect(next).toBe('1.2.4')
+      expect(await readPkgVersion()).toBe('1.2.4')
+    })
   })
 
   it('returns working-tree version unchanged when already ahead of HEAD', async () => {
-    // Simulate a partial-ship: HEAD is 1.2.3 but working tree was bumped to 1.2.4.
-    await commitPkg('1.2.3')
-    await fs.writeFile(
-      path.join(dir, 'package.json'),
-      JSON.stringify({ version: '1.2.4' }, null, 2)
-    )
+    await withVersionRepository('prjct-version-', async ({ dir, commitPkg, readPkgVersion }) => {
+      // Simulate a partial-ship: HEAD is 1.2.3 but working tree was bumped to 1.2.4.
+      await commitPkg('1.2.3')
+      await fs.writeFile(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ version: '1.2.4' }, null, 2)
+      )
 
-    // Retry: should NOT bump to 1.2.5.
-    const next = await new VersionService(dir).bump()
-    expect(next).toBe('1.2.4')
-    expect(await readPkgVersion()).toBe('1.2.4')
+      // Retry: should NOT bump to 1.2.5.
+      const next = await new VersionService(dir).bump()
+      expect(next).toBe('1.2.4')
+      expect(await readPkgVersion()).toBe('1.2.4')
+    })
   })
 
   it('still bumps when working tree equals HEAD even after multi-bump history', async () => {
-    // Successful prior ship: HEAD is 1.2.4, working tree is 1.2.4.
-    // Next ship should bump normally to 1.2.5.
-    await commitPkg('1.2.3')
-    await commitPkg('1.2.4')
-    const next = await new VersionService(dir).bump()
-    expect(next).toBe('1.2.5')
+    await withVersionRepository('prjct-version-', async ({ dir, commitPkg }) => {
+      // Successful prior ship: HEAD is 1.2.4, working tree is 1.2.4.
+      // Next ship should bump normally to 1.2.5.
+      await commitPkg('1.2.3')
+      await commitPkg('1.2.4')
+      const next = await new VersionService(dir).bump()
+      expect(next).toBe('1.2.5')
+    })
   })
 
   it('falls back to normal bump when no git HEAD exists', async () => {
-    // Fresh repo with no commits — package.json is untracked.
-    await fs.writeFile(
-      path.join(dir, 'package.json'),
-      JSON.stringify({ version: '0.1.0' }, null, 2)
-    )
-    const next = await new VersionService(dir).bump()
-    expect(next).toBe('0.1.1')
+    await withVersionRepository('prjct-version-', async ({ dir }) => {
+      // Fresh repo with no commits — package.json is untracked.
+      await fs.writeFile(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ version: '0.1.0' }, null, 2)
+      )
+      const next = await new VersionService(dir).bump()
+      expect(next).toBe('0.1.1')
+    })
   })
 })
 
@@ -183,34 +199,20 @@ async function withBrokenGit<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 describe('VersionService — typed git failures (WS1)', () => {
-  let dir: string
-
-  beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-version-nogit-'))
-    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: dir })
-    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir })
-    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: dir })
-    await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir })
-  })
-
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
-  })
-
   it('bump rejects on git infra failure instead of treating the tree as fresh', async () => {
     if (process.platform === 'win32') return
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ version: '1.2.3' }))
-    await execFileAsync('git', ['add', 'package.json'], { cwd: dir })
-    await execFileAsync('git', ['commit', '-q', '-m', 'v1.2.3'], { cwd: dir })
+    await withVersionRepository('prjct-version-nogit-', async ({ dir, commitPkg }) => {
+      await commitPkg('1.2.3')
 
-    await withBrokenGit(async () => {
-      await expect(new VersionService(dir).bump()).rejects.toThrow(/git (timeout|spawn) failure/)
+      await withBrokenGit(async () => {
+        await expect(new VersionService(dir).bump()).rejects.toThrow(/git (timeout|spawn) failure/)
+      })
+
+      // The transient failure must NOT have touched the version.
+      const pkg = JSON.parse(await fs.readFile(path.join(dir, 'package.json'), 'utf-8')) as {
+        version: string
+      }
+      expect(pkg.version).toBe('1.2.3')
     })
-
-    // The transient failure must NOT have touched the version.
-    const pkg = JSON.parse(await fs.readFile(path.join(dir, 'package.json'), 'utf-8')) as {
-      version: string
-    }
-    expect(pkg.version).toBe('1.2.3')
   })
 })

@@ -55,28 +55,34 @@ describe('selectReviewers — dynamic baseline', () => {
 })
 
 describe('reviewsGatePassedRelational — gate over the selected set (C6)', () => {
-  let projectId: string
-  let projectsDir: string
-  let originalProjectsDir: string | undefined
+  const fixture: {
+    projectId: string
+    projectsDir: string
+    originalProjectsDir: string | undefined
+  } = {
+    projectId: '',
+    projectsDir: '',
+    originalProjectsDir: undefined as unknown as string | undefined,
+  }
 
   beforeEach(async () => {
-    projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-gate-rel-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = projectsDir
-    projectId = `gaterel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+    fixture.projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-gate-rel-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = fixture.projectsDir
+    fixture.projectId = `gaterel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
   })
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-    await fs.rm(projectsDir, { recursive: true, force: true })
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+    await fs.rm(fixture.projectsDir, { recursive: true, force: true })
   })
 
   const specId = 'gate-spec'
   function seed(selected: string[], verdicts: Record<string, 'pass' | 'fail'>): void {
     for (const lens of selected) {
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         'INSERT INTO spec_selected_reviewer (spec_id, lens) VALUES (?, ?)',
         specId,
         lens
@@ -84,7 +90,7 @@ describe('reviewsGatePassedRelational — gate over the selected set (C6)', () =
     }
     for (const [lens, verdict] of Object.entries(verdicts)) {
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         'INSERT INTO spec_review (id, spec_id, lens, verdict, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)',
         `${specId}-${lens}`,
         specId,
@@ -98,36 +104,36 @@ describe('reviewsGatePassedRelational — gate over the selected set (C6)', () =
 
   it('passes when every selected lens passed', () => {
     seed(['architecture', 'security'], { architecture: 'pass', security: 'pass' })
-    expect(reviewsGatePassedRelational(projectId, specId)).toBe(true)
+    expect(reviewsGatePassedRelational(fixture.projectId, specId)).toBe(true)
   })
 
   it('fails when a selected lens failed', () => {
     seed(['architecture', 'security'], { architecture: 'pass', security: 'fail' })
-    expect(reviewsGatePassedRelational(projectId, specId)).toBe(false)
+    expect(reviewsGatePassedRelational(fixture.projectId, specId)).toBe(false)
   })
 
   it('fails when a selected lens is missing', () => {
     seed(['architecture', 'security'], { architecture: 'pass' })
-    expect(reviewsGatePassedRelational(projectId, specId)).toBe(false)
+    expect(reviewsGatePassedRelational(fixture.projectId, specId)).toBe(false)
   })
 
   it('does NOT require unselected lenses (a 1-lens spec promotes on 1 pass)', () => {
     seed(['architecture'], { architecture: 'pass' })
-    expect(reviewsGatePassedRelational(projectId, specId)).toBe(true)
+    expect(reviewsGatePassedRelational(fixture.projectId, specId)).toBe(true)
   })
 
   it('legacy fallback: empty selected set ⇒ the three baseline lenses', () => {
     seed([], { strategic: 'pass', architecture: 'pass', design: 'pass' })
-    expect(reviewsGatePassedRelational(projectId, specId)).toBe(true)
+    expect(reviewsGatePassedRelational(fixture.projectId, specId)).toBe(true)
   })
 
   it('legacy fallback: partial baseline (2 of 3) does not promote', () => {
     seed([], { strategic: 'pass', architecture: 'pass' })
-    expect(reviewsGatePassedRelational(projectId, specId)).toBe(false)
+    expect(reviewsGatePassedRelational(fixture.projectId, specId)).toBe(false)
   })
 
   it('no reviews at all ⇒ false', () => {
-    expect(reviewsGatePassedRelational(projectId, specId)).toBe(false)
+    expect(reviewsGatePassedRelational(fixture.projectId, specId)).toBe(false)
   })
 })
 

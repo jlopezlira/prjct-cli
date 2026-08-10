@@ -50,12 +50,12 @@ export function breakImpact(projectId: string, seedFiles: string[], limit = 8): 
   }
   if (seeds.length > 0 && hasCochange) {
     try {
-      for (const s of cochangeFromSeeds(seeds, loadMatrix(projectId)!)) {
-        if (seeds.some((seed) => seed.endsWith(s.path) || s.path.endsWith(seed))) continue
-        const cur = neighborScores.get(s.path) ?? { score: 0, via: new Set() }
-        cur.score += s.score
+      for (const s2 of cochangeFromSeeds(seeds, loadMatrix(projectId)!)) {
+        if (seeds.some((seed) => seed.endsWith(s2.path) || s2.path.endsWith(seed))) continue
+        const cur = neighborScores.get(s2.path) ?? { score: 0, via: new Set() }
+        cur.score += s2.score
         cur.via.add('cochange')
-        neighborScores.set(s.path, cur)
+        neighborScores.set(s2.path, cur)
       }
     } catch {
       /* best-effort */
@@ -74,7 +74,9 @@ export function breakImpact(projectId: string, seedFiles: string[], limit = 8): 
   const traps: WorldModelImpact['traps'] = []
   for (const seed of seeds.slice(0, 5)) {
     try {
-      const hits = projectMemory.recallForFile(projectId, seed, 2, { preventiveOnly: true })
+      const hits = projectMemory.recallForFile(projectId, seed, 2, {
+        preventiveOnly: true,
+      })
       for (const h of hits) {
         traps.push({
           id: h.id,

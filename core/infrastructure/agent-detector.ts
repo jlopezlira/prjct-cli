@@ -14,7 +14,7 @@ declare const global: typeof globalThis & {
 
 // ============ Module State (for caching) ============
 
-let cachedAgent: DetectedAgent | null = null
+const agentCache: { value: DetectedAgent | null } = { value: null }
 
 // ============ Agent Definitions ============
 
@@ -118,12 +118,12 @@ export function isSandboxed(): boolean {
 }
 
 export async function detect(): Promise<DetectedAgent> {
-  if (cachedAgent) return cachedAgent
+  if (agentCache.value) return agentCache.value
 
   const agent = (await isClaudeEnvironment()) ? getClaudeAgent() : getTerminalAgent()
   // The `sandboxed` flag was historically hardcoded false; derive it at runtime
   // so downstream consumers can branch on it.
   agent.environment = { ...agent.environment, sandboxed: isSandboxed() }
-  cachedAgent = agent
-  return cachedAgent
+  agentCache.value = agent
+  return agent
 }

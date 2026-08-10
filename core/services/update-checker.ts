@@ -63,14 +63,11 @@ export async function refreshUpdateStatus(installedVersion: string): Promise<Upd
   if (!installedVersion) return null
 
   const prev = readUpdateStatus()
-  let latest = prev?.latest ?? null
-
   const fetchedRecently =
     prev?.checkedAt && Date.now() - Date.parse(prev.checkedAt) < FETCH_THROTTLE_MS
-  if (!fetchedRecently) {
-    const fetched = await fetchLatestVersion()
-    if (fetched) latest = fetched
-  }
+  const latest = fetchedRecently
+    ? (prev?.latest ?? null)
+    : ((await fetchLatestVersion()) ?? prev?.latest ?? null)
 
   const updateAvailable = latest != null && compareSemver(latest, installedVersion) > 0
   const status: UpdateStatus = {

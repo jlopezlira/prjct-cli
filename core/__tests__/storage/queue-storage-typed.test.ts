@@ -15,7 +15,11 @@ import { migrations } from '../../storage/database/migrations'
 import { openDatabase } from '../../storage/database/sqlite-compat'
 import { queueStorage } from '../../storage/queue-storage'
 
-let tmpRoot: string
+const fixture: {
+  tmpRoot: string
+} = {
+  tmpRoot: '',
+}
 const pid = 'test-queue-typed'
 const origGlobal = pathManager.getGlobalProjectPath.bind(pathManager)
 const origFile = pathManager.getFilePath.bind(pathManager)
@@ -23,12 +27,12 @@ const origFile = pathManager.getFilePath.bind(pathManager)
 describe('queue-storage — typed table (Schema v2)', () => {
   beforeEach(async () => {
     prjctDb.close()
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-queue-'))
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-queue-'))
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
     pathManager.getFilePath = (id: string, layer: string, filename: string) =>
-      path.join(tmpRoot, id, layer, filename)
-    await fs.mkdir(path.join(tmpRoot, pid, 'sync'), { recursive: true })
-    await fs.writeFile(path.join(tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
+      path.join(fixture.tmpRoot, id, layer, filename)
+    await fs.mkdir(path.join(fixture.tmpRoot, pid, 'sync'), { recursive: true })
+    await fs.writeFile(path.join(fixture.tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
     prjctDb.getDb(pid)
   })
 
@@ -36,7 +40,7 @@ describe('queue-storage — typed table (Schema v2)', () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = origGlobal
     pathManager.getFilePath = origFile
-    if (tmpRoot) await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('add → getActiveTasks/getBacklog are indexed row reads (the per-prompt hot path)', async () => {

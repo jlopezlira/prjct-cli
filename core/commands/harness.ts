@@ -34,28 +34,27 @@ export class HarnessCommands extends PrjctCommandsBase {
       const coverage = await probeHarnessCoverage(projectPath)
       const report = computeHarnessScore()
       const delta = computeHarnessDelta()
-      let outcomesMd: string | null = null
-      let outcomesLine: string | null = null
-      let weakLine: string | null = null
-      try {
-        const projectId = await configManager.getProjectId(projectPath)
-        if (projectId) {
+      const { outcomesMd, outcomesLine, weakLine } = await (async () => {
+        try {
+          const projectId = await configManager.getProjectId(projectPath)
+          if (!projectId) return { outcomesMd: null, outcomesLine: null, weakLine: null }
           const { buildDynastyOutcomes, renderDynastyOutcomesMd } = await import(
             '../services/dynasty-outcomes'
           )
           const outcomes = buildDynastyOutcomes(projectId)
-          outcomesMd = renderDynastyOutcomesMd(outcomes)
-          outcomesLine = outcomes.line
           const cfg = await configManager.readConfig(projectPath)
           const { effectiveWeakModelMode, weakModelOneLiner } = await import(
             '../services/weak-model-mode'
           )
-          if (effectiveWeakModelMode(cfg) === 'on') weakLine = weakModelOneLiner()
+          return {
+            outcomesMd: renderDynastyOutcomesMd(outcomes),
+            outcomesLine: outcomes.line,
+            weakLine: effectiveWeakModelMode(cfg) === 'on' ? weakModelOneLiner() : null,
+          }
+        } catch {
+          return { outcomesMd: null, outcomesLine: null, weakLine: null }
         }
-      } catch {
-        outcomesMd = null
-        outcomesLine = null
-      }
+      })()
       if (options.md) {
         const md = renderHarnessScoreMd(report, {
           coverageMd: renderHarnessCoverageMd(coverage),
@@ -101,16 +100,11 @@ export class HarnessCommands extends PrjctCommandsBase {
     _options: MdOption = {}
   ): Promise<CommandResult> {
     try {
-      let activeCycle: string | null = null
-      try {
-        const projectId = await configManager.getProjectId(projectPath)
-        if (projectId) {
-          const task = await stateStorage.getCurrentTask(projectId)
-          activeCycle = task?.description ?? null
-        }
-      } catch {
-        // best-effort — induction still works pointing at git + prjct verbs
-      }
+      const activeCycle = await configManager
+        .getProjectId(projectPath)
+        .then((projectId) => (projectId ? stateStorage.getCurrentTask(projectId) : null))
+        .then((task) => task?.description ?? null)
+        .catch(() => null)
       const hasGit = existsSync(path.join(projectPath, '.git'))
       console.log(buildInductionDispatch({ activeCycle, hasGit }))
       return { success: true }

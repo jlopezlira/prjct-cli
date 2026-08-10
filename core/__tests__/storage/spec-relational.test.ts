@@ -13,34 +13,40 @@ import prjctDb from '../../storage/database'
 import { specStorage } from '../../storage/spec-storage'
 import { emptySpecContent } from '../../types/spec'
 
-let projectId: string
-let projectsDir: string
-let originalProjectsDir: string | undefined
+const fixture: {
+  projectId: string
+  projectsDir: string
+  originalProjectsDir: string | undefined
+} = {
+  projectId: '',
+  projectsDir: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+}
 
 describe('spec relational projection (C6)', () => {
   beforeEach(async () => {
-    projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-spec-rel-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = projectsDir
-    projectId = `specrel-${Date.now()}`
-    prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+    fixture.projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-spec-rel-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = fixture.projectsDir
+    fixture.projectId = `specrel-${Date.now()}`
+    prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
   })
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-    await fs.rm(projectsDir, { recursive: true, force: true })
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+    await fs.rm(fixture.projectsDir, { recursive: true, force: true })
   })
 
   function count(table: string, specId: string): number {
     return prjctDb.query<{ n: number }>(
-      projectId,
+      fixture.projectId,
       `SELECT COUNT(*) AS n FROM ${table} WHERE spec_id = ?`,
       specId
     )[0].n
   }
 
   it('projects list fields + tags into child tables on create', () => {
-    const spec = specStorage.create(projectId, {
+    const spec = specStorage.create(fixture.projectId, {
       title: 'Test spec',
       content: {
         ...emptySpecContent('goal here'),
@@ -55,14 +61,14 @@ describe('spec relational projection (C6)', () => {
   })
 
   it('re-projects reviews on update — the relational gate state', () => {
-    const spec = specStorage.create(projectId, {
+    const spec = specStorage.create(fixture.projectId, {
       title: 'Gate spec',
       content: {
         ...emptySpecContent('goal'),
         selected_reviewers: ['architecture', 'security'],
       },
     })
-    specStorage.updateContent(projectId, spec.id, {
+    specStorage.updateContent(fixture.projectId, spec.id, {
       ...emptySpecContent('goal'),
       selected_reviewers: ['architecture', 'security'],
       reviews: {
@@ -71,7 +77,7 @@ describe('spec relational projection (C6)', () => {
       },
     })
     const reviews = prjctDb.query<{ lens: string; verdict: string }>(
-      projectId,
+      fixture.projectId,
       'SELECT lens, verdict FROM spec_review WHERE spec_id = ? ORDER BY lens',
       spec.id
     )
@@ -80,7 +86,7 @@ describe('spec relational projection (C6)', () => {
     expect(reviews.find((r) => r.lens === 'security')?.verdict).toBe('fail')
     // Gate query: all selected reviewers have a pass?
     const pending = prjctDb.query<{ n: number }>(
-      projectId,
+      fixture.projectId,
       `SELECT COUNT(*) AS n FROM spec_selected_reviewer sr
        WHERE sr.spec_id = ?
          AND NOT EXISTS (
@@ -105,7 +111,7 @@ describe('spec relational projection (C6)', () => {
         security: { verdict: 'pass', notes: 'ok', ts: new Date().toISOString() },
       },
     }
-    specStorage.applyRemote(projectId, {
+    specStorage.applyRemote(fixture.projectId, {
       id: 'remote-spec-1',
       title: 'Remote spec',
       status: 'reviewed',
@@ -114,7 +120,7 @@ describe('spec relational projection (C6)', () => {
 
     expect(count('spec_selected_reviewer', 'remote-spec-1')).toBe(2)
     const reviews = prjctDb.query<{ lens: string; verdict: string }>(
-      projectId,
+      fixture.projectId,
       'SELECT lens, verdict FROM spec_review WHERE spec_id = ?',
       'remote-spec-1'
     )
@@ -127,11 +133,11 @@ describe('spec relational projection (C6)', () => {
     // exists locally, ON CONFLICT DO NOTHING skips the content INSERT, so the
     // relational projection must also skip — otherwise a stale/older remote
     // copy could silently rewrite the local (possibly newer) gate state.
-    const spec = specStorage.create(projectId, {
+    const spec = specStorage.create(fixture.projectId, {
       title: 'Local spec',
       content: { ...emptySpecContent('local goal'), selected_reviewers: ['architecture'] },
     })
-    specStorage.updateContent(projectId, spec.id, {
+    specStorage.updateContent(fixture.projectId, spec.id, {
       ...emptySpecContent('local goal'),
       selected_reviewers: ['architecture'],
       reviews: {
@@ -141,7 +147,7 @@ describe('spec relational projection (C6)', () => {
     expect(count('spec_selected_reviewer', spec.id)).toBe(1)
 
     // A remote copy of the SAME id arrives with no reviews at all.
-    specStorage.applyRemote(projectId, {
+    specStorage.applyRemote(fixture.projectId, {
       id: spec.id,
       title: 'Remote stale copy',
       status: 'draft',
@@ -151,7 +157,7 @@ describe('spec relational projection (C6)', () => {
     // Local gate state is untouched.
     expect(count('spec_selected_reviewer', spec.id)).toBe(1)
     const reviews = prjctDb.query<{ verdict: string }>(
-      projectId,
+      fixture.projectId,
       'SELECT verdict FROM spec_review WHERE spec_id = ?',
       spec.id
     )

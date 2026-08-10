@@ -223,31 +223,30 @@ function spliceCheckpoints(reviewerTemplate: string, checkpointsContent: string)
  * partial repairs), then append exactly one fresh snippet.
  */
 function replaceCrewSnippet(claudeContent: string, snippet: string): string {
-  let body = claudeContent
   // Loop: remove start→end pairs until none remain (covers duplicate blocks).
   // Prefer the long end marker; fall back to the short historical form.
-  for (;;) {
+  const stripMarkerBlocks = (body: string): string => {
     const startIdx = body.indexOf(SNIPPET_START)
-    if (startIdx < 0) break
+    if (startIdx < 0) return body
     const afterStart = body.slice(startIdx + SNIPPET_START.length)
     const longEndRel = afterStart.indexOf(SNIPPET_END)
     const shortEndRel = afterStart.indexOf(SNIPPET_END_SHORT)
-    let endAbs = -1
-    let endLen = 0
-    if (longEndRel >= 0 && (shortEndRel < 0 || longEndRel <= shortEndRel)) {
-      endAbs = startIdx + SNIPPET_START.length + longEndRel
-      endLen = SNIPPET_END.length
-    } else if (shortEndRel >= 0) {
-      endAbs = startIdx + SNIPPET_START.length + shortEndRel
-      endLen = SNIPPET_END_SHORT.length
-    } else {
+    const ending =
+      longEndRel >= 0 && (shortEndRel < 0 || longEndRel <= shortEndRel)
+        ? { relative: longEndRel, length: SNIPPET_END.length }
+        : shortEndRel >= 0
+          ? { relative: shortEndRel, length: SNIPPET_END_SHORT.length }
+          : null
+    if (!ending) {
       // Orphan start marker — drop from start to EOF and stop.
-      body = body.slice(0, startIdx)
-      break
+      return body.slice(0, startIdx)
     }
-    body = `${body.slice(0, startIdx)}${body.slice(endAbs + endLen)}`
+    const endAbs = startIdx + SNIPPET_START.length + ending.relative
+    return stripMarkerBlocks(`${body.slice(0, startIdx)}${body.slice(endAbs + ending.length)}`)
   }
-  body = body.replace(/\n{3,}/g, '\n\n').trimEnd()
+  const body = stripMarkerBlocks(claudeContent)
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()
   const sep = body.length > 0 ? '\n\n' : ''
   return `${body}${sep}${snippet.trimEnd()}\n`
 }
@@ -401,12 +400,7 @@ async function sweepTeamJson(
  */
 async function listFilesRecursive(dir: string): Promise<string[]> {
   const out: string[] = []
-  let entries: Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }>
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch {
-    return out
-  }
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
   for (const entry of entries) {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
@@ -433,16 +427,16 @@ async function ingestGhostFileToSql(
   const ext = path.extname(absPath).toLowerCase()
   if (!TEXT_EXT.has(ext) && ext !== '') return false
 
-  let body: string
-  try {
-    const buf = await fs.readFile(absPath)
-    // Skip obvious binaries / huge dumps
-    if (buf.byteLength > 200_000) return false
-    body = buf.toString('utf-8')
-    if (body.includes('\u0000')) return false
-  } catch {
-    return false
-  }
+  const body = await fs
+    .readFile(absPath)
+    .then((buf) => {
+      // Skip obvious binaries / huge dumps
+      if (buf.byteLength > 200_000) return null
+      const text = buf.toString('utf-8')
+      return text.includes('\u0000') ? null : text
+    })
+    .catch(() => null)
+  if (body === null) return false
   if (!body.trim()) return false
 
   const cap = 12_000
@@ -576,12 +570,15 @@ async function repairCrewDiskWriteInstructions(
       continue
     }
     try {
-      let next = template
-      if (agent.destRelative === '.claude/agents/reviewer.md') {
-        const row = checkpointsStorage.get(projectId)
-        next = spliceCheckpoints(next, sanitizeCheckpointsContent(row.content))
-      }
-      next = stampCrewModelPolicy(next, agent.destRelative)
+      const next = stampCrewModelPolicy(
+        agent.destRelative === '.claude/agents/reviewer.md'
+          ? spliceCheckpoints(
+              template,
+              sanitizeCheckpointsContent(checkpointsStorage.get(projectId).content)
+            )
+          : template,
+        agent.destRelative
+      )
       await fs.mkdir(path.dirname(abs), { recursive: true })
       await fs.writeFile(abs, next, 'utf-8')
       out.agentFilesRepaired.push(agent.destRelative)
@@ -675,12 +672,7 @@ async function enforcePrjctConfigOnly(
   const prjctDir = path.join(projectPath, '.prjct')
   if (!(await pathExists(prjctDir))) return
 
-  let entries: string[]
-  try {
-    entries = await fs.readdir(prjctDir)
-  } catch {
-    return
-  }
+  const entries = await fs.readdir(prjctDir).catch(() => [])
 
   for (const name of entries) {
     if ((CLIENT_PRJCT_ALLOWLIST as readonly string[]).includes(name)) continue

@@ -61,8 +61,8 @@ export async function scanAllFiles(
   } catch {
     const paths = await walkDir(projectPath, { maxFiles })
     const results = await batchProcess(paths, 100, (p) => getFileStats(projectPath, p))
-    for (const stats of results) {
-      if (stats) files.set(stats.path, stats)
+    for (const stats2 of results) {
+      if (stats2) files.set(stats2.path, stats2)
     }
   }
 
@@ -92,7 +92,11 @@ export async function findConfigFiles(
     if (!(await fileExists(configPath))) continue
 
     const checksum = await indexStorage.calculateChecksum(configPath)
-    const entry: ConfigFileEntry = { path: configName, type: configName, checksum }
+    const entry: ConfigFileEntry = {
+      path: configName,
+      type: configName,
+      checksum,
+    }
 
     if (configName.endsWith('.json')) {
       try {

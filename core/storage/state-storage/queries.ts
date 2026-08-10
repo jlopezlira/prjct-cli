@@ -35,14 +35,14 @@ interface HistoryRow {
 }
 
 function rowToHistoryEntry(r: HistoryRow): TaskHistoryEntry {
-  let cold: Partial<TaskHistoryEntry> & { title?: string } = {}
-  if (r.data) {
+  const cold = (() => {
+    if (!r.data) return {} as Partial<TaskHistoryEntry>
     try {
-      cold = JSON.parse(r.data)
+      return JSON.parse(r.data) as Partial<TaskHistoryEntry>
     } catch {
-      cold = {}
+      return {} as Partial<TaskHistoryEntry>
     }
-  }
+  })()
   const entry: TaskHistoryEntry = {
     taskId: r.id,
     title: cold.title ?? r.description,

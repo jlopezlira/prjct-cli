@@ -116,10 +116,14 @@ export class RealtimeClient {
       this.opts.apiKey,
       this.opts.deviceId
     )
-    let ws: WebSocketLike
-    try {
-      ws = this.opts.wsFactory(url)
-    } catch {
+    const ws = (() => {
+      try {
+        return this.opts.wsFactory(url)
+      } catch {
+        return null
+      }
+    })()
+    if (!ws) {
       this.scheduleReconnect()
       return
     }
@@ -142,12 +146,13 @@ export class RealtimeClient {
   }
 
   private async handleMessage(data: unknown): Promise<void> {
-    let parsed: unknown
-    try {
-      parsed = typeof data === 'string' ? JSON.parse(data) : data
-    } catch {
-      return
-    }
+    const parsed = (() => {
+      try {
+        return typeof data === 'string' ? (JSON.parse(data) as unknown) : data
+      } catch {
+        return null
+      }
+    })()
     if (!parsed || typeof parsed !== 'object') return
     const msg = parsed as { type?: string; event?: Record<string, unknown> }
     if (msg.type === 'event' && msg.event && typeof msg.event === 'object') {

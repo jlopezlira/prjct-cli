@@ -31,7 +31,6 @@ export async function workflowInit(
   }
 
   const detected = await detectProjectCommands(projectPath)
-  let sortOrder = 0
   const rulesAdded: string[] = []
   const ts = () => new Date().toISOString()
 
@@ -43,7 +42,7 @@ export async function workflowInit(
     description: 'Prevent shipping from main branch',
     enabled: true,
     timeoutMs: WORKFLOW_TIMEOUTS.GATE_QUICK_MS,
-    sortOrder: sortOrder++,
+    sortOrder: 0,
     createdAt: ts(),
   })
   rulesAdded.push(`#${gateId} [gate] prevent main branch`)
@@ -57,7 +56,7 @@ export async function workflowInit(
       description: 'Lint code',
       enabled: true,
       timeoutMs: WORKFLOW_TIMEOUTS.STEP_LINT_MS,
-      sortOrder: sortOrder++,
+      sortOrder: 1,
       createdAt: ts(),
     })
     rulesAdded.push(`#${lintId} [step] lint → ${detected.lint.command}`)
@@ -72,7 +71,7 @@ export async function workflowInit(
       description: 'Run tests',
       enabled: true,
       timeoutMs: WORKFLOW_TIMEOUTS.STEP_TEST_MS,
-      sortOrder: sortOrder++,
+      sortOrder: detected.lint ? 2 : 1,
       createdAt: ts(),
     })
     rulesAdded.push(`#${testId} [step] test → ${detected.test.command}`)
@@ -205,7 +204,7 @@ export async function workflowList(projectId: string, options: MdOption): Promis
     }
     if (custom.length > 0) {
       console.log('\nCustom:')
-      for (const w of custom) console.log(`  ${w.name} — ${w.description}`)
+      for (const w2 of custom) console.log(`  ${w2.name} — ${w2.description}`)
     }
   }
 

@@ -155,11 +155,9 @@ const MAX_TOKENS = 800 // cap work on pathologically long entries
 
 /** FNV-1a 32-bit — small, fast, well-distributed string hash. */
 function fnv1a(str: string): number {
-  let h = 0x811c9dc5
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
-  }
+  const h = str
+    .split('')
+    .reduce((hash, character) => Math.imul(hash ^ character.charCodeAt(0), 0x01000193), 0x811c9dc5)
   return h >>> 0
 }
 
@@ -171,8 +169,12 @@ function charNGrams(s: string, min: number, max: number): string[] {
     grams.push(s)
     return grams
   }
-  for (let n = min; n <= max; n++) {
-    for (let i = 0; i + n <= s.length; i++) grams.push(s.slice(i, i + n))
+  for (const n of Array.from({ length: max - min + 1 }, (_, offset) => min + offset)) {
+    grams.push(
+      ...Array.from({ length: Math.max(0, s.length - n + 1) }, (_, index) =>
+        s.slice(index, index + n)
+      )
+    )
   }
   return grams
 }
@@ -198,12 +200,8 @@ function embedLocal(text: string): number[] {
       acc[bucket] += sign
     }
   }
-  let norm = 0
-  for (let i = 0; i < LOCAL_DIM; i++) norm += acc[i] * acc[i]
-  norm = Math.sqrt(norm) || 1
-  const out = new Array<number>(LOCAL_DIM)
-  for (let i = 0; i < LOCAL_DIM; i++) out[i] = acc[i] / norm
-  return out
+  const norm = Math.sqrt(acc.reduce((sum, value) => sum + value * value, 0)) || 1
+  return Array.from(acc, (value) => value / norm)
 }
 
 /**
@@ -279,16 +277,19 @@ interface EmbeddingRow {
 }
 
 function l2Norm(v: ArrayLike<number>): number {
-  let sum = 0
-  for (let i = 0; i < v.length; i++) sum += v[i] * v[i]
+  const sum = Array.from({ length: v.length }, (_, index) => v[index]).reduce(
+    (total, value) => total + value * value,
+    0
+  )
   return Math.sqrt(sum)
 }
 
 function dot(a: ArrayLike<number>, b: ArrayLike<number>): number {
   const n = Math.min(a.length, b.length)
-  let d = 0
-  for (let i = 0; i < n; i++) d += a[i] * b[i]
-  return d
+  return Array.from({ length: n }, (_, index) => a[index] * b[index]).reduce(
+    (total, value) => total + value,
+    0
+  )
 }
 
 /**
@@ -370,13 +371,14 @@ export const embeddingService = {
     // Stop hook just to set-diff against embeddedIds in JS.
     // Selectivity: model memory only + retention active (never archive/delete
     // candidates; never signals/telemetry). Retention scores are best-effort.
-    let retentionById: Map<string, { verdict: string }> | null = null
-    try {
-      const { evaluateRetention } = await import('../retention')
-      retentionById = evaluateRetention(projectId, Date.now()).byId
-    } catch {
-      retentionById = null
-    }
+    const retentionById = await (async (): Promise<Map<string, { verdict: string }> | null> => {
+      try {
+        const { evaluateRetention } = await import('../retention')
+        return evaluateRetention(projectId, Date.now()).byId
+      } catch {
+        return null
+      }
+    })()
 
     const todo = projectMemory.unembeddedEntriesForIndex(projectId, provider.model).filter((e) => {
       if (!isModelMemory(e) || e.content.trim().length === 0) return false
@@ -404,22 +406,25 @@ export const embeddingService = {
     // this run's stores land, mirroring the old set-diff semantics).
     const alreadyEmbedded = this.countByModel(projectId, provider.model)
 
-    let embedded = 0
-    for (let i = 0; i < todo.length; i += batchSize) {
-      const batch = todo.slice(i, i + batchSize)
+    const batches = Array.from({ length: Math.ceil(todo.length / batchSize) }, (_, index) =>
+      todo.slice(index * batchSize, (index + 1) * batchSize)
+    )
+    const embeddedByBatch: number[] = []
+    for (const batch of batches) {
       try {
         const vectors = await provider.embed(batch.map((e) => e.content))
-        batch.forEach((entry, j) => {
-          const v = vectors[j]
-          if (v && v.length > 0) {
-            this.store(projectId, entry.id, v, provider.model, nowIso)
-            embedded++
-          }
-        })
+        const embedded = batch.reduce((count, entry, index) => {
+          const vector = vectors[index]
+          if (!vector || vector.length === 0) return count
+          this.store(projectId, entry.id, vector, provider.model, nowIso)
+          return count + 1
+        }, 0)
+        embeddedByBatch.push(embedded)
       } catch {
         // Skip this batch; the next backfill retries it.
       }
     }
+    const embedded = embeddedByBatch.reduce((total, count) => total + count, 0)
     return { embedded, skipped: alreadyEmbedded, total: alreadyEmbedded + todo.length }
   },
 
@@ -479,26 +484,29 @@ export const embeddingService = {
   ): Promise<MemoryEntry[]> {
     const p = provider ?? resolveActiveProvider(config)
     if (!query.trim()) return []
-    let qv: number[] | undefined
-    try {
-      ;[qv] = await p.embed([query])
-    } catch {
-      return []
-    }
+    const qv = await (async (): Promise<number[] | undefined> => {
+      try {
+        return (await p.embed([query]))[0]
+      } catch {
+        return undefined
+      }
+    })()
     if (!qv || qv.length === 0) return []
 
-    let rows: EmbeddingRow[]
-    try {
-      rows = prjctDb.query<EmbeddingRow>(
-        projectId,
-        `SELECT memory_id, vector, norm FROM memory_embeddings
-          WHERE model = ? ORDER BY rowid DESC LIMIT ?`,
-        p.model,
-        SEMANTIC_SCAN_MAX_ROWS
-      )
-    } catch {
-      return []
-    }
+    const rows = (() => {
+      try {
+        return prjctDb.query<EmbeddingRow>(
+          projectId,
+          `SELECT memory_id, vector, norm FROM memory_embeddings
+            WHERE model = ? ORDER BY rowid DESC LIMIT ?`,
+          p.model,
+          SEMANTIC_SCAN_MAX_ROWS
+        )
+      } catch {
+        return null
+      }
+    })()
+    if (!rows) return []
 
     // Stored norms (migration 28) turn per-row cosine into a dot product +
     // one multiply; rows lacking a norm (edge: written mid-migration) fall

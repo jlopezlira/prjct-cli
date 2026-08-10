@@ -104,16 +104,15 @@ export async function evaluateHarnessCompletion(
   // Evidence is advisory. A typed git EXIT is a valid answer ("no diff");
   // a git INFRA failure (timeout/spawn) must not fabricate "0 files / no
   // tests changed" — it surfaces as its own warning instead.
-  let changedFiles: string[] = []
-  let diffSize = 0
-  let gitUnavailable: GitInfraError | null = null
-  try {
-    changedFiles = await readChangedFiles(projectPath)
-    diffSize = await readDiffSize(projectPath)
-  } catch (err) {
-    if (err instanceof GitInfraError) gitUnavailable = err
-    else throw err
-  }
+  const gitEvidence = await Promise.all([readChangedFiles(projectPath), readDiffSize(projectPath)])
+    .then(([changedFiles, diffSize]) => ({ changedFiles, diffSize, gitUnavailable: null }))
+    .catch((error) => {
+      if (error instanceof GitInfraError) {
+        return { changedFiles: [], diffSize: 0, gitUnavailable: error }
+      }
+      throw error
+    })
+  const { changedFiles, diffSize, gitUnavailable } = gitEvidence
 
   const observedEvidence = observedEvidenceFromFiles(changedFiles)
   const warnings: string[] = []
@@ -339,8 +338,8 @@ async function readChangedFiles(projectPath: string): Promise<string[]> {
     cwd: projectPath,
   })
   if (untracked.ok) {
-    for (const line of untracked.stdout.split('\n')) {
-      const value = line.trim()
+    for (const line2 of untracked.stdout.split('\n')) {
+      const value = line2.trim()
       if (value) files.add(value)
     }
   } else if (untracked.kind !== 'exit') {

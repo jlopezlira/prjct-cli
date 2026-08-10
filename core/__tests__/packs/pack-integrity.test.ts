@@ -23,19 +23,24 @@ import {
 import { activatePacks } from '../../packs/pack-manager'
 import prjctDb from '../../storage/database'
 
-let projectPath: string
-let projectId: string
+const fixture: {
+  projectPath: string
+  projectId: string
+} = {
+  projectPath: '',
+  projectId: '',
+}
 
 async function freshProject(): Promise<void> {
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-pack-integrity-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `pack-int-${crypto.randomUUID()}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-pack-integrity-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `pack-int-${crypto.randomUUID()}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
     persona: { role: 'DEV', packs: [] },
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
+  await pathManager.ensureProjectStructure(fixture.projectId)
 }
 
 beforeEach(async () => {
@@ -44,8 +49,8 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (projectPath) {
-    await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+  if (fixture.projectPath) {
+    await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   }
   prjctDb.close()
 })
@@ -71,17 +76,17 @@ describe('packIntegrityHash', () => {
 
 describe('stamp / catalog / verify', () => {
   it('activate stamps install receipt', async () => {
-    await activatePacks(projectPath, ['daily'])
-    const book = loadPackInstalls(projectId)
+    await activatePacks(fixture.projectPath, ['daily'])
+    const book = loadPackInstalls(fixture.projectId)
     expect(book.daily).toBeDefined()
     expect(book.daily!.version).toBe(PACK_MANIFESTS.daily!.version)
     expect(book.daily!.integrity).toBe(packIntegrityHash(PACK_MANIFESTS.daily!))
-    expect(prjctDb.getDoc(projectId, PACK_INSTALLS_KEY)).toBeTruthy()
+    expect(prjctDb.getDoc(fixture.projectId, PACK_INSTALLS_KEY)).toBeTruthy()
   })
 
   it('catalog lists all packs with active flag', async () => {
-    await activatePacks(projectPath, ['code'])
-    const catalog = await buildPackCatalog(projectPath)
+    await activatePacks(fixture.projectPath, ['code'])
+    const catalog = await buildPackCatalog(fixture.projectPath)
     expect(catalog.length).toBeGreaterThanOrEqual(PACK_NAMES.length)
     const code = catalog.find((e) => e.name === 'code')
     expect(code?.active).toBe(true)
@@ -93,8 +98,8 @@ describe('stamp / catalog / verify', () => {
   })
 
   it('verify ok when receipts match live manifests', async () => {
-    await activatePacks(projectPath, ['daily', 'code'])
-    const report = await verifyActivePacks(projectPath)
+    await activatePacks(fixture.projectPath, ['daily', 'code'])
+    const report = await verifyActivePacks(fixture.projectPath)
     expect(report.ok).toBe(true)
     expect(report.active).toBe(2)
     expect(report.stale).toEqual([])
@@ -102,37 +107,37 @@ describe('stamp / catalog / verify', () => {
   })
 
   it('verify flags stale when receipt integrity drifts', async () => {
-    await activatePacks(projectPath, ['daily'])
-    const book = loadPackInstalls(projectId)
+    await activatePacks(fixture.projectPath, ['daily'])
+    const book = loadPackInstalls(fixture.projectId)
     book.daily = {
       ...book.daily!,
       integrity: 'deadbeefdeadbeef',
       version: '0.0.1',
     }
-    prjctDb.setDoc(projectId, PACK_INSTALLS_KEY, book)
-    const report = await verifyActivePacks(projectPath)
+    prjctDb.setDoc(fixture.projectId, PACK_INSTALLS_KEY, book)
+    const report = await verifyActivePacks(fixture.projectPath)
     expect(report.ok).toBe(false)
     expect(report.stale).toContain('daily')
   })
 
   it('clearPackInstalls removes receipt on deactivate path helper', async () => {
-    stampPackInstalls(projectId, ['lean'])
-    expect(loadPackInstalls(projectId).lean).toBeDefined()
-    clearPackInstalls(projectId, ['lean'])
-    expect(loadPackInstalls(projectId).lean).toBeUndefined()
+    stampPackInstalls(fixture.projectId, ['lean'])
+    expect(loadPackInstalls(fixture.projectId).lean).toBeDefined()
+    clearPackInstalls(fixture.projectId, ['lean'])
+    expect(loadPackInstalls(fixture.projectId).lean).toBeUndefined()
   })
 })
 
 describe('formatPackCatalogMd / formatPackVerifyMd', () => {
   it('renders marketplace-lite tables', async () => {
-    const catalog = await buildPackCatalog(projectPath)
+    const catalog = await buildPackCatalog(fixture.projectPath)
     const md = formatPackCatalogMd(catalog)
     expect(md).toContain('marketplace-lite')
     expect(md).toContain('code')
     expect(md).toContain('Integrity')
 
-    await activatePacks(projectPath, ['daily'])
-    const report = await verifyActivePacks(projectPath)
+    await activatePacks(fixture.projectPath, ['daily'])
+    const report = await verifyActivePacks(fixture.projectPath)
     const vmd = formatPackVerifyMd(report)
     expect(vmd).toMatch(/OK|Attention/)
     expect(vmd).toContain('daily')

@@ -345,13 +345,10 @@ class SyncManager {
 
       // Advance the cursor to the highest server_event_id we've seen.
       // event records may carry it as `event_id` (web) or `eventId` (B5).
-      let highest = sinceEventId
-      for (const ev of result.events as Array<Record<string, unknown>>) {
-        const candidates = [ev.event_id, ev.eventId]
-        for (const c of candidates) {
-          if (typeof c === 'number' && c > highest) highest = c
-        }
-      }
+      const highest = (result.events as Array<Record<string, unknown>>)
+        .flatMap((event) => [event.event_id, event.eventId])
+        .filter((candidate): candidate is number => typeof candidate === 'number')
+        .reduce((maximum, candidate) => Math.max(maximum, candidate), sinceEventId)
       if (deviceId && highest > sinceEventId) {
         syncCursorStorage.advance(projectId, highest, { userId, deviceId })
       }
@@ -385,19 +382,19 @@ class SyncManager {
     projectId: string,
     events: Array<Record<string, unknown>>
   ): Promise<number> {
-    let applied = 0
+    const appliedEvents: Array<Record<string, unknown>> = []
 
     for (const event of events) {
       try {
         await this.applyEvent(projectId, event)
-        applied++
+        appliedEvents.push(event)
       } catch (error) {
         const eventLabel = (event.entity_type as string) || (event.type as string) || 'unknown'
         console.error(`Failed to apply event ${eventLabel}:`, error)
       }
     }
 
-    return applied
+    return appliedEvents.length
   }
 
   /**

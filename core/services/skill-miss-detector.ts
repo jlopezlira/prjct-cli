@@ -152,18 +152,13 @@ export async function detectSkillMisses(
   sessionId: string | null,
   opts: { preloadedLines?: TranscriptJsonlLine[] } = {}
 ): Promise<SkillMissResult> {
-  let lines: TranscriptLine[]
-  if (opts.preloadedLines) {
-    lines = opts.preloadedLines as TranscriptLine[]
-  } else {
-    let raw = ''
-    try {
-      raw = await fs.readFile(transcriptPath, 'utf-8')
-    } catch {
-      return { signalsRecorded: 0, signalsSkipped: 0 }
-    }
-    lines = parseJsonl(raw)
-  }
+  const lines = opts.preloadedLines
+    ? (opts.preloadedLines as TranscriptLine[])
+    : await fs
+        .readFile(transcriptPath, 'utf-8')
+        .then(parseJsonl)
+        .catch(() => null)
+  if (!lines) return { signalsRecorded: 0, signalsSkipped: 0 }
 
   const projectId = projectIdFromPath(projectPath)
   if (!projectId) return { signalsRecorded: 0, signalsSkipped: 0 }
@@ -171,47 +166,46 @@ export async function detectSkillMisses(
   const transcriptText = transcriptTextOf(lines)
   if (!transcriptText) return { signalsRecorded: 0, signalsSkipped: 0 }
 
-  let candidates: CandidateMemory[]
-  try {
-    candidates = recallCandidates(projectId, sessionId)
-  } catch {
-    return { signalsRecorded: 0, signalsSkipped: 0 }
-  }
+  const candidates = (() => {
+    try {
+      return recallCandidates(projectId, sessionId)
+    } catch {
+      return null
+    }
+  })()
+  if (!candidates) return { signalsRecorded: 0, signalsSkipped: 0 }
   if (candidates.length === 0) return { signalsRecorded: 0, signalsSkipped: 0 }
 
   // Best-effort booster — absence never blocks token-based detection.
-  let changedFiles: string[] = []
-  try {
-    changedFiles = await getModifiedFiles(projectPath)
-  } catch {
-    changedFiles = []
-  }
+  const changedFiles = await getModifiedFiles(projectPath).catch(() => [])
 
   // Files a recent crew run touched: their edits are in the shared tree
   // but the references happened in the subagent's isolated transcript,
   // invisible here. Exclude them from path-overlap relevance so crew
   // runs don't generate false nags. Best-effort — never blocks.
-  let crewFiles = new Set<string>()
-  try {
-    const cutoff = Date.now() - CREW_RUN_RECENCY_MS
-    for (const run of crewRunStorage.list(projectId)) {
-      if (Date.parse(run.ended_at) <= cutoff) continue
-      for (const f of run.files_touched) crewFiles.add(f)
+  const crewFiles = (() => {
+    try {
+      const cutoff = Date.now() - CREW_RUN_RECENCY_MS
+      return new Set(
+        crewRunStorage
+          .list(projectId)
+          .filter((run) => Date.parse(run.ended_at) > cutoff)
+          .flatMap((run) => run.files_touched)
+      )
+    } catch {
+      return new Set<string>()
     }
-  } catch {
-    crewFiles = new Set()
-  }
+  })()
 
   const misses = analyze(transcriptText, changedFiles, candidates, crewFiles)
   if (misses.length === 0) return { signalsRecorded: 0, signalsSkipped: 0 }
 
   const existing = existingSkillMissKeys(projectId)
-  let recorded = 0
-  let skipped = 0
+  const outcomes: Array<'recorded' | 'skipped'> = []
   for (const miss of misses.slice(0, MAX_SKILL_MISSES_PER_SESSION)) {
     const key = hashKey(miss.memId, miss.excerpt).slice(0, 12)
     if (existing.has(key)) {
-      skipped++
+      outcomes.push('skipped')
       continue
     }
     try {
@@ -233,11 +227,13 @@ export async function detectSkillMisses(
       // The remember() above auto-credited the missed entry via its
       // `relates:` tag — but a miss is not usage. Cancel it + nudge down.
       usefulnessService.penalizeSkillMiss(projectId, miss.memId)
-      recorded++
+      outcomes.push('recorded')
     } catch {
-      skipped++
+      outcomes.push('skipped')
     }
   }
+  const recorded = outcomes.filter((outcome) => outcome === 'recorded').length
+  const skipped = outcomes.filter((outcome) => outcome === 'skipped').length
   return { signalsRecorded: recorded, signalsSkipped: skipped }
 }
 
@@ -278,11 +274,9 @@ function analyze(
     // TOPIC tokens (the broader area). The sets are disjoint so the
     // token that makes a memory relevant can never also mark it applied.
     const signature = signatureOf(memTokens)
-    let overlap = 0
-    for (const t of memTokens) {
-      if (signature.has(t)) continue
-      if (sessionTokens.has(t)) overlap++
-    }
+    const overlap = [...memTokens].filter(
+      (token) => !signature.has(token) && sessionTokens.has(token)
+    ).length
 
     // Relevance signal B — shared topic vocabulary (signature excluded).
     const relevant = pathHit || overlap >= MIN_TOKEN_OVERLAP
@@ -372,10 +366,7 @@ function tokenize(text: string): Set<string> {
 function signatureOf(memTokens: Set<string>): Set<string> {
   const long = [...memTokens].filter((t) => t.length >= SIGNATURE_TOKEN_LEN)
   if (long.length > 0) return new Set(long)
-  let best = ''
-  for (const t of memTokens) {
-    if (t.length > best.length || (t.length === best.length && t < best)) best = t
-  }
+  const best = [...memTokens].sort((a, b) => b.length - a.length || a.localeCompare(b))[0] ?? ''
   return best ? new Set([best]) : new Set()
 }
 

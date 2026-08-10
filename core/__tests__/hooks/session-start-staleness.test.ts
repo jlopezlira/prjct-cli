@@ -18,24 +18,30 @@ import { createStalenessChecker } from '../../services/staleness-checker'
 import { prjctDb } from '../../storage/database'
 import type { LocalConfig } from '../../types/config'
 
-let tmpRoot: string
-let repo: string
+const fixture: {
+  tmpRoot: string
+  repo: string
+} = {
+  tmpRoot: '',
+  repo: '',
+}
+
 const projectId = 'staleness-session-test'
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 function git(args: string): string {
-  return execSync(`git ${args}`, { cwd: repo, encoding: 'utf-8' }).trim()
+  return execSync(`git ${args}`, { cwd: fixture.repo, encoding: 'utf-8' }).trim()
 }
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stale-sess-'))
-  repo = path.join(tmpRoot, 'repo')
-  await fs.mkdir(repo, { recursive: true })
-  pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stale-sess-'))
+  fixture.repo = path.join(fixture.tmpRoot, 'repo')
+  await fs.mkdir(fixture.repo, { recursive: true })
+  pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
   git('init -b main')
   git('config user.email e@e.com')
   git('config user.name e')
-  await fs.writeFile(path.join(repo, 'f.txt'), 'base\n')
+  await fs.writeFile(path.join(fixture.repo, 'f.txt'), 'base\n')
   git('add -A')
   git('commit -qm base')
 })
@@ -43,7 +49,7 @@ beforeEach(async () => {
 afterEach(async () => {
   prjctDb.close(projectId)
   pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 const cfg = { projectId } as unknown as LocalConfig
@@ -57,11 +63,11 @@ describe('SessionStart — understanding staleness', () => {
       lastSyncCommit: synced,
     })
     // 12 commits of drift — past the 10-commit threshold.
-    for (let i = 0; i < 12; i++) {
-      await fs.appendFile(path.join(repo, 'f.txt'), `c${i}\n`)
+    for (const i of Array.from({ length: 12 }, (_, index) => index)) {
+      await fs.appendFile(path.join(fixture.repo, 'f.txt'), `c${i}\n`)
       git(`commit -qam c${i}`)
     }
-    const r = await buildSessionContext(repo, cfg, { digest: false })
+    const r = await buildSessionContext(fixture.repo, cfg, { digest: false })
     expect(r).not.toBeNull()
     expect(r).toContain('Understanding may be stale')
     expect(r).toContain('12 commits')
@@ -74,7 +80,7 @@ describe('SessionStart — understanding staleness', () => {
       lastSync: new Date().toISOString(),
       lastSyncCommit: head, // synced AT head → zero commits since
     })
-    const r = await buildSessionContext(repo, cfg, { digest: false })
+    const r = await buildSessionContext(fixture.repo, cfg, { digest: false })
     // No persona, no digest, no drift → identity only (L1 cwd), no staleness nag.
     expect(r).not.toBeNull()
     expect(r).toContain('## Project identity (cwd)')
@@ -90,15 +96,15 @@ describe('SessionStart — understanding staleness', () => {
       lastSyncCommit: synced,
     })
 
-    await fs.appendFile(path.join(repo, 'f.txt'), 'first\n')
+    await fs.appendFile(path.join(fixture.repo, 'f.txt'), 'first\n')
     git('commit -qam first')
-    await fs.writeFile(path.join(repo, 'package.json'), '{"name":"staleness-fixture"}\n')
+    await fs.writeFile(path.join(fixture.repo, 'package.json'), '{"name":"staleness-fixture"}\n')
     git('add package.json')
     git('commit -qm package')
-    await fs.appendFile(path.join(repo, 'f.txt'), 'last\n')
+    await fs.appendFile(path.join(fixture.repo, 'f.txt'), 'last\n')
     git('commit -qam last')
 
-    const status = await createStalenessChecker(repo).check(projectId)
+    const status = await createStalenessChecker(fixture.repo).check(projectId)
     expect(status.commitsSinceSync).toBe(3)
     expect([...status.changedFiles].sort()).toEqual(['f.txt', 'package.json'])
     expect(status.significantChanges).toEqual(['package.json'])

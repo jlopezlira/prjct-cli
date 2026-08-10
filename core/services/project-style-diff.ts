@@ -161,9 +161,9 @@ function diffStringArray(
       items.push({ field, type: 'added', after: x })
     }
   }
-  for (const x of before) {
-    if (!a.has(x.toLowerCase())) {
-      items.push({ field, type: 'removed', before: x })
+  for (const x2 of before) {
+    if (!a.has(x2.toLowerCase())) {
+      items.push({ field, type: 'removed', before: x2 })
     }
   }
 }

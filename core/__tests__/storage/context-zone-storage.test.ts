@@ -14,37 +14,42 @@ import { prjctDb } from '../../storage/database'
 
 // Test Setup
 
-let tmpRoot: string
-let testProjectId: string
+const fixture: {
+  tmpRoot: string
+  testProjectId: string
+} = {
+  tmpRoot: '',
+  testProjectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('Context Zone Storage', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cz-test-'))
-    testProjectId = 'test-cz-project'
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cz-test-'))
+    fixture.testProjectId = 'test-cz-project'
 
-    pathManager.getGlobalProjectPath = (projectId: string) => path.join(tmpRoot, projectId)
+    pathManager.getGlobalProjectPath = (projectId: string) => path.join(fixture.tmpRoot, projectId)
 
-    await fs.mkdir(path.join(tmpRoot, testProjectId), { recursive: true })
+    await fs.mkdir(path.join(fixture.tmpRoot, fixture.testProjectId), { recursive: true })
 
     // Initialize the database (triggers all migrations)
-    prjctDb.getDb(testProjectId)
+    prjctDb.getDb(fixture.testProjectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
 
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
     }
   })
 
   // Zone Transitions
 
   it('should record and retrieve zone transitions', () => {
-    contextZoneStorage.recordTransition(testProjectId, {
+    contextZoneStorage.recordTransition(fixture.testProjectId, {
       from: 'smart',
       to: 'warning',
       usagePercent: 42.5,
@@ -52,7 +57,7 @@ describe('Context Zone Storage', () => {
       action: 'compact_recommended',
     })
 
-    const transitions = contextZoneStorage.getTransitions(testProjectId)
+    const transitions = contextZoneStorage.getTransitions(fixture.testProjectId)
     expect(transitions).toHaveLength(1)
     expect(transitions[0].from).toBe('smart')
     expect(transitions[0].to).toBe('warning')
@@ -61,8 +66,8 @@ describe('Context Zone Storage', () => {
   })
 
   it('should respect limit on transitions', () => {
-    for (let i = 0; i < 5; i++) {
-      contextZoneStorage.recordTransition(testProjectId, {
+    for (const i of Array.from({ length: 5 }, (_, index) => index)) {
+      contextZoneStorage.recordTransition(fixture.testProjectId, {
         from: 'smart',
         to: 'warning',
         usagePercent: 40 + i,
@@ -71,24 +76,24 @@ describe('Context Zone Storage', () => {
       })
     }
 
-    const limited = contextZoneStorage.getTransitions(testProjectId, 3)
+    const limited = contextZoneStorage.getTransitions(fixture.testProjectId, 3)
     expect(limited).toHaveLength(3)
   })
 
   // Compaction Events
 
   it('should record compaction events', () => {
-    contextZoneStorage.recordCompaction(testProjectId, 'truth_snapshot', 50, 12)
+    contextZoneStorage.recordCompaction(fixture.testProjectId, 'truth_snapshot', 50, 12)
 
     // Verify via summary
-    const summary = contextZoneStorage.getSummary(testProjectId, 1)
+    const summary = contextZoneStorage.getSummary(fixture.testProjectId, 1)
     expect(summary.compactions).toBe(1)
   })
 
   // Summary
 
   it('should return 100% smart when no transitions exist', () => {
-    const summary = contextZoneStorage.getSummary(testProjectId)
+    const summary = contextZoneStorage.getSummary(fixture.testProjectId)
     expect(summary.smartPercent).toBe(100)
     expect(summary.warningPercent).toBe(0)
     expect(summary.dumbPercent).toBe(0)
@@ -97,21 +102,21 @@ describe('Context Zone Storage', () => {
 
   it('should calculate zone distribution from transitions', () => {
     // 2 transitions to warning, 1 to dumb
-    contextZoneStorage.recordTransition(testProjectId, {
+    contextZoneStorage.recordTransition(fixture.testProjectId, {
       from: 'smart',
       to: 'warning',
       usagePercent: 42,
       timestamp: new Date().toISOString(),
       action: null,
     })
-    contextZoneStorage.recordTransition(testProjectId, {
+    contextZoneStorage.recordTransition(fixture.testProjectId, {
       from: 'warning',
       to: 'warning',
       usagePercent: 50,
       timestamp: new Date().toISOString(),
       action: null,
     })
-    contextZoneStorage.recordTransition(testProjectId, {
+    contextZoneStorage.recordTransition(fixture.testProjectId, {
       from: 'warning',
       to: 'dumb',
       usagePercent: 65,
@@ -119,7 +124,7 @@ describe('Context Zone Storage', () => {
       action: null,
     })
 
-    const summary = contextZoneStorage.getSummary(testProjectId, 7)
+    const summary = contextZoneStorage.getSummary(fixture.testProjectId, 7)
     expect(summary.warningPercent).toBeGreaterThan(0)
     expect(summary.dumbPercent).toBeGreaterThan(0)
   })

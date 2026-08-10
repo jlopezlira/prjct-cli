@@ -14,25 +14,31 @@ import pathManager from '../../infrastructure/path-manager'
 import { projectMemory } from '../../memory/project-memory'
 import prjctDb from '../../storage/database'
 
-let tmpRoot: string
-let projectRoot: string
+const fixture: {
+  tmpRoot: string
+  projectRoot: string
+} = {
+  tmpRoot: '',
+  projectRoot: '',
+}
+
 const projectId = 'mem-v2-test'
 const spies: Array<ReturnType<typeof spyOn>> = []
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-mem-v2-'))
-  projectRoot = path.join(tmpRoot, 'proj')
-  await fs.mkdir(path.join(projectRoot, '.prjct'), { recursive: true })
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-mem-v2-'))
+  fixture.projectRoot = path.join(fixture.tmpRoot, 'proj')
+  await fs.mkdir(path.join(fixture.projectRoot, '.prjct'), { recursive: true })
   await fs.writeFile(
-    path.join(projectRoot, '.prjct', 'prjct.config.json'),
+    path.join(fixture.projectRoot, '.prjct', 'prjct.config.json'),
     JSON.stringify({ projectId, dataPath: '' }, null, 2)
   )
   spies.push(
     spyOn(pathManager, 'getGlobalProjectPath').mockImplementation((pid: string) =>
-      path.join(tmpRoot, 'globals', pid)
+      path.join(fixture.tmpRoot, 'globals', pid)
     )
   )
-  await fs.mkdir(path.join(tmpRoot, 'globals', projectId), { recursive: true })
+  await fs.mkdir(path.join(fixture.tmpRoot, 'globals', projectId), { recursive: true })
   prjctDb.getDb(projectId)
 })
 
@@ -41,12 +47,12 @@ afterEach(async () => {
   for (const s of spies) s.mockRestore()
   spies.length = 0
   ;(configManager as { clearCache?: () => void }).clearCache?.()
-  await fs.rm(tmpRoot, { recursive: true, force: true })
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
 })
 
 describe('memory_entries dual-write (C1)', () => {
   it('mirrors a remembered entry into memory_entries with typed file + is_machine tags', async () => {
-    await projectMemory.remember(projectRoot, {
+    await projectMemory.remember(fixture.projectRoot, {
       type: 'gotcha',
       content: 'Watch the cache.\nFix: take the max, not the sum.',
       tags: { file: 'core/x.ts', source: 'friction-detector', domain: 'telemetry' },
@@ -77,10 +83,10 @@ describe('memory_entries dual-write (C1)', () => {
   })
 
   it('keeps one v2 row per live memory (parity with the memories mirror)', async () => {
-    await projectMemory.remember(projectRoot, { type: 'decision', content: 'A', projectId })
-    await projectMemory.remember(projectRoot, { type: 'learning', content: 'B', projectId })
+    await projectMemory.remember(fixture.projectRoot, { type: 'decision', content: 'A', projectId })
+    await projectMemory.remember(fixture.projectRoot, { type: 'learning', content: 'B', projectId })
     // Verbatim dup is deduped — still one row for A.
-    await projectMemory.remember(projectRoot, { type: 'decision', content: 'A', projectId })
+    await projectMemory.remember(fixture.projectRoot, { type: 'decision', content: 'A', projectId })
 
     // memory_entries is the single source; the verbatim dup (A) is deduped.
     const v2Count = prjctDb.query<{ n: number }>(

@@ -24,58 +24,65 @@ function git(cwd: string, args: string[]): Promise<void> {
 }
 
 describe('e2e: review-risk (real CLI, hermetic git repos)', () => {
-  let sb: Sandbox
+  const fixture: {
+    sb: Sandbox
+  } = {
+    sb: undefined as unknown as Sandbox,
+  }
 
   beforeAll(async () => {
-    sb = await makeSandbox()
-    expect((await sb.cli(['init'], { timeoutMs: 90_000 })).code).toBe(0)
-    expect((await sb.cli(['setup'], { timeoutMs: 90_000 })).code).toBe(0)
-    await git(sb.dir, ['add', '.'])
-    await git(sb.dir, ['commit', '-q', '-m', 'prjct init'])
+    fixture.sb = await makeSandbox()
+    expect((await fixture.sb.cli(['init'], { timeoutMs: 90_000 })).code).toBe(0)
+    expect((await fixture.sb.cli(['setup'], { timeoutMs: 90_000 })).code).toBe(0)
+    await git(fixture.sb.dir, ['add', '.'])
+    await git(fixture.sb.dir, ['commit', '-q', '-m', 'prjct init'])
   })
   afterAll(async () => {
-    await sb.cleanup()
+    await fixture.sb.cleanup()
   })
 
   test('no-signal (nothing ahead of base) → exit 0, graceful message', async () => {
-    const r = await sb.cli(['review-risk', '--md'])
+    const r = await fixture.sb.cli(['review-risk', '--md'])
     expect(r.code).toBe(0)
     expect(r.stdout.toLowerCase()).toMatch(/no comparable|review risk|trivial/)
   })
 
   test('trivial change on a feature branch → direct', async () => {
-    await git(sb.dir, ['checkout', '-q', '-b', 'feat/tiny'])
-    await fs.writeFile(path.join(sb.dir, 'tiny.txt'), 'one small line\n')
-    await git(sb.dir, ['add', '.'])
-    await git(sb.dir, ['commit', '-q', '-m', 'tiny'])
+    await git(fixture.sb.dir, ['checkout', '-q', '-b', 'feat/tiny'])
+    await fs.writeFile(path.join(fixture.sb.dir, 'tiny.txt'), 'one small line\n')
+    await git(fixture.sb.dir, ['add', '.'])
+    await git(fixture.sb.dir, ['commit', '-q', '-m', 'tiny'])
 
-    const r = await sb.cli(['review-risk', '--md'])
+    const r = await fixture.sb.cli(['review-risk', '--md'])
     expect(r.code).toBe(0)
     expect(r.stdout.toLowerCase()).toMatch(/trivial|direct/)
   })
 
   test('large change (many files) → split, never mutates git', async () => {
-    await git(sb.dir, ['checkout', '-q', 'main'])
-    await git(sb.dir, ['checkout', '-q', '-b', 'feat/huge'])
-    for (let i = 0; i < 14; i++) {
-      await fs.writeFile(path.join(sb.dir, `mod${i}.ts`), `export const v${i} = ${i}\n`.repeat(50))
+    await git(fixture.sb.dir, ['checkout', '-q', 'main'])
+    await git(fixture.sb.dir, ['checkout', '-q', '-b', 'feat/huge'])
+    for (const i of Array.from({ length: 14 }, (_, index) => index)) {
+      await fs.writeFile(
+        path.join(fixture.sb.dir, `mod${i}.ts`),
+        `export const v${i} = ${i}\n`.repeat(50)
+      )
     }
-    await git(sb.dir, ['add', '.'])
-    await git(sb.dir, ['commit', '-q', '-m', 'huge'])
+    await git(fixture.sb.dir, ['add', '.'])
+    await git(fixture.sb.dir, ['commit', '-q', '-m', 'huge'])
 
-    const head = (await sb.cli(['review-risk'])).stdout // also exercise non-md
-    const r = await sb.cli(['review-risk', '--md'])
+    const head = (await fixture.sb.cli(['review-risk'])).stdout // also exercise non-md
+    const r = await fixture.sb.cli(['review-risk', '--md'])
     expect(r.code).toBe(0)
     expect((head + r.stdout).toLowerCase()).toMatch(/large|split/)
 
     // Read-only contract: branch unchanged, no stray commits.
     const log = await new Promise<string>((resolve) => {
-      let out = ''
-      const p = spawn('git', ['log', '--oneline'], { cwd: sb.dir })
+      const chunks: string[] = []
+      const p = spawn('git', ['log', '--oneline'], { cwd: fixture.sb.dir })
       p.stdout.on('data', (d) => {
-        out += d.toString()
+        chunks.push(d.toString())
       })
-      p.on('exit', () => resolve(out))
+      p.on('exit', () => resolve(chunks.join('')))
     })
     expect(log.split('\n').filter(Boolean).length).toBe(3) // repo init + prjct init + huge
   })

@@ -14,7 +14,11 @@ import { migrations } from '../../storage/database/migrations'
 import { openDatabase } from '../../storage/database/sqlite-compat'
 import { metricsStorage } from '../../storage/metrics-storage'
 
-let tmpRoot: string
+const fixture: {
+  tmpRoot: string
+} = {
+  tmpRoot: '',
+}
 const pid = 'test-metrics-typed'
 const origGlobal = pathManager.getGlobalProjectPath.bind(pathManager)
 const origFile = pathManager.getFilePath.bind(pathManager)
@@ -22,12 +26,12 @@ const origFile = pathManager.getFilePath.bind(pathManager)
 describe('metrics-storage — typed tables', () => {
   beforeEach(async () => {
     prjctDb.close()
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-metrics-'))
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-metrics-'))
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
     pathManager.getFilePath = (id: string, layer: string, filename: string) =>
-      path.join(tmpRoot, id, layer, filename)
-    await fs.mkdir(path.join(tmpRoot, pid, 'sync'), { recursive: true })
-    await fs.writeFile(path.join(tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
+      path.join(fixture.tmpRoot, id, layer, filename)
+    await fs.mkdir(path.join(fixture.tmpRoot, pid, 'sync'), { recursive: true })
+    await fs.writeFile(path.join(fixture.tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
     prjctDb.getDb(pid)
   })
 
@@ -35,7 +39,7 @@ describe('metrics-storage — typed tables', () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = origGlobal
     pathManager.getFilePath = origFile
-    if (tmpRoot) await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('recordSync upserts the metrics_daily row product.ts SUMs (the read-never-written bug)', async () => {

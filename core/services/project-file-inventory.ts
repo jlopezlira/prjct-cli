@@ -129,24 +129,24 @@ export async function buildFileInventory(
     skipDotfiles: true,
     maxFiles: opts.maxFiles ?? 50_000,
   })
-  const extensions: ExtensionCounts = Object.create(null) as ExtensionCounts
-  let counted = 0
-  for (const rel of files) {
-    if (NOISE_PATH_RE.test(rel)) continue
+  const sourceFiles = files.filter((rel) => {
+    if (NOISE_PATH_RE.test(rel)) return false
     const base = path.basename(rel)
-    if (NOISE_BASENAME_RE.test(base)) continue
+    if (NOISE_BASENAME_RE.test(base)) return false
     const ext = path.extname(base).toLowerCase()
-    if (!ext || ext === '.') continue
-    if (BINARY_EXT.has(ext)) continue
-    extensions[ext] = (extensions[ext] ?? 0) + 1
-    counted++
-  }
+    return Boolean(ext && ext !== '.' && !BINARY_EXT.has(ext))
+  })
+  const extensions = sourceFiles.reduce<ExtensionCounts>((counts, rel) => {
+    const ext = path.extname(path.basename(rel)).toLowerCase()
+    counts[ext] = (counts[ext] ?? 0) + 1
+    return counts
+  }, Object.create(null) as ExtensionCounts)
 
   const languages = languagesFromExtensions(extensions)
   return {
     extensions,
     languages,
-    fileCount: counted,
+    fileCount: sourceFiles.length,
     builtAt: new Date().toISOString(),
     projectHint: path.basename(projectPath),
   }

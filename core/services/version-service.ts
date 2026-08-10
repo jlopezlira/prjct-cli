@@ -132,7 +132,7 @@ export class VersionService {
   private isAheadOf(a: string, b: string): boolean {
     const pa = a.split('.').map((n) => Number.parseInt(n, 10) || 0)
     const pb = b.split('.').map((n) => Number.parseInt(n, 10) || 0)
-    for (let i = 0; i < 3; i++) {
+    for (const i of [0, 1, 2]) {
       const ai = pa[i] ?? 0
       const bi = pb[i] ?? 0
       if (ai > bi) return true

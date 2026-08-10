@@ -139,7 +139,7 @@ export function trimAutoSourceCap(
   maxLive: number = DEFAULT_AUTO_SOURCE_MAX_LIVE
 ): number {
   if (maxLive <= 0) return 0
-  let trimmed = 0
+  const trimmed: MemoryEntry[] = []
   try {
     const entries = projectMemory.allEntriesForIndex(projectId)
     const bySource = new Map<string, MemoryEntry[]>()
@@ -156,31 +156,31 @@ export function trimAutoSourceCap(
       // Oldest first
       list.sort((a, b) => a.rememberedAt.localeCompare(b.rememberedAt))
       const overflow = list.slice(0, list.length - maxLive)
-      for (const e of overflow) {
+      for (const e2 of overflow) {
         try {
           archiveStorage.archive(projectId, {
             entityType: 'memory_entry',
-            entityId: e.id,
+            entityId: e2.id,
             entityData: {
-              id: e.id,
-              type: e.type,
-              content: e.content,
-              tags: e.tags,
-              rememberedAt: e.rememberedAt,
+              id: e2.id,
+              type: e2.type,
+              content: e2.content,
+              tags: e2.tags,
+              rememberedAt: e2.rememberedAt,
             },
-            summary: e.content.slice(0, 80),
+            summary: e2.content.slice(0, 80),
             reason: `auto-source-cap (>${maxLive})`,
           })
         } catch {
           /* best-effort */
         }
-        if (projectMemory.forget(projectId, e.id)) trimmed++
+        if (projectMemory.forget(projectId, e2.id)) trimmed.push(e2)
       }
     }
   } catch {
-    return trimmed
+    return trimmed.length
   }
-  return trimmed
+  return trimmed.length
 }
 
 /** Snapshot for sync --md vault health line. */
@@ -203,13 +203,14 @@ export function vaultHealth(projectId: string): VaultHealth {
       "SELECT COUNT(*) AS c FROM events WHERE type LIKE 'memory.remember.%'"
     )?.c ?? 0
 
-  let autoSourceLive = 0
-  try {
-    const entries = projectMemory.allEntriesForIndex(projectId)
-    autoSourceLive = entries.filter((e) => isAutoSource(e.tags?.source)).length
-  } catch {
-    autoSourceLive = 0
-  }
+  const autoSourceLive = (() => {
+    try {
+      return projectMemory.allEntriesForIndex(projectId).filter((e) => isAutoSource(e.tags?.source))
+        .length
+    } catch {
+      return 0
+    }
+  })()
 
   return { live, softDeleted, archives, rememberEvents, autoSourceLive }
 }
@@ -246,22 +247,24 @@ export async function runVaultPurge(
     }
   }
 
-  let distilledDiscarded = 0
-  let digestsWritten = 0
-  // Distill-then-hard-delete auto-source overflow (preferred over soft-delete).
-  if (opts.projectPath) {
-    try {
-      const { distillAndDiscardAllAutoSources } = await import('./distill')
-      const d = await distillAndDiscardAllAutoSources(opts.projectPath, projectId, autoMax)
-      distilledDiscarded = d.discarded
-      digestsWritten = d.digests
-    } catch {
-      // Fallback: soft-trim if distill fails
+  const distillation = await (async () => {
+    // Distill-then-hard-delete auto-source overflow (preferred over soft-delete).
+    if (opts.projectPath) {
+      try {
+        const { distillAndDiscardAllAutoSources } = await import('./distill')
+        const d = await distillAndDiscardAllAutoSources(opts.projectPath, projectId, autoMax)
+        return { distilledDiscarded: d.discarded, digestsWritten: d.digests }
+      } catch {
+        // Fallback: soft-trim if distill fails
+        trimAutoSourceCap(projectId, autoMax)
+        return { distilledDiscarded: 0, digestsWritten: 0 }
+      }
+    } else {
       trimAutoSourceCap(projectId, autoMax)
+      return { distilledDiscarded: 0, digestsWritten: 0 }
     }
-  } else {
-    trimAutoSourceCap(projectId, autoMax)
-  }
+  })()
+  const { distilledDiscarded, digestsWritten } = distillation
 
   // Soft-deleted = already judged worthless → hard eliminate (no second archive).
   const { eliminateSoftDeletedNoValue } = await import('./distill')
@@ -269,12 +272,13 @@ export async function runVaultPurge(
   const softDeletedPurged = elim.purged || purgeSoftDeleted(projectId, softDays)
 
   const orphanEventsPurged = purgeOrphanRememberEvents(projectId, softDays)
-  let archivesPruned = 0
-  try {
-    archivesPruned = archiveStorage.pruneOldArchives(projectId, archDays)
-  } catch {
-    archivesPruned = 0
-  }
+  const archivesPruned = (() => {
+    try {
+      return archiveStorage.pruneOldArchives(projectId, archDays)
+    } catch {
+      return 0
+    }
+  })()
 
   return {
     softDeletedPurged,

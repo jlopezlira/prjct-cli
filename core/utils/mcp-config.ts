@@ -93,16 +93,12 @@ function resolvePublishedPrjctMcpConfig(): MCPServerConfig | null {
       path.join(path.dirname(process.execPath), 'node'),
       path.join(pkgDir, '..', '..', 'bin', 'node'), // nvm: .../node/vX/lib/node_modules → .../bin/node
     ]
-    let nodeBin = process.execPath
-    for (const n of nodeCandidates) {
-      if (n && fsSync.existsSync(n)) {
-        nodeBin = n
-        break
-      }
-    }
+    const adjacentNode = nodeCandidates.find(
+      (candidate) => candidate && fsSync.existsSync(candidate)
+    )
     // nvm layout: pkgDir = .../node/vX/lib/node_modules/prjct-cli → bin/node at .../node/vX/bin/node
     const nvmNode = path.resolve(pkgDir, '..', '..', '..', 'bin', 'node')
-    if (fsSync.existsSync(nvmNode)) nodeBin = nvmNode
+    const nodeBin = fsSync.existsSync(nvmNode) ? nvmNode : (adjacentNode ?? process.execPath)
 
     return {
       command: nodeBin,
@@ -126,12 +122,13 @@ function resolveLocalPrjctBin(): string | null {
 
   for (const candidate of candidates) {
     if (!fsSync.existsSync(candidate)) continue
-    let resolved = candidate
-    try {
-      resolved = fsSync.realpathSync(candidate)
-    } catch {
-      /* keep candidate */
-    }
+    const resolved = (() => {
+      try {
+        return fsSync.realpathSync(candidate)
+      } catch {
+        return candidate
+      }
+    })()
     if (isNonProductionPrjctPath(resolved)) continue
     return resolved
   }

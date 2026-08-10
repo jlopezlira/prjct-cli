@@ -21,33 +21,40 @@ import prjctDb from '../../storage/database'
 import { entityHandlers, UNKNOWN_ENTITY_TYPES } from '../../sync/entity-handlers'
 import { _resetWarnDedupeForTest, syncManager } from '../../sync/sync-manager'
 
-let projectId: string
-let originalProjectsDir: string | undefined
-let warnCalls: string[]
-let originalWarn: typeof console.warn
+const fixture: {
+  projectId: string
+  originalProjectsDir: string | undefined
+  warnCalls: string[]
+  originalWarn: typeof console.warn
+} = {
+  projectId: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  warnCalls: undefined as unknown as string[],
+  originalWarn: undefined as unknown as typeof console.warn,
+}
 
 beforeEach(async () => {
   prjctDb.close()
   const tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-unknown-ent-'))
-  originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+  fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
   process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
-  projectId = `unknown-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  await pathManager.ensureProjectStructure(projectId)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+  fixture.projectId = `unknown-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await pathManager.ensureProjectStructure(fixture.projectId)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
 
-  warnCalls = []
-  originalWarn = console.warn
+  fixture.warnCalls = []
+  fixture.originalWarn = console.warn
   console.warn = (...args: unknown[]) => {
-    warnCalls.push(args.map((a) => String(a)).join(' '))
+    fixture.warnCalls.push(args.map((a) => String(a)).join(' '))
   }
   _resetWarnDedupeForTest()
 })
 
 afterEach(() => {
-  console.warn = originalWarn
+  console.warn = fixture.originalWarn
   _resetWarnDedupeForTest()
-  if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-  else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
+  if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+  else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
   prjctDb.close()
 })
 
@@ -56,7 +63,7 @@ async function applyEvent(event: Record<string, unknown>): Promise<void> {
     syncManager as unknown as {
       applyEvent: (pid: string, ev: Record<string, unknown>) => Promise<void>
     }
-  ).applyEvent(projectId, event)
+  ).applyEvent(fixture.projectId, event)
 }
 
 describe('applyEvent — unhandled entity_type warn (Phase 1.6 / B3)', () => {
@@ -67,13 +74,13 @@ describe('applyEvent — unhandled entity_type warn (Phase 1.6 / B3)', () => {
       data: { id: 'feat-A' },
     })
 
-    expect(warnCalls).toHaveLength(1)
-    expect(warnCalls[0]).toContain('[sync] apply skipped')
-    expect(warnCalls[0]).toContain("entity_type='roadmap_features'")
-    expect(warnCalls[0]).toContain('code=no_local_handler')
+    expect(fixture.warnCalls).toHaveLength(1)
+    expect(fixture.warnCalls[0]).toContain('[sync] apply skipped')
+    expect(fixture.warnCalls[0]).toContain("entity_type='roadmap_features'")
+    expect(fixture.warnCalls[0]).toContain('code=no_local_handler')
     // The Phase 2 hint should appear for known-but-unhandled types so
     // operators know this is intentional, not a registration miss.
-    expect(warnCalls[0]).toContain('Phase 2')
+    expect(fixture.warnCalls[0]).toContain('Phase 2')
   })
 
   test('projects (in UNKNOWN_ENTITY_TYPES) also emits the Phase 2 hint', async () => {
@@ -83,7 +90,7 @@ describe('applyEvent — unhandled entity_type warn (Phase 1.6 / B3)', () => {
       data: { id: 'proj-A' },
     })
     expect(
-      warnCalls.some((w) => w.includes("entity_type='projects'") && w.includes('Phase 2'))
+      fixture.warnCalls.some((w) => w.includes("entity_type='projects'") && w.includes('Phase 2'))
     ).toBe(true)
   })
 
@@ -93,21 +100,21 @@ describe('applyEvent — unhandled entity_type warn (Phase 1.6 / B3)', () => {
       event_type: 'upsert',
       data: { id: 'x' },
     })
-    expect(warnCalls).toHaveLength(1)
-    expect(warnCalls[0]).toContain("entity_type='totally_new_thing'")
-    expect(warnCalls[0]).toContain('no local handler registered')
-    expect(warnCalls[0]).not.toContain('Phase 2')
+    expect(fixture.warnCalls).toHaveLength(1)
+    expect(fixture.warnCalls[0]).toContain("entity_type='totally_new_thing'")
+    expect(fixture.warnCalls[0]).toContain('no local handler registered')
+    expect(fixture.warnCalls[0]).not.toContain('Phase 2')
   })
 
   test('warn is deduped per-process (batch pull does not flood)', async () => {
-    for (let i = 0; i < 10; i++) {
+    for (const i of Array.from({ length: 10 }, (_, index) => index)) {
       await applyEvent({
         entity_type: 'roadmap_features',
         event_type: 'upsert',
         data: { id: `feat-${i}` },
       })
     }
-    expect(warnCalls).toHaveLength(1)
+    expect(fixture.warnCalls).toHaveLength(1)
   })
 
   test('different unhandled types each get their own warn line', async () => {
@@ -121,7 +128,7 @@ describe('applyEvent — unhandled entity_type warn (Phase 1.6 / B3)', () => {
       event_type: 'upsert',
       data: { id: 'b' },
     })
-    expect(warnCalls).toHaveLength(2)
+    expect(fixture.warnCalls).toHaveLength(2)
   })
 
   test('handled entity_type does NOT warn (verifies the negative)', async () => {
@@ -142,7 +149,7 @@ describe('applyEvent — unhandled entity_type warn (Phase 1.6 / B3)', () => {
         // warn — a missing origin would (correctly) trigger a separate warn.
         data: { id: 'x', created_at: '2020-01-01T00:00:00.000Z' },
       })
-      expect(warnCalls).toHaveLength(0)
+      expect(fixture.warnCalls).toHaveLength(0)
     } finally {
       delete fake.fake_handled
     }

@@ -16,35 +16,41 @@ import { syncEventBus } from '../../events/sync-events'
 import prjctDb from '../../storage/database'
 import { shippedStorage } from '../../storage/shipped-storage'
 
-let tempProjectsDir: string
-let originalProjectsDir: string | undefined
-let projectId: string
+const fixture: {
+  tempProjectsDir: string
+  originalProjectsDir: string | undefined
+  projectId: string
+} = {
+  tempProjectsDir: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  projectId: '',
+}
 
 describe('ShippedStorage.republishShips backfill', () => {
   beforeEach(async () => {
-    tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ship-backfill-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
-    projectId = `ship-bf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+    fixture.tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ship-backfill-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = fixture.tempProjectsDir
+    fixture.projectId = `ship-bf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
   })
 
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-    await fs.rm(tempProjectsDir, { recursive: true, force: true })
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+    await fs.rm(fixture.tempProjectsDir, { recursive: true, force: true })
   })
 
   test('re-publishes each local ship as a canonical shipped_items event, exactly once', async () => {
-    await shippedStorage.addShipped(projectId, { name: 'Auth', version: '1.0.0' })
-    await shippedStorage.addShipped(projectId, { name: 'Billing', version: '1.1.0' })
+    await shippedStorage.addShipped(fixture.projectId, { name: 'Auth', version: '1.0.0' })
+    await shippedStorage.addShipped(fixture.projectId, { name: 'Billing', version: '1.1.0' })
     // Isolate the backfill from the addShipped publishes above.
-    await syncEventBus.clearPending(projectId)
+    await syncEventBus.clearPending(fixture.projectId)
 
-    const count = await shippedStorage.republishShips(projectId)
+    const count = await shippedStorage.republishShips(fixture.projectId)
     expect(count).toBe(2)
 
-    const pending = await syncEventBus.getPending(projectId)
+    const pending = await syncEventBus.getPending(fixture.projectId)
     const ships = pending.filter((e) => e.entityType === 'shipped_items')
     expect(ships.length).toBe(2)
     for (const e of ships) {
@@ -54,10 +60,10 @@ describe('ShippedStorage.republishShips backfill', () => {
     }
 
     // Second run is a no-op — the per-project flag is set.
-    await syncEventBus.clearPending(projectId)
-    const again = await shippedStorage.republishShips(projectId)
+    await syncEventBus.clearPending(fixture.projectId)
+    const again = await shippedStorage.republishShips(fixture.projectId)
     expect(again).toBe(0)
-    const pendingAfter = await syncEventBus.getPending(projectId)
+    const pendingAfter = await syncEventBus.getPending(fixture.projectId)
     expect(pendingAfter.filter((e) => e.entityType === 'shipped_items').length).toBe(0)
   })
 })

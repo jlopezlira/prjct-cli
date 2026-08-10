@@ -27,9 +27,15 @@ import prjctDb from '../../storage/database'
 import type { LocalConfig } from '../../types/config'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
-let tmpRoot: string
-let projectId: string
-let origCliHome: string | undefined
+const fixture: {
+  tmpRoot: string
+  projectId: string
+  origCliHome: string | undefined
+} = {
+  tmpRoot: '',
+  projectId: '',
+  origCliHome: undefined as unknown as string | undefined,
+}
 
 const NOW = '2026-05-30T00:00:00.000Z'
 
@@ -49,31 +55,31 @@ const enabledConfig: LocalConfig = {
 } as LocalConfig
 
 function write(type: string, content: string, tags: Record<string, string> = {}): string {
-  prjctDb.appendEvent(projectId, `memory.remember.${type}`, {
+  prjctDb.appendEvent(fixture.projectId, `memory.remember.${type}`, {
     content,
     tags,
     provenance: 'declared',
   })
-  const latest = projectMemory.recall(projectId, { limit: 1, dedupeByKey: false })
+  const latest = projectMemory.recall(fixture.projectId, { limit: 1, dedupeByKey: false })
   return latest[0]?.id ?? ''
 }
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-embed-'))
-  projectId = `test-embed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-embed-'))
+  fixture.projectId = `test-embed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   // Isolate the GLOBAL embeddings config: without this, resolveActiveProvider
   // reads the developer's real ~/.prjct-cli/config/global.json, so the
   // "falls back to the local default" cases fail on any BYOT-configured machine.
-  origCliHome = process.env.PRJCT_CLI_HOME
-  process.env.PRJCT_CLI_HOME = tmpRoot
-  patchPathManager(tmpRoot)
+  fixture.origCliHome = process.env.PRJCT_CLI_HOME
+  process.env.PRJCT_CLI_HOME = fixture.tmpRoot
+  patchPathManager(fixture.tmpRoot)
 })
 
 afterEach(async () => {
-  if (origCliHome === undefined) delete process.env.PRJCT_CLI_HOME
-  else process.env.PRJCT_CLI_HOME = origCliHome
+  if (fixture.origCliHome === undefined) delete process.env.PRJCT_CLI_HOME
+  else process.env.PRJCT_CLI_HOME = fixture.origCliHome
   restorePathManager()
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('embeddings — provider resolution', () => {
@@ -98,7 +104,7 @@ describe('embeddings — provider resolution', () => {
   })
 
   it('semanticSearch returns [] when nothing is embedded yet (lexical fallback)', async () => {
-    const out = await embeddingService.semanticSearch(projectId, 'anything', {
+    const out = await embeddingService.semanticSearch(fixture.projectId, 'anything', {
       projectId: 'x',
       dataPath: '',
     } as LocalConfig)
@@ -125,8 +131,8 @@ describe('embeddings — backfill is selective (model memory only)', () => {
     write('learning', 'bin/prjct.ts — 5 touches in 7 days', { pattern: 'hot-file' })
 
     const r = await embeddingService.backfill(
-      projectId,
-      { projectId, dataPath: '' } as LocalConfig,
+      fixture.projectId,
+      { projectId: fixture.projectId, dataPath: '' } as LocalConfig,
       NOW
     )
     // total/embedded count only the model-worthy entry (the decision).
@@ -134,7 +140,7 @@ describe('embeddings — backfill is selective (model memory only)', () => {
     expect(r.embedded).toBe(1)
 
     const rows = prjctDb.query<{ memory_id: string }>(
-      projectId,
+      fixture.projectId,
       'SELECT memory_id FROM memory_embeddings'
     )
     expect(rows.map((row) => row.memory_id)).toEqual([decision])
@@ -166,16 +172,16 @@ describe('LocalSubwordEmbeddingProvider', () => {
 
     // No provider passed → uses the local default via resolveActiveProvider.
     const r = await embeddingService.backfill(
-      projectId,
-      { projectId, dataPath: '' } as LocalConfig,
+      fixture.projectId,
+      { projectId: fixture.projectId, dataPath: '' } as LocalConfig,
       NOW
     )
     expect(r.embedded).toBe(2)
 
     const hits = await embeddingService.semanticSearch(
-      projectId,
+      fixture.projectId,
       'database migrations',
-      { projectId, dataPath: '' } as LocalConfig,
+      { projectId: fixture.projectId, dataPath: '' } as LocalConfig,
       5
     )
     expect(hits[0]?.id).toBe(target)
@@ -184,9 +190,9 @@ describe('LocalSubwordEmbeddingProvider', () => {
 
 describe('embeddings — stored norms (migration 28)', () => {
   it('store() persists the vector L2 norm', () => {
-    embeddingService.store(projectId, 'mem_n1', [3, 4], 'fake-1', NOW)
+    embeddingService.store(fixture.projectId, 'mem_n1', [3, 4], 'fake-1', NOW)
     const row = prjctDb.get<{ norm: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT norm FROM memory_embeddings WHERE memory_id = ?',
       'mem_n1'
     )
@@ -201,10 +207,10 @@ describe('embeddings — stored norms (migration 28)', () => {
     })
     const near = write('gotcha', 'auth race condition in login')
     const far = write('gotcha', 'how to cook pasta')
-    await embeddingService.backfill(projectId, enabledConfig, NOW, { provider })
+    await embeddingService.backfill(fixture.projectId, enabledConfig, NOW, { provider })
 
     const hits = await embeddingService.semanticSearch(
-      projectId,
+      fixture.projectId,
       'auth bug',
       enabledConfig,
       2,
@@ -220,11 +226,15 @@ describe('embeddings — stored norms (migration 28)', () => {
       'auth race condition in login': [0.9, 0.1, 0, 0],
     })
     const id = write('gotcha', 'auth race condition in login')
-    await embeddingService.backfill(projectId, enabledConfig, NOW, { provider })
-    prjctDb.run(projectId, 'UPDATE memory_embeddings SET norm = NULL WHERE memory_id = ?', id)
+    await embeddingService.backfill(fixture.projectId, enabledConfig, NOW, { provider })
+    prjctDb.run(
+      fixture.projectId,
+      'UPDATE memory_embeddings SET norm = NULL WHERE memory_id = ?',
+      id
+    )
 
     const hits = await embeddingService.semanticSearch(
-      projectId,
+      fixture.projectId,
       'auth bug',
       enabledConfig,
       1,
@@ -254,11 +264,11 @@ describe('embeddings — backfill + semanticSearch', () => {
       'find the first one': [0.95, 0.05, 0],
     })
 
-    const r = await embeddingService.backfill(projectId, enabledConfig, NOW, { provider })
+    const r = await embeddingService.backfill(fixture.projectId, enabledConfig, NOW, { provider })
     expect(r.embedded).toBe(2)
 
     const hits = await embeddingService.semanticSearch(
-      projectId,
+      fixture.projectId,
       'find the first one',
       enabledConfig,
       5,
@@ -271,9 +281,13 @@ describe('embeddings — backfill + semanticSearch', () => {
     write('fact', 'one')
     write('fact', 'two')
     const provider = new FakeProvider({ one: [1, 0], two: [0, 1] })
-    const first = await embeddingService.backfill(projectId, enabledConfig, NOW, { provider })
+    const first = await embeddingService.backfill(fixture.projectId, enabledConfig, NOW, {
+      provider,
+    })
     expect(first.embedded).toBe(2)
-    const second = await embeddingService.backfill(projectId, enabledConfig, NOW, { provider })
+    const second = await embeddingService.backfill(fixture.projectId, enabledConfig, NOW, {
+      provider,
+    })
     expect(second.embedded).toBe(0)
   })
 })

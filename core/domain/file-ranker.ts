@@ -68,12 +68,12 @@ export function rankFiles(
     .slice(0, SEED_FILE_LIMIT)
     .map(([p]) => p)
 
-  for (const idx of seedIndexers) {
-    const scores = idx.scoreFromSeeds(projectId, seedFiles, {
+  for (const idx2 of seedIndexers) {
+    const scores = idx2.scoreFromSeeds(projectId, seedFiles, {
       importDepth: cfg.importDepth,
     })
     if (scores.length === 0) continue
-    scoresByIndexer.set(idx.name, new Map(scores.map((s) => [s.path, s.score])))
+    scoresByIndexer.set(idx2.name, new Map(scores.map((s) => [s.path, s.score])))
   }
 
   const allFiles = new Set<string>()
@@ -83,12 +83,14 @@ export function rankFiles(
 
   const ranked: RankedFile[] = []
   for (const filePath of allFiles) {
-    let finalScore = 0
-    for (const [name, map] of scoresByIndexer) {
-      const s = map.get(filePath) ?? 0
-      const w = weights[name] ?? indexerRegistry.find((i) => i.name === name)?.defaultWeight ?? 0
-      finalScore += s * w
-    }
+    const finalScore = [...scoresByIndexer].reduce((total, [name, map]) => {
+      const score = map.get(filePath) ?? 0
+      const weight =
+        weights[name] ??
+        indexerRegistry.find((indexer) => indexer.name === name)?.defaultWeight ??
+        0
+      return total + score * weight
+    }, 0)
     ranked.push({
       path: filePath,
       finalScore,

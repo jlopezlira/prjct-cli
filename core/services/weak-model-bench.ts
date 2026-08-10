@@ -119,16 +119,17 @@ export function runWeakModelBench(): WeakBenchReport {
     `${score.defaults.mcpToolCountDefault} tools at default`
   )
 
-  let harnessHits = 0
-  let bareHits = 0
-  for (const f of INTENT_FIXTURES) {
-    const got = routeIntent(f.signal)
-    const bare = routeIntentBare(f.signal)
-    const ok = got === f.verb
-    if (ok) harnessHits++
-    if (bare === f.verb) bareHits++
-    push(`intent:${f.verb}`, ok, `"${f.signal}" → ${got}`)
+  const intentResults = INTENT_FIXTURES.map((fixture) => ({
+    fixture,
+    routed: routeIntent(fixture.signal),
+    bare: routeIntentBare(fixture.signal),
+  }))
+  for (const result of intentResults) {
+    const ok = result.routed === result.fixture.verb
+    push(`intent:${result.fixture.verb}`, ok, `"${result.fixture.signal}" → ${result.routed}`)
   }
+  const harnessHits = intentResults.filter((result) => result.routed === result.fixture.verb).length
+  const bareHits = intentResults.filter((result) => result.bare === result.fixture.verb).length
 
   const harnessRate = harnessHits / INTENT_FIXTURES.length
   const bareRate = bareHits / INTENT_FIXTURES.length

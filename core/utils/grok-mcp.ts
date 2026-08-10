@@ -46,8 +46,8 @@ function upsertMarkedBlock(
 
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
     const before = existing.slice(0, startIdx)
-    let after = existing.slice(endIdx + endMarker.length)
-    if (after.startsWith('\n')) after = after.slice(1)
+    const rawAfter = existing.slice(endIdx + endMarker.length)
+    const after = rawAfter.startsWith('\n') ? rawAfter.slice(1) : rawAfter
     return { next: before + block + after }
   }
   if (new RegExp(`^\\s*\\[mcp_servers\\.${tableName}\\]`, 'm').test(existing)) {
@@ -74,12 +74,7 @@ export async function ensureGrokMcpServer(
   changed: boolean
   skipped?: 'user-managed'
 }> {
-  let existing = ''
-  try {
-    existing = await fs.readFile(configPath, 'utf-8')
-  } catch {
-    // Missing file — we'll create it.
-  }
+  const existing = await fs.readFile(configPath, 'utf-8').catch(() => '')
 
   const block = buildPrjctMcpTomlBlock(server)
   const upserted = upsertMarkedBlock(existing, block, START_MARKER, END_MARKER, 'prjct')

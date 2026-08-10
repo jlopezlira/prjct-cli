@@ -33,20 +33,26 @@ describe('GLOBAL_CLAUDE_MD_CONTENT (command-installer)', () => {
 })
 
 describe('SkillGenerator (alpha.11 single skill)', () => {
-  let generator: SkillGenerator
-  let originalHome: string
-  let tmpHome: string
+  const fixture: {
+    generator: SkillGenerator
+    originalHome: string
+    tmpHome: string
+  } = {
+    generator: undefined as unknown as SkillGenerator,
+    originalHome: '',
+    tmpHome: '',
+  }
 
   beforeEach(async () => {
-    generator = new SkillGenerator()
-    originalHome = os.homedir()
-    tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-gen-test-'))
-    process.env.HOME = tmpHome
+    fixture.generator = new SkillGenerator()
+    fixture.originalHome = os.homedir()
+    fixture.tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-gen-test-'))
+    process.env.HOME = fixture.tmpHome
   })
 
   afterEach(async () => {
-    process.env.HOME = originalHome
-    await fs.rm(tmpHome, { recursive: true, force: true }).catch(() => {})
+    process.env.HOME = fixture.originalHome
+    await fs.rm(fixture.tmpHome, { recursive: true, force: true }).catch(() => {})
   })
 
   describe('definitions', () => {
@@ -62,14 +68,14 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
 
   describe('generateAndInstall', () => {
     it('generates the `prjct` skill (Claude full + compact fan-out)', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       expect(result.generated.some((g) => g.name === 'prjct')).toBe(true)
       expect(result.generated.some((g) => g.path.includes('.claude/skills/prjct'))).toBe(true)
       expect(result.skipped).toHaveLength(0)
     })
 
     it('writes SKILL.md at the expected path', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const skill = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       expect(skill).toBeDefined()
       expect(skill!.path).toContain('.claude/skills/')
@@ -82,7 +88,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     async function readClaudeSkill(): Promise<string> {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       expect(claude).toBeDefined()
       return fs.readFile(claude!.path, 'utf-8')
@@ -99,7 +105,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     it('surfaces the opt-in tdd + sdd verbs in the always-loaded body', async () => {
       // L0 only lists the verbs (token budget). Methodology (test-first /
       // intent-first intensity) lives in the pulled workflows.md reference.
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       const ref = await fs.readFile(path.join(path.dirname(claude!.path), 'workflows.md'), 'utf-8')
@@ -139,7 +145,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('keeps loop-discipline triggers + model quick-ref in the pulled reference', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       const dir = path.dirname(claude!.path)
@@ -189,7 +195,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('is project-agnostic — never embeds project name/stack/branch (multi-project isolation)', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       expect(claude).toBeDefined()
       const content = await fs.readFile(claude!.path, 'utf-8')
@@ -201,7 +207,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('frontmatter has valid Claude Code native format', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       expect(content).toStartWith('---\n')
@@ -213,9 +219,9 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('multi-project sync isolation: repeated install never stamps project names into L0', async () => {
-      await generator.generateAndInstall()
-      await generator.generateAndInstall()
-      const skillPath = path.join(tmpHome, '.claude', 'skills', 'prjct', 'SKILL.md')
+      await fixture.generator.generateAndInstall()
+      await fixture.generator.generateAndInstall()
+      const skillPath = path.join(fixture.tmpHome, '.claude', 'skills', 'prjct', 'SKILL.md')
       const content = await fs.readFile(skillPath, 'utf-8')
       expect(content).not.toContain('project-alpha')
       expect(content).not.toContain('## Recent Deliveries')
@@ -223,7 +229,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('fans out compact portable skill to Codex/Gemini host dirs', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const compactPaths = result.generated
         .filter((g) => g.name === 'prjct-compact')
         .map((g) => g.path)
@@ -238,7 +244,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
 
   describe('rich context isolation (never in L0)', () => {
     it('never embeds rich project sections in global skill', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       expect(content).not.toContain('Storage Layer Abstraction')
@@ -249,7 +255,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('omits rich sections when empty (and when rich is provided)', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       expect(content).not.toContain('## Patterns')
@@ -260,7 +266,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
 
   describe('anti-harness enforcement', () => {
     async function readClaude(): Promise<string> {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       return fs.readFile(claude!.path, 'utf-8')
     }
@@ -296,14 +302,14 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
   // SKILL.md points to it without inlining it.
   describe('deep-methodology reference (workflows.md)', () => {
     async function readReference(): Promise<string> {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const dir = path.dirname(claude!.path)
       return fs.readFile(path.join(dir, 'workflows.md'), 'utf-8')
     }
 
     it('writes workflows.md next to SKILL.md', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const dir = path.dirname(claude!.path)
       const exists = await fs
@@ -314,7 +320,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('keeps SKILL.md lean — points at the reference, does not inline it', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       expect(content).toContain('workflows.md')
@@ -325,7 +331,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('keeps the always-loaded SKILL.md under the token budget', async () => {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       // ≤1500 tok always-on. Full verb map + methodology live in workflows.md.
@@ -397,7 +403,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
   // Verb intent map — always-on carries a CORE table; full map in workflows.md.
   describe('verb intent map (UX phase 1)', () => {
     async function claudeSkillAndRef(): Promise<{ content: string; ref: string }> {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
       const ref = await fs.readFile(path.join(path.dirname(claude!.path), 'workflows.md'), 'utf-8')
@@ -452,7 +458,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
   // the old per-tier sections into a tight list in the lean body).
   describe('routing protocol (UX phase 2)', () => {
     async function claudeBody(): Promise<string> {
-      const result = await generator.generateAndInstall()
+      const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       return fs.readFile(claude!.path, 'utf-8')
     }

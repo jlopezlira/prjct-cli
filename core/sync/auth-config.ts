@@ -82,34 +82,22 @@ class AuthConfigManager {
 
     const config = await fileHelper.readJson<AuthConfig>(this.configPath)
     const secureToken = await getAuthToken()
-    let merged: AuthConfig = {
-      ...(config ?? DEFAULT_CONFIG),
-      apiKey: secureToken,
+    const legacyToken = !secureToken ? config?.apiKey : undefined
+    if (legacyToken) await setAuthToken(legacyToken)
+    const base = config ?? DEFAULT_CONFIG
+    const merged: AuthConfig = {
+      ...base,
+      apiKey: secureToken ?? legacyToken ?? null,
+      deviceId: base.deviceId || freshDeviceId(),
+      hostname: base.hostname || os.hostname(),
+      apiUrl: base.apiUrl && LEGACY_API_URLS.has(base.apiUrl) ? DEFAULT_API_URL : base.apiUrl,
     }
-    let mutated = false
-
-    if (!secureToken && config?.apiKey) {
-      await setAuthToken(config.apiKey)
-      merged = {
-        ...merged,
-        apiKey: config.apiKey,
-      }
-      mutated = true
-    }
-
-    if (!merged.deviceId) {
-      merged.deviceId = freshDeviceId()
-      mutated = true
-    }
-    if (!merged.hostname) {
-      merged.hostname = os.hostname()
-      mutated = true
-    }
-    // Retired hosts (cli-api.prjct.app) → canonical api.prjct.app.
-    if (merged.apiUrl && LEGACY_API_URLS.has(merged.apiUrl)) {
-      merged.apiUrl = DEFAULT_API_URL
-      mutated = true
-    }
+    const mutated = Boolean(
+      legacyToken ||
+        !base.deviceId ||
+        !base.hostname ||
+        (base.apiUrl && LEGACY_API_URLS.has(base.apiUrl))
+    )
     this.cachedConfig = merged
     // Lazy persist of deviceId/hostname/url only if we have an existing
     // file (don't write a fresh auth.json on a CLI that's never been

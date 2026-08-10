@@ -83,17 +83,11 @@ class WorktreeService {
     const mainPath = await this.getMainWorktree(worktreePath)
 
     // Get branch name before removing
-    let branch: string | undefined
-    if (deleteBranch) {
-      try {
-        const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', {
-          cwd: worktreePath,
-        })
-        branch = stdout.trim()
-      } catch {
-        // Worktree may already be gone
-      }
-    }
+    const branch = deleteBranch
+      ? await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: worktreePath })
+          .then(({ stdout }) => stdout.trim())
+          .catch(() => undefined)
+      : undefined
 
     await execAsync(`git worktree remove "${worktreePath}" --force`, {
       cwd: mainPath,
@@ -235,25 +229,18 @@ class WorktreeService {
       if (!block.trim()) continue
 
       const lines = block.trim().split('\n')
-      let wtPath = ''
-      let commit = ''
-      let branch = ''
-      let isBare = false
-
-      for (const line of lines) {
-        if (line.startsWith('worktree ')) {
-          wtPath = line.replace('worktree ', '').trim()
-        } else if (line.startsWith('HEAD ')) {
-          commit = line.replace('HEAD ', '').trim()
-        } else if (line.startsWith('branch ')) {
-          // branch refs/heads/main → main
-          branch = line.replace('branch refs/heads/', '').trim()
-        } else if (line === 'bare') {
-          isBare = true
-        } else if (line === 'detached') {
-          branch = '(detached)'
-        }
-      }
+      const { wtPath, commit, branch, isBare } = lines.reduce(
+        (info, line) => {
+          if (line.startsWith('worktree ')) info.wtPath = line.replace('worktree ', '').trim()
+          else if (line.startsWith('HEAD ')) info.commit = line.replace('HEAD ', '').trim()
+          else if (line.startsWith('branch ')) {
+            info.branch = line.replace('branch refs/heads/', '').trim()
+          } else if (line === 'bare') info.isBare = true
+          else if (line === 'detached') info.branch = '(detached)'
+          return info
+        },
+        { wtPath: '', commit: '', branch: '', isBare: false }
+      )
 
       if (wtPath) {
         const isMain = wtPath === mainPath || isBare

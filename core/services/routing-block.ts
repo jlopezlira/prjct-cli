@@ -43,19 +43,15 @@ export async function writeRoutingBlock(
   fullBlock: string
 ): Promise<RoutingWriteResult> {
   const file = path.join(projectPath, filename)
-  let existing = ''
-  let fileExists = true
-  try {
-    existing = await fs.readFile(file, 'utf-8')
-  } catch (error) {
-    if (!isNotFoundError(error)) {
+  const existing = await fs.readFile(file, 'utf-8').catch((error) => {
+    if (!isNotFoundError(error))
       throw new Error(`Could not read ${file}: ${getErrorMessage(error)}`)
-    }
-    fileExists = false
-  }
+    return null
+  })
+  const fileExists = existing !== null
 
   const merged = mergeWithMarkers(
-    fileExists ? existing : '',
+    existing ?? '',
     fullBlock,
     ROUTING_START_MARKER,
     ROUTING_END_MARKER

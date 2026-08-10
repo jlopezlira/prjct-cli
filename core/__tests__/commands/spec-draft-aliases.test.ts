@@ -27,64 +27,73 @@ import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
 import prjctDb from '../../storage/database'
 
-let projectPath: string
-let projectId: string
-let originalProjectsDir: string | undefined
-let originalCwd: string
-let commands: PrjctCommands
+const fixture: {
+  projectPath: string
+  projectId: string
+  originalProjectsDir: string | undefined
+  originalCwd: string
+  commands: PrjctCommands
+} = {
+  projectPath: '',
+  projectId: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  originalCwd: '',
+  commands: undefined as unknown as PrjctCommands,
+}
 
 async function freshProject(): Promise<void> {
   const tempProjectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-spec-aliases-pd-'))
-  originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+  fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
   process.env.PRJCT_PROJECTS_DIR = tempProjectsDir
 
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-spec-aliases-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `aliases-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-spec-aliases-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `aliases-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
-  prjctDb.run(projectId, 'SELECT 1 WHERE 1=0')
+  await pathManager.ensureProjectStructure(fixture.projectId)
+  prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
 }
 
 beforeEach(async () => {
   prjctDb.close()
   await freshProject()
-  originalCwd = process.cwd()
-  process.chdir(projectPath)
-  commands = new PrjctCommands()
+  fixture.originalCwd = process.cwd()
+  process.chdir(fixture.projectPath)
+  fixture.commands = new PrjctCommands()
 })
 
 afterEach(async () => {
-  process.chdir(originalCwd)
-  if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-  else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
-  if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+  process.chdir(fixture.originalCwd)
+  if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+  else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
+  if (fixture.projectPath)
+    await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   prjctDb.close()
 })
 
 describe('spec draft|new|create alias stripping', () => {
   test('`prjct spec "title"` (canonical) creates a spec titled "title"', async () => {
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['rate limiting'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(true)
     expect((result as { title?: string }).title).toBe('rate limiting')
   })
 
   test('`prjct spec draft "title"` strips `draft`, creates spec titled "title"', async () => {
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['draft', 'rate limiting'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(true)
     // The bug we are guarding: title MUST NOT be "draft rate limiting"
@@ -92,48 +101,48 @@ describe('spec draft|new|create alias stripping', () => {
   })
 
   test('`prjct spec new "title"` strips `new`', async () => {
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['new', 'auth refresh'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(true)
     expect((result as { title?: string }).title).toBe('auth refresh')
   })
 
   test('`prjct spec create "title"` strips `create`', async () => {
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['create', 'webhooks v2'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(true)
     expect((result as { title?: string }).title).toBe('webhooks v2')
   })
 
   test('multi-word title after alias is preserved verbatim', async () => {
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['draft', 'rate', 'limit', 'the', '/auth', 'endpoint'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(true)
     expect((result as { title?: string }).title).toBe('rate limit the /auth endpoint')
   })
 
   test('alias-only (no title) fails the same as bare `prjct spec`', async () => {
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['draft'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/title/i)
@@ -141,19 +150,19 @@ describe('spec draft|new|create alias stripping', () => {
 
   test('real subverbs still route (alias must NOT shadow `list`)', async () => {
     // First create a spec so list has something to render.
-    await executeCommand(commands, {
+    await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['canary spec'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['list'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(true)
   })
@@ -164,12 +173,12 @@ describe('spec draft|new|create alias stripping', () => {
     // through to the bare-title path and silently created a spec titled
     // "breakdown <id>" instead of breaking the spec down. Guard: the result
     // must NOT be a draft whose title is the literal "breakdown ...".
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['breakdown', 'spec_nonexistent'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect((result as { title?: string }).title).not.toBe('breakdown spec_nonexistent')
   })
@@ -178,12 +187,12 @@ describe('spec draft|new|create alias stripping', () => {
     // `prjct spec "fix the thing"` — first word "fix" isn't a subverb, so
     // the entire string remains the title. This guards the existing
     // behavior so the alias change doesn't accidentally tighten parsing.
-    const result = await executeCommand(commands, {
+    const result = await executeCommand(fixture.commands, {
       id: 't',
       command: 'spec',
       args: ['fix', 'the', 'login', 'flow'],
       options: { md: true },
-      cwd: projectPath,
+      cwd: fixture.projectPath,
     })
     expect(result.success).toBe(true)
     expect((result as { title?: string }).title).toBe('fix the login flow')

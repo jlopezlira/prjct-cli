@@ -7,28 +7,33 @@ import { MAIN_WORKSPACE_ID } from '../../services/workspace-id'
 import { prjctDb } from '../../storage/database'
 import { getTaskPipelineState, upsertTaskPipelineState } from '../../storage/task-pipeline-storage'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('task pipeline storage', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-task-pipeline-'))
-    projectId = `pipeline-${Date.now()}`
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-    await fs.mkdir(path.join(tmpRoot, projectId), { recursive: true })
-    prjctDb.getDb(projectId)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-task-pipeline-'))
+    fixture.projectId = `pipeline-${Date.now()}`
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+    await fs.mkdir(path.join(fixture.tmpRoot, fixture.projectId), { recursive: true })
+    prjctDb.getDb(fixture.projectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
   })
 
   it('persists and updates a pipeline state by project/task/workspace', () => {
-    upsertTaskPipelineState(projectId, {
+    upsertTaskPipelineState(fixture.projectId, {
       taskId: 'task-1',
       workspaceId: MAIN_WORKSPACE_ID,
       classification: 'substantive',
@@ -39,11 +44,11 @@ describe('task pipeline storage', () => {
       linkedSpecId: null,
     })
 
-    let row = getTaskPipelineState(projectId, 'task-1', MAIN_WORKSPACE_ID)
-    expect(row?.station).toBe('spec_required')
-    expect(row?.requiresTestsFirst).toBe(true)
+    const initialRow = getTaskPipelineState(fixture.projectId, 'task-1', MAIN_WORKSPACE_ID)
+    expect(initialRow?.station).toBe('spec_required')
+    expect(initialRow?.requiresTestsFirst).toBe(true)
 
-    upsertTaskPipelineState(projectId, {
+    upsertTaskPipelineState(fixture.projectId, {
       taskId: 'task-1',
       workspaceId: MAIN_WORKSPACE_ID,
       classification: 'substantive',
@@ -54,13 +59,13 @@ describe('task pipeline storage', () => {
       linkedSpecId: 'spec-1',
     })
 
-    row = getTaskPipelineState(projectId, 'task-1', MAIN_WORKSPACE_ID)
-    expect(row?.station).toBe('test_red')
-    expect(row?.linkedSpecId).toBe('spec-1')
+    const updatedRow = getTaskPipelineState(fixture.projectId, 'task-1', MAIN_WORKSPACE_ID)
+    expect(updatedRow?.station).toBe('test_red')
+    expect(updatedRow?.linkedSpecId).toBe('spec-1')
   })
 
   it('updates and returns state with one SQLite statement while preserving createdAt', () => {
-    const initial = upsertTaskPipelineState(projectId, {
+    const initial = upsertTaskPipelineState(fixture.projectId, {
       taskId: 'task-efficient-upsert',
       workspaceId: MAIN_WORKSPACE_ID,
       classification: 'substantive',
@@ -73,7 +78,7 @@ describe('task pipeline storage', () => {
 
     const querySpy = spyOn(prjctDb, 'query')
     const runSpy = spyOn(prjctDb, 'run')
-    const updated = upsertTaskPipelineState(projectId, {
+    const updated = upsertTaskPipelineState(fixture.projectId, {
       taskId: 'task-efficient-upsert',
       workspaceId: MAIN_WORKSPACE_ID,
       classification: 'substantive',
@@ -95,7 +100,7 @@ describe('task pipeline storage', () => {
   })
 
   it('keeps main and child workspace rows independent', () => {
-    upsertTaskPipelineState(projectId, {
+    upsertTaskPipelineState(fixture.projectId, {
       taskId: 'task-1',
       workspaceId: MAIN_WORKSPACE_ID,
       classification: 'trivial',
@@ -105,7 +110,7 @@ describe('task pipeline storage', () => {
       reason: 'trivial-keyword',
       linkedSpecId: null,
     })
-    upsertTaskPipelineState(projectId, {
+    upsertTaskPipelineState(fixture.projectId, {
       taskId: 'task-1',
       workspaceId: 'child-workspace',
       classification: 'substantive',
@@ -116,8 +121,10 @@ describe('task pipeline storage', () => {
       linkedSpecId: null,
     })
 
-    expect(getTaskPipelineState(projectId, 'task-1', MAIN_WORKSPACE_ID)?.station).toBe('direct')
-    expect(getTaskPipelineState(projectId, 'task-1', 'child-workspace')?.station).toBe(
+    expect(getTaskPipelineState(fixture.projectId, 'task-1', MAIN_WORKSPACE_ID)?.station).toBe(
+      'direct'
+    )
+    expect(getTaskPipelineState(fixture.projectId, 'task-1', 'child-workspace')?.station).toBe(
       'spec_required'
     )
   })

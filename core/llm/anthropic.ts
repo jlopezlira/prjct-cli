@@ -32,7 +32,7 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
   system?: string
   messages: AnthMsg[]
 } {
-  let system: string | undefined
+  const systemMessages: string[] = []
   const out: AnthMsg[] = []
 
   const push = (role: AnthRole, content: unknown) => {
@@ -47,7 +47,7 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
   for (const m of messages) {
     if (m.role === 'system') {
       const t = m.content ?? ''
-      if (t) system = system ? `${system}\n\n${t}` : t
+      if (t) systemMessages.push(t)
       continue
     }
     if (m.role === 'tool') {
@@ -64,12 +64,13 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
       const blocks: unknown[] = []
       if (m.content) blocks.push({ type: 'text', text: m.content })
       for (const tc of m.tool_calls) {
-        let input: unknown = {}
-        try {
-          input = JSON.parse(tc.function.arguments || '{}')
-        } catch {
-          input = { raw: tc.function.arguments }
-        }
+        const input = (() => {
+          try {
+            return JSON.parse(tc.function.arguments || '{}') as unknown
+          } catch {
+            return { raw: tc.function.arguments }
+          }
+        })()
         blocks.push({
           type: 'tool_use',
           id: tc.id,
@@ -94,7 +95,7 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
     out.unshift({ role: 'user', content: '(continue)' })
   }
 
-  return { system, messages: out }
+  return { system: systemMessages.join('\n\n') || undefined, messages: out }
 }
 
 function mergeContent(a: unknown, b: unknown): unknown {

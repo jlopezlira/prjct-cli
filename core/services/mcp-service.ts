@@ -150,14 +150,14 @@ class McpService {
       path.join(os.homedir(), '.claude.json')
     )
     if (globalMcp?.mcpServers) {
-      for (const name of Object.keys(globalMcp.mcpServers)) {
+      for (const name2 of Object.keys(globalMcp.mcpServers)) {
         out.push({
-          name,
-          displayName: name,
+          name: name2,
+          displayName: name2,
           source: 'global',
           description: 'stdio server declared in ~/.claude.json',
           estimatedTools: 0,
-          denied: denied.has(name),
+          denied: denied.has(name2),
         })
       }
     }
@@ -237,11 +237,11 @@ class McpService {
 
     const nowDenied: string[] = []
     const nowAllowed: string[] = []
-    for (const name of knownNames) {
-      const wasDenied = previous.has(name)
-      const isDenied = desired.has(name)
-      if (!wasDenied && isDenied) nowDenied.push(name)
-      else if (wasDenied && !isDenied) nowAllowed.push(name)
+    for (const name2 of knownNames) {
+      const wasDenied = previous.has(name2)
+      const isDenied = desired.has(name2)
+      if (!wasDenied && isDenied) nowDenied.push(name2)
+      else if (wasDenied && !isDenied) nowAllowed.push(name2)
     }
 
     if (nowDenied.length === 0 && nowAllowed.length === 0) {

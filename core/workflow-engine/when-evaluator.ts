@@ -85,22 +85,16 @@ function globToRegex(glob: string): RegExp {
   // Minimal glob → regex. Walk the string once to avoid the `**`/`*`
   // ordering hazard a replace chain has (and any unicode-placeholder
   // tricks that break on exotic inputs).
-  let out = ''
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i]
+  const translate = (index: number): string => {
+    if (index >= glob.length) return ''
+    const c = glob[index]
     if (c === '*') {
-      if (glob[i + 1] === '*') {
-        out += '.*'
-        i++
-      } else {
-        out += '[^/]*'
-      }
-    } else if (/[.+^${}()|[\]\\]/.test(c)) {
-      out += `\\${c}`
-    } else {
-      out += c
+      return glob[index + 1] === '*' ? `.*${translate(index + 2)}` : `[^/]*${translate(index + 1)}`
     }
+    const translated = /[.+^${}()|[\]\\]/.test(c) ? `\\${c}` : c
+    return `${translated}${translate(index + 1)}`
   }
+  const out = translate(0)
   const re = new RegExp(`^${out}$`)
   globCache.set(glob, re)
   return re

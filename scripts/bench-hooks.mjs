@@ -34,11 +34,20 @@ const distEntry = path.join(repoRoot, 'dist', 'bin', 'prjct.mjs')
 
 function parseArgs(argv) {
   const out = { iterations: 30, runtime: 'both' }
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a === '--iterations' || a === '-n') out.iterations = Number.parseInt(argv[++i], 10) || 30
-    else if (a === '--runtime') out.runtime = argv[++i] ?? 'both'
+  const parseAt = (index) => {
+    if (index >= argv.length) return
+    const arg = argv[index]
+    if (arg === '--iterations' || arg === '-n') {
+      out.iterations = Number.parseInt(argv[index + 1], 10) || 30
+      return parseAt(index + 2)
+    }
+    if (arg === '--runtime') {
+      out.runtime = argv[index + 1] ?? 'both'
+      return parseAt(index + 2)
+    }
+    parseAt(index + 1)
   }
+  parseAt(0)
   return out
 }
 
@@ -79,14 +88,10 @@ function benchRuntime(runtime, iterations) {
   console.log(`\n── runtime: ${runtime} ──`)
   for (const event of EVENTS) {
     // Warm the filesystem cache; discard.
-    for (let i = 0; i < 3; i++) timeOnce(runtime, event)
-    const samples = []
-    let failures = 0
-    for (let i = 0; i < iterations; i++) {
-      const { ms, ok } = timeOnce(runtime, event)
-      samples.push(ms)
-      if (!ok) failures++
-    }
+    Array.from({ length: 3 }, () => timeOnce(runtime, event))
+    const measurements = Array.from({ length: iterations }, () => timeOnce(runtime, event))
+    const samples = measurements.map(({ ms }) => ms)
+    const failures = measurements.filter(({ ok }) => !ok).length
     const s = stats(samples)
     const f = failures > 0 ? `  ⚠ ${failures} non-zero exits` : ''
     console.log(

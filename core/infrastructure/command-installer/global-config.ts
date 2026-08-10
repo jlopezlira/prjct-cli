@@ -69,64 +69,60 @@ export async function installGlobalConfig(): Promise<GlobalConfigResult> {
     const globalConfigPath = path.join(activeProvider.configDir, activeProvider.contextFile)
 
     // Use inline content for Claude, or provider-specific template for others
-    let templateContent = GLOBAL_CLAUDE_MD_CONTENT
-
-    if (providerName !== 'claude') {
+    const templateContent = await (async () => {
+      if (providerName === 'claude') return GLOBAL_CLAUDE_MD_CONTENT
       // Try provider-specific template (bundle then filesystem)
       const bundled = getTemplateContent(`global/${activeProvider.contextFile}`)
-      if (bundled) {
-        templateContent = bundled
-      } else {
-        const { PACKAGE_ROOT } = require('../../utils/version')
-        const templatePath = path.join(
-          PACKAGE_ROOT,
-          'templates',
-          'global',
-          activeProvider.contextFile
+      if (bundled) return bundled
+      const { PACKAGE_ROOT } = require('../../utils/version')
+      const templatePath = path.join(
+        PACKAGE_ROOT,
+        'templates',
+        'global',
+        activeProvider.contextFile
+      )
+      return fs
+        .readFile(templatePath, 'utf-8')
+        .catch(() =>
+          providerName === 'gemini'
+            ? GLOBAL_CLAUDE_MD_CONTENT.replace(/Claude/g, 'Gemini')
+            : GLOBAL_CLAUDE_MD_CONTENT
         )
-        try {
-          templateContent = await fs.readFile(templatePath, 'utf-8')
-        } catch {
-          if (providerName === 'gemini') {
-            templateContent = GLOBAL_CLAUDE_MD_CONTENT.replace(/Claude/g, 'Gemini')
-          }
-        }
-      }
-    }
+    })()
 
-    let existingContent = ''
-    let fileExists = false
-
-    try {
-      existingContent = await fs.readFile(globalConfigPath, 'utf-8')
-      fileExists = true
-    } catch (error) {
-      if (isNotFoundError(error)) fileExists = false
-      else throw error
-    }
+    const existingFile = await fs
+      .readFile(globalConfigPath, 'utf-8')
+      .then((content) => ({ content, exists: true }))
+      .catch((error) => {
+        if (isNotFoundError(error)) return { content: '', exists: false }
+        throw error
+      })
 
     // Strip legacy prjct-project sections (static context generation removed)
     const projectStartMarker = '<!-- prjct-project:start - DO NOT REMOVE THIS MARKER -->'
     const projectEndMarker = '<!-- prjct-project:end - DO NOT REMOVE THIS MARKER -->'
-    if (
-      existingContent.includes(projectStartMarker) &&
-      existingContent.includes(projectEndMarker)
-    ) {
-      const beforeProject = existingContent.substring(
+    const existingContent = (() => {
+      if (
+        !existingFile.content.includes(projectStartMarker) ||
+        !existingFile.content.includes(projectEndMarker)
+      ) {
+        return existingFile.content
+      }
+      const beforeProject = existingFile.content.substring(
         0,
-        existingContent.indexOf(projectStartMarker)
+        existingFile.content.indexOf(projectStartMarker)
       )
-      const afterProject = existingContent.substring(
-        existingContent.indexOf(projectEndMarker) + projectEndMarker.length
+      const afterProject = existingFile.content.substring(
+        existingFile.content.indexOf(projectEndMarker) + projectEndMarker.length
       )
-      existingContent = `${(beforeProject + afterProject).replace(/\n{3,}/g, '\n\n').trim()}\n`
-    }
+      return `${(beforeProject + afterProject).replace(/\n{3,}/g, '\n\n').trim()}\n`
+    })()
 
     const startMarker = '<!-- prjct:start - DO NOT REMOVE THIS MARKER -->'
     const endMarker = '<!-- prjct:end - DO NOT REMOVE THIS MARKER -->'
 
     const merged = mergeWithMarkers(
-      fileExists ? existingContent : '',
+      existingFile.exists ? existingContent : '',
       templateContent,
       startMarker,
       endMarker

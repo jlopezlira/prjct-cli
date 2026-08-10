@@ -131,49 +131,42 @@ export class TeamCommands extends PrjctCommandsBase {
       // 3. Upsert .claude/CLAUDE.md (per-project)
       await fs.mkdir(path.dirname(claudeMdPath), { recursive: true })
       const block = teamClaudeMdBlock(teamConfig)
-      let existing = ''
-      try {
-        existing = await fs.readFile(claudeMdPath, 'utf-8')
-      } catch {
-        // file doesn't exist yet — create with just the team block
-      }
+      const existing = await fs.readFile(claudeMdPath, 'utf-8').catch(() => '')
       const next = upsertBetweenMarkers(existing, block, CLAUDE_MD_START, CLAUDE_MD_END)
       await fs.writeFile(claudeMdPath, next, 'utf-8')
 
       // 4. Stage both files. Don't fail the command if git isn't
       // present or the user is outside a repo — print a hint instead.
-      let staged = false
       const stagedPaths = [teamPath, claudeMdPath]
-      try {
-        await execAsync('git rev-parse --show-toplevel', { cwd: projectPath })
+      const staged = await (async () => {
+        try {
+          await execAsync('git rev-parse --show-toplevel', { cwd: projectPath })
 
-        // 4a. Optional: install pre-commit hook that blocks commits
-        // when team.json says required:true and prjct isn't on PATH.
-        // Lives at .githooks/pre-commit (committed) and we point
-        // core.hooksPath at it for THIS clone. Teammates run the same
-        // command to wire their own clone.
-        let hookPath: string | null = null
-        if (options.enforce === true) {
-          hookPath = path.join(projectPath, '.githooks', 'pre-commit')
-          await fs.mkdir(path.dirname(hookPath), { recursive: true })
-          await fs.writeFile(hookPath, PRE_COMMIT_HOOK_BODY, 'utf-8')
-          await fs.chmod(hookPath, 0o755)
-          await execAsync('git config core.hooksPath .githooks', { cwd: projectPath })
-          stagedPaths.push(hookPath)
+          // 4a. Optional: install pre-commit hook that blocks commits
+          // when team.json says required:true and prjct isn't on PATH.
+          // Lives at .githooks/pre-commit (committed) and we point
+          // core.hooksPath at it for THIS clone. Teammates run the same
+          // command to wire their own clone.
+          const hookPath =
+            options.enforce === true ? path.join(projectPath, '.githooks', 'pre-commit') : null
+          if (options.enforce === true) {
+            if (!hookPath) return false
+            await fs.mkdir(path.dirname(hookPath), { recursive: true })
+            await fs.writeFile(hookPath, PRE_COMMIT_HOOK_BODY, 'utf-8')
+            await fs.chmod(hookPath, 0o755)
+            await execAsync('git config core.hooksPath .githooks', { cwd: projectPath })
+            stagedPaths.push(hookPath)
+          }
+
+          await execAsync(`git add ${stagedPaths.map((p) => JSON.stringify(p)).join(' ')}`, {
+            cwd: projectPath,
+          })
+          return true
+        } catch {
+          // not in a git repo, or git missing — fall through
+          return false
         }
-
-        await execAsync(`git add ${stagedPaths.map((p) => JSON.stringify(p)).join(' ')}`, {
-          cwd: projectPath,
-        })
-        staged = true
-
-        if (hookPath) {
-          // The git config setting is local to this clone — print a
-          // note so the user understands teammates need the same step.
-        }
-      } catch {
-        // not in a git repo, or git missing — fall through
-      }
+      })()
 
       const enforceLabel = options.enforce ? ' + pre-commit enforce' : ''
       const summary = `${teamConfig.required ? '✓ team mode (required)' : '✓ team mode (optional)'}${enforceLabel} — minVersion ${teamConfig.minVersion}`
@@ -251,19 +244,18 @@ export class TeamCommands extends PrjctCommandsBase {
       const teamPath = path.join(projectPath, '.prjct', 'team.json')
       const dbRow = teamEnrollmentStorage.get(projectId)
 
-      let diskRaw: string | null = null
-      try {
-        diskRaw = await fs.readFile(teamPath, 'utf-8')
-      } catch {
-        diskRaw = null
-      }
+      const diskRaw = await fs.readFile(teamPath, 'utf-8').catch(() => null)
 
       // Case A: DB empty, disk has content → migration. Adopt disk into DB.
       if (dbRow === null && diskRaw !== null) {
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(diskRaw)
-        } catch {
+        const parsed: unknown = (() => {
+          try {
+            return JSON.parse(diskRaw)
+          } catch {
+            return null
+          }
+        })()
+        if (parsed === null) {
           return failWith(
             `cannot parse ${teamPath} — fix or delete the file before running team check again`,
             options
@@ -332,12 +324,14 @@ export class TeamCommands extends PrjctCommandsBase {
  * re-serialize with sorted keys.
  */
 function canonicalizeDiskTeamJson(diskRaw: string, dbRow: TeamEnrollment): string | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(diskRaw)
-  } catch {
-    return null
-  }
+  const parsed: unknown = (() => {
+    try {
+      return JSON.parse(diskRaw)
+    } catch {
+      return null
+    }
+  })()
+  if (parsed === null) return null
   const p = parsed as Record<string, unknown>
   const enrollment: TeamEnrollment = {
     required: p.required === true,

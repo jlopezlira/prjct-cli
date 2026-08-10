@@ -180,7 +180,7 @@ describe('transcript-learner — extractCandidates', () => {
 
   test('caps at MAX_CANDIDATES_PER_SESSION', () => {
     const decisions: { role: 'assistant'; text: string }[] = []
-    for (let i = 0; i < 50; i++) {
+    for (const i of Array.from({ length: 50 }, (_, index) => index)) {
       decisions.push({
         role: 'assistant',
         text: `Decided to take action ${i} because of the unique reasoning ${i} that supports this choice in context ${i}.`,

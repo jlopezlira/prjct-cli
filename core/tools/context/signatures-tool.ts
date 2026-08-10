@@ -332,21 +332,21 @@ export async function extractSignatures(
   }
 
   // Read file content
-  let content: string
-  try {
-    content = await fs.readFile(absolutePath, 'utf-8')
-  } catch (error) {
+  const content = await fs.readFile(absolutePath, 'utf-8').catch((error) => {
     if (isNotFoundError(error)) {
-      return {
-        file: filePath,
-        language: 'unknown',
-        signatures: [],
-        fallback: true,
-        fallbackReason: 'File not found',
-        metrics: noCompression(''),
-      }
+      return null
     }
     throw error
+  })
+  if (content === null) {
+    return {
+      file: filePath,
+      language: 'unknown',
+      signatures: [],
+      fallback: true,
+      fallbackReason: 'File not found',
+      metrics: noCompression(''),
+    }
   }
 
   // Detect language
@@ -402,8 +402,7 @@ function extractFromContent(content: string, patterns: ExtractionPattern[]): Cod
     // Reset lastIndex for global regex
     patternDef.pattern.lastIndex = 0
 
-    let match: RegExpExecArray | null
-    while ((match = patternDef.pattern.exec(content)) !== null) {
+    for (const match of content.matchAll(patternDef.pattern)) {
       const name = match[patternDef.nameIndex]
       if (!name) continue
 
@@ -420,17 +419,13 @@ function extractFromContent(content: string, patterns: ExtractionPattern[]): Cod
       const signatureLine = match[0].trim()
 
       // Try to extract docstring (line before the signature)
-      let docstring: string | undefined
-      if (lineNumber > 1) {
-        const prevLine = lines[lineNumber - 2]?.trim()
-        if (
-          prevLine?.startsWith('/**') ||
-          prevLine?.startsWith('///') ||
-          prevLine?.startsWith('#')
-        ) {
-          docstring = prevLine
-        }
-      }
+      const previousLine = lineNumber > 1 ? lines[lineNumber - 2]?.trim() : undefined
+      const docstring =
+        previousLine?.startsWith('/**') ||
+        previousLine?.startsWith('///') ||
+        previousLine?.startsWith('#')
+          ? previousLine
+          : undefined
 
       signatures.push({
         type: patternDef.type,

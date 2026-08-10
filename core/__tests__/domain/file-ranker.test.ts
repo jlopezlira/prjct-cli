@@ -16,29 +16,35 @@ import prjctDb from '../../storage/database'
 import { execAsync } from '../../utils/exec'
 
 describe('FileRanker', () => {
-  let testDir: string
-  let testProjectId: string
+  const fixture: {
+    testDir: string
+    testProjectId: string
+  } = {
+    testDir: '',
+    testProjectId: '',
+  }
+
   const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
   beforeEach(async () => {
-    testDir = path.join(os.tmpdir(), `prjct-ranker-test-${Date.now()}`)
-    testProjectId = `test-ranker-${Date.now()}`
-    await fs.mkdir(testDir, { recursive: true })
+    fixture.testDir = path.join(os.tmpdir(), `prjct-ranker-test-${Date.now()}`)
+    fixture.testProjectId = `test-ranker-${Date.now()}`
+    await fs.mkdir(fixture.testDir, { recursive: true })
 
     // Mock path manager to use temp dir
-    pathManager.getGlobalProjectPath = () => testDir
+    pathManager.getGlobalProjectPath = () => fixture.testDir
 
     // Initialize git repo
-    await execAsync('git init', { cwd: testDir })
-    await execAsync('git config user.email "test@test.com"', { cwd: testDir })
-    await execAsync('git config user.name "Test"', { cwd: testDir })
+    await execAsync('git init', { cwd: fixture.testDir })
+    await execAsync('git config user.email "test@test.com"', { cwd: fixture.testDir })
+    await execAsync('git config user.name "Test"', { cwd: fixture.testDir })
   })
 
   afterEach(async () => {
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
     prjctDb.close()
     try {
-      await fs.rm(testDir, { recursive: true, force: true })
+      await fs.rm(fixture.testDir, { recursive: true, force: true })
     } catch {
       // Ignore
     }
@@ -46,7 +52,7 @@ describe('FileRanker', () => {
 
   describe('hasIndexes', () => {
     it('should return false when no indexes exist', () => {
-      const result = hasIndexes(testProjectId)
+      const result = hasIndexes(fixture.testProjectId)
       expect(result.bm25).toBe(false)
       expect(result.imports).toBe(false)
       expect(result.cochange).toBe(false)
@@ -54,14 +60,14 @@ describe('FileRanker', () => {
 
     it('should return true after building indexes', async () => {
       // Create a test file
-      await fs.writeFile(path.join(testDir, 'app.ts'), 'export function main() {}')
-      await execAsync('git add -A && git commit -m "init"', { cwd: testDir })
+      await fs.writeFile(path.join(fixture.testDir, 'app.ts'), 'export function main() {}')
+      await execAsync('git add -A && git commit -m "init"', { cwd: fixture.testDir })
 
-      await indexProject(testDir, testProjectId)
-      await indexImports(testDir, testProjectId)
-      await indexCoChanges(testDir, testProjectId)
+      await indexProject(fixture.testDir, fixture.testProjectId)
+      await indexImports(fixture.testDir, fixture.testProjectId)
+      await indexCoChanges(fixture.testDir, fixture.testProjectId)
 
-      const result = hasIndexes(testProjectId)
+      const result = hasIndexes(fixture.testProjectId)
       expect(result.bm25).toBe(true)
       expect(result.imports).toBe(true)
       expect(result.cochange).toBe(true)
@@ -70,45 +76,48 @@ describe('FileRanker', () => {
 
   describe('rankFiles', () => {
     it('should return empty array when no indexes exist', () => {
-      const result = rankFiles(testProjectId, 'anything')
+      const result = rankFiles(fixture.testProjectId, 'anything')
       expect(result).toEqual([])
     })
 
     it('should rank relevant files higher', async () => {
       // Create auth-related files
       await fs.writeFile(
-        path.join(testDir, 'auth.ts'),
+        path.join(fixture.testDir, 'auth.ts'),
         `// Authentication service for JWT handling\nexport class AuthService {\n  validateJwt(token: string) { return true }\n}`
       )
       await fs.writeFile(
-        path.join(testDir, 'middleware.ts'),
+        path.join(fixture.testDir, 'middleware.ts'),
         `import { AuthService } from './auth'\n// Auth middleware\nexport function authMiddleware() {}`
       )
       await fs.writeFile(
-        path.join(testDir, 'session.ts'),
+        path.join(fixture.testDir, 'session.ts'),
         `import { AuthService } from './auth'\n// Session management\nexport function refreshSession() {}`
       )
       // Create unrelated file
       await fs.writeFile(
-        path.join(testDir, 'button.tsx'),
+        path.join(fixture.testDir, 'button.tsx'),
         `// UI button component\nexport function Button() { return null }`
       )
 
       // Create git history with co-changes
-      await execAsync('git add -A && git commit -m "init"', { cwd: testDir })
-      await fs.writeFile(path.join(testDir, 'auth.ts'), `export class AuthService { v2() {} }`)
+      await execAsync('git add -A && git commit -m "init"', { cwd: fixture.testDir })
       await fs.writeFile(
-        path.join(testDir, 'middleware.ts'),
+        path.join(fixture.testDir, 'auth.ts'),
+        `export class AuthService { v2() {} }`
+      )
+      await fs.writeFile(
+        path.join(fixture.testDir, 'middleware.ts'),
         `export function authMiddleware() { v2 }`
       )
-      await execAsync('git add -A && git commit -m "update auth"', { cwd: testDir })
+      await execAsync('git add -A && git commit -m "update auth"', { cwd: fixture.testDir })
 
       // Build all indexes
-      await indexProject(testDir, testProjectId)
-      await indexImports(testDir, testProjectId)
-      await indexCoChanges(testDir, testProjectId)
+      await indexProject(fixture.testDir, fixture.testProjectId)
+      await indexImports(fixture.testDir, fixture.testProjectId)
+      await indexCoChanges(fixture.testDir, fixture.testProjectId)
 
-      const results = rankFiles(testProjectId, 'Fix auth middleware for JWT validation')
+      const results = rankFiles(fixture.testProjectId, 'Fix auth middleware for JWT validation')
 
       expect(results.length).toBeGreaterThan(0)
 
@@ -128,16 +137,16 @@ describe('FileRanker', () => {
 
     it('should include signal breakdown', async () => {
       await fs.writeFile(
-        path.join(testDir, 'auth.ts'),
+        path.join(fixture.testDir, 'auth.ts'),
         `// Authentication\nexport class AuthService {}`
       )
-      await execAsync('git add -A && git commit -m "init"', { cwd: testDir })
+      await execAsync('git add -A && git commit -m "init"', { cwd: fixture.testDir })
 
-      await indexProject(testDir, testProjectId)
-      await indexImports(testDir, testProjectId)
-      await indexCoChanges(testDir, testProjectId)
+      await indexProject(fixture.testDir, fixture.testProjectId)
+      await indexImports(fixture.testDir, fixture.testProjectId)
+      await indexCoChanges(fixture.testDir, fixture.testProjectId)
 
-      const results = rankFiles(testProjectId, 'authentication')
+      const results = rankFiles(fixture.testProjectId, 'authentication')
 
       if (results.length > 0) {
         const first = results[0]
@@ -150,17 +159,17 @@ describe('FileRanker', () => {
 
     it('should respect topN config', async () => {
       // Create many files
-      for (let i = 0; i < 20; i++) {
+      for (const i of Array.from({ length: 20 }, (_, index) => index)) {
         await fs.writeFile(
-          path.join(testDir, `service-${i}.ts`),
+          path.join(fixture.testDir, `service-${i}.ts`),
           `// Service module ${i}\nexport function service${i}() {}`
         )
       }
-      await execAsync('git add -A && git commit -m "init"', { cwd: testDir })
+      await execAsync('git add -A && git commit -m "init"', { cwd: fixture.testDir })
 
-      await indexProject(testDir, testProjectId)
+      await indexProject(fixture.testDir, fixture.testProjectId)
 
-      const results = rankFiles(testProjectId, 'service module', { topN: 5 })
+      const results = rankFiles(fixture.testProjectId, 'service module', { topN: 5 })
       expect(results.length).toBeLessThanOrEqual(5)
     })
   })

@@ -64,15 +64,16 @@ export function evalBm25(projectId: string, pairs: LabeledPair[], k: number): Ag
       .split(/\s+/)
       .filter((w) => w.length > 2)
       .slice(0, 32)
-    let ranked: string[] = []
-    try {
-      ranked = projectMemory
-        .searchFts(projectId, keywords, 100)
-        .map((e) => e.id)
-        .filter((id) => id !== p.anchorId)
-    } catch {
-      ranked = []
-    }
+    const ranked = (() => {
+      try {
+        return projectMemory
+          .searchFts(projectId, keywords, 100)
+          .map((entry) => entry.id)
+          .filter((id) => id !== p.anchorId)
+      } catch {
+        return []
+      }
+    })()
     cases.push({ ranked, relevant: new Set(p.positives) })
   }
   return aggregate(cases, k)

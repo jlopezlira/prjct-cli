@@ -112,28 +112,29 @@ export function computeSubstrateHealth(
   }
 
   const judgment = entries.filter((e) => JUDGMENT_TYPES.has(e.type))
-  let unshapedGotcha = 0
-  let emptySpec = 0
-  let junkLike = 0
-  let precisionFail = 0
-
   const gotchas = judgment.filter((e) => e.type === 'gotcha')
   const specs = judgment.filter((e) => e.type === 'spec')
-
-  for (const e of judgment) {
-    const v = classifyCapturePrecision(e.content, e.type)
-    if (v.action !== 'accept') {
-      precisionFail++
-      if (e.type === 'gotcha' && v.reasonCode === 'gotcha_open_narration') unshapedGotcha++
-      if (
-        e.type === 'spec' &&
-        (v.reasonCode === 'empty_spec_mirror' || v.reasonCode === 'bare_id_body')
-      ) {
-        emptySpec++
+  const { unshapedGotcha, emptySpec, junkLike, precisionFail } = judgment.reduce(
+    (counts, entry) => {
+      const verdict = classifyCapturePrecision(entry.content, entry.type)
+      if (verdict.action === 'accept') return counts
+      counts.precisionFail++
+      if (entry.type === 'gotcha' && verdict.reasonCode === 'gotcha_open_narration') {
+        counts.unshapedGotcha++
       }
-      if (v.reasonCode === 'junk' || v.reasonCode === 'inbox_no_substance') junkLike++
-    }
-  }
+      if (
+        entry.type === 'spec' &&
+        (verdict.reasonCode === 'empty_spec_mirror' || verdict.reasonCode === 'bare_id_body')
+      ) {
+        counts.emptySpec++
+      }
+      if (verdict.reasonCode === 'junk' || verdict.reasonCode === 'inbox_no_substance') {
+        counts.junkLike++
+      }
+      return counts
+    },
+    { unshapedGotcha: 0, emptySpec: 0, junkLike: 0, precisionFail: 0 }
+  )
 
   const unshapedGotchaRate = gotchas.length === 0 ? 0 : unshapedGotcha / gotchas.length
   const emptySpecRate = specs.length === 0 ? 0 : emptySpec / specs.length
@@ -142,24 +143,27 @@ export function computeSubstrateHealth(
     judgment.length === 0 ? 1 : Math.max(0, Math.min(1, 1 - precisionFail / judgment.length))
 
   // Cluster estimate within judgment types only
-  let clusterCollapsedEstimate = 0
   const byJType = new Map<string, MemoryEntry[]>()
-  for (const e of judgment) {
-    const list = byJType.get(e.type) ?? []
-    list.push(e)
-    byJType.set(e.type, list)
+  for (const e2 of judgment) {
+    const list = byJType.get(e2.type) ?? []
+    list.push(e2)
+    byJType.set(e2.type, list)
   }
-  for (const group of byJType.values()) {
-    if (group.length < 2) continue
-    const clusters = clusterMemoryEntries(group)
-    for (const c of clusters) {
-      if (c.seenInN > 1) clusterCollapsedEstimate += c.seenInN - 1
-    }
-  }
+  const clusterCollapsedEstimate = [...byJType.values()].reduce(
+    (total, group) =>
+      total +
+      (group.length < 2
+        ? 0
+        : clusterMemoryEntries(group).reduce(
+            (collapsed, cluster) => collapsed + Math.max(0, cluster.seenInN - 1),
+            0
+          )),
+    0
+  )
 
   const recency: DensityBand = { d7: 0, d30: 0, older: 0 }
-  for (const e of entries) {
-    const age = ageMs(e, nowMs)
+  for (const e3 of entries) {
+    const age = ageMs(e3, nowMs)
     if (age <= 7 * DAY_MS) recency.d7++
     else if (age <= 30 * DAY_MS) recency.d30++
     else recency.older++
@@ -195,9 +199,9 @@ export function computeSubstrateHealth(
   // are thin — surface top thin anchors when judgment exists.
   if (judgment.length >= 3) {
     const entityHits = new Map<string, { count: number; fresh: number }>()
-    for (const e of judgment) {
-      const fresh = ageMs(e, nowMs) <= 30 * DAY_MS ? 1 : 0
-      for (const ent of extractKeyEntities(e.content)) {
+    for (const e4 of judgment) {
+      const fresh = ageMs(e4, nowMs) <= 30 * DAY_MS ? 1 : 0
+      for (const ent of extractKeyEntities(e4.content)) {
         if (ent.length < 6 && !['rls', 'jwt', 'csrf'].includes(ent)) continue
         const cur = entityHits.get(ent) ?? { count: 0, fresh: 0 }
         cur.count++
@@ -207,24 +211,19 @@ export function computeSubstrateHealth(
     }
     // Prefer reporting lack of multi-capture on high-signal single-hit entities
     // only when we have enough data that sparsity is meaningful.
-    let thin = 0
-    for (const [ent, h] of entityHits) {
-      if (h.count === 1 && h.fresh === 0) {
-        thin++
-        if (blindSpots.filter((b) => b.kind === 'entity').length < 3) {
-          blindSpots.push({
-            kind: 'entity',
-            label: ent,
-            reason: `single stale capture for "${ent}" — validate before trusting`,
-          })
-        }
-      }
-    }
-    if (thin > 3) {
+    const thinEntities = [...entityHits].filter(([, hit]) => hit.count === 1 && hit.fresh === 0)
+    for (const [entity] of thinEntities.slice(0, 3)) {
       blindSpots.push({
         kind: 'entity',
-        label: `${thin} thin anchors`,
-        reason: `${thin} entities appear only once in stale captures — density is low`,
+        label: entity,
+        reason: `single stale capture for "${entity}" — validate before trusting`,
+      })
+    }
+    if (thinEntities.length > 3) {
+      blindSpots.push({
+        kind: 'entity',
+        label: `${thinEntities.length} thin anchors`,
+        reason: `${thinEntities.length} entities appear only once in stale captures — density is low`,
       })
     }
   }
@@ -251,12 +250,17 @@ export function computeSubstrateHealth(
   }
 
   // Score: start 100, penalize precision failures and blind spots
-  let score = 100
-  score -= Math.round((1 - signalRatio) * 40)
-  score -= Math.min(20, Math.round(unshapedGotchaRate * 20))
-  score -= Math.min(15, Math.round(emptySpecRate * 15))
-  score -= Math.min(15, blindSpots.length * 3)
-  score = Math.max(0, Math.min(100, score))
+  const score = Math.max(
+    0,
+    Math.min(
+      100,
+      100 -
+        Math.round((1 - signalRatio) * 40) -
+        Math.min(20, Math.round(unshapedGotchaRate * 20)) -
+        Math.min(15, Math.round(emptySpecRate * 15)) -
+        Math.min(15, blindSpots.length * 3)
+    )
+  )
 
   return {
     live,

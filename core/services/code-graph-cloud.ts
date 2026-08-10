@@ -181,24 +181,24 @@ export function buildCloudCodeGraphSnapshot(
     keep.add(fileNodeId(file))
   }
 
-  for (const s of picked) {
+  for (const s2 of picked) {
     nodes.push({
-      id: s.id,
-      name: s.name,
-      kind: mapKind(s.kind),
-      file: s.file,
-      exported: s.exported,
+      id: s2.id,
+      name: s2.name,
+      kind: mapKind(s2.kind),
+      file: s2.file,
+      exported: s2.exported,
     })
   }
 
   // DEFINES: File → symbol for every picked symbol that has a file node
   const defineLinks: CloudGraphLink[] = []
   const fileSet = new Set(files)
-  for (const s of picked) {
-    if (!fileSet.has(s.file)) continue
+  for (const s3 of picked) {
+    if (!fileSet.has(s3.file)) continue
     defineLinks.push({
-      source: fileNodeId(s.file),
-      target: s.id,
+      source: fileNodeId(s3.file),
+      target: s3.id,
       type: 'DEFINES',
     })
   }
@@ -224,15 +224,23 @@ export function buildCloudCodeGraphSnapshot(
     const key = `${d.source}->${d.target}:${d.type}`
     if (seen.has(key)) continue
     seen.add(key)
-    links.push({ source: d.source, target: d.target, type: d.type })
+    links.push({
+      source: d.source,
+      target: d.target,
+      type: d.type,
+    })
   }
 
-  for (const e of edgeCandidates) {
+  for (const e2 of edgeCandidates) {
     if (links.length >= linkCap) break
-    const key = `${e.source}->${e.target}:${e.type}`
+    const key = `${e2.source}->${e2.target}:${e2.type}`
     if (seen.has(key)) continue
     seen.add(key)
-    links.push({ source: e.source, target: e.target, type: e.type })
+    links.push({
+      source: e2.source,
+      target: e2.target,
+      type: e2.type,
+    })
   }
 
   return {

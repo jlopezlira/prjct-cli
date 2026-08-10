@@ -15,21 +15,27 @@ import pathManager from '../../infrastructure/path-manager'
 import { projectMemory } from '../../memory/project-memory'
 import prjctDb from '../../storage/database'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
+
 const original = pathManager.getGlobalProjectPath.bind(pathManager)
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-recall-idx-'))
-  projectId = `recallidx-${Math.random().toString(36).slice(2, 10)}`
-  pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-  prjctDb.getDb(projectId)
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-recall-idx-'))
+  fixture.projectId = `recallidx-${Math.random().toString(36).slice(2, 10)}`
+  pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+  prjctDb.getDb(fixture.projectId)
 })
 
 afterEach(async () => {
   prjctDb.close()
   pathManager.getGlobalProjectPath = original
-  await fs.rm(tmpRoot, { recursive: true, force: true })
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
 })
 
 describe('recall() SQL type push-down (index usage)', () => {
@@ -41,17 +47,21 @@ describe('recall() SQL type push-down (index usage)', () => {
     // detail, not a regression: this assertion only pins the fix's actual
     // guarantee — the index is consulted for the predicate, not skipped
     // entirely (i.e. not a raw table scan with the index unused).
-    for (let i = 0; i < 60; i++) {
-      prjctDb.appendEvent(projectId, `memory.remember.${i % 3 === 0 ? 'decision' : 'fact'}`, {
-        content: `entry ${i}`,
-        tags: {},
-        provenance: 'declared',
-      })
+    for (const i of Array.from({ length: 60 }, (_, index) => index)) {
+      prjctDb.appendEvent(
+        fixture.projectId,
+        `memory.remember.${i % 3 === 0 ? 'decision' : 'fact'}`,
+        {
+          content: `entry ${i}`,
+          tags: {},
+          provenance: 'declared',
+        }
+      )
     }
 
     const plan = prjctDb
       .query<{ detail: string }>(
-        projectId,
+        fixture.projectId,
         `EXPLAIN QUERY PLAN
          SELECT id, type, content, provenance, created_at FROM memory_entries
          WHERE deleted_at IS NULL AND type IN (?) ORDER BY created_at DESC, rowid DESC LIMIT ?`,
@@ -64,18 +74,18 @@ describe('recall() SQL type push-down (index usage)', () => {
     expect(plan).toContain('ix_mem_recall')
 
     // Correctness: recall() actually returns only the requested type.
-    const entries = projectMemory.recall(projectId, { types: ['decision'] })
+    const entries = projectMemory.recall(fixture.projectId, { types: ['decision'] })
     expect(entries.length).toBeGreaterThan(0)
     expect(entries.every((e) => e.type === 'decision')).toBe(true)
   })
 
   it('recallByType still drives an indexed SEARCH (unaffected by this fix)', () => {
-    prjctDb.appendEvent(projectId, 'memory.remember.gotcha', {
+    prjctDb.appendEvent(fixture.projectId, 'memory.remember.gotcha', {
       content: 'a gotcha',
       tags: {},
       provenance: 'declared',
     })
-    const entries = projectMemory.recallByType(projectId, 'gotcha', 10)
+    const entries = projectMemory.recallByType(fixture.projectId, 'gotcha', 10)
     expect(entries.length).toBe(1)
   })
 
@@ -89,22 +99,22 @@ describe('recall() SQL type push-down (index usage)', () => {
     // the unfiltered top-100-newest window. Seed the rare type FIRST (oldest),
     // then 150 newer 'fact' entries that would fully push it out of the old
     // overfetch window.
-    for (let i = 0; i < 3; i++) {
-      prjctDb.appendEvent(projectId, 'memory.remember.decision', {
+    for (const i of Array.from({ length: 3 }, (_, index) => index)) {
+      prjctDb.appendEvent(fixture.projectId, 'memory.remember.decision', {
         content: `real decision ${i}`,
         tags: {},
         provenance: 'declared',
       })
     }
-    for (let i = 0; i < 150; i++) {
-      prjctDb.appendEvent(projectId, 'memory.remember.fact', {
-        content: `newer noise ${i}`,
+    for (const i2 of Array.from({ length: 150 }, (_, index) => index)) {
+      prjctDb.appendEvent(fixture.projectId, 'memory.remember.fact', {
+        content: `newer noise ${i2}`,
         tags: {},
         provenance: 'declared',
       })
     }
 
-    const entries = projectMemory.recall(projectId, { types: ['decision'], limit: 25 })
+    const entries = projectMemory.recall(fixture.projectId, { types: ['decision'], limit: 25 })
     expect(entries.length).toBe(3)
   })
 })

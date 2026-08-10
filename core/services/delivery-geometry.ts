@@ -55,18 +55,20 @@ function parseShortstat(shortstat: string): { files: number; loc: number } {
 
 /** Committed range vs merge-base with default branch (review-risk path). */
 export async function computeCommittedChangeset(projectPath: string): Promise<Changeset | null> {
-  let defaultRef = ''
   const originHead = await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
-  if (originHead && originHead !== 'origin/HEAD') {
-    defaultRef = originHead
-  } else {
-    for (const c of ['main', 'master']) {
-      if ((await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', c])) !== null) {
-        defaultRef = c
-        break
-      }
-    }
-  }
+  const defaultRef =
+    originHead && originHead !== 'origin/HEAD'
+      ? originHead
+      : await (async () => {
+          for (const candidate of ['main', 'master']) {
+            if (
+              (await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', candidate])) !== null
+            ) {
+              return candidate
+            }
+          }
+          return ''
+        })()
   if (!defaultRef) return null
 
   const base = await safeGit(projectPath, ['merge-base', defaultRef, 'HEAD'])

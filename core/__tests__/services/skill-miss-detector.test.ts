@@ -153,9 +153,7 @@ describe('skill-miss-detector — hashKey', () => {
 })
 
 describe('skill-miss-detector — persistence + containment (DB)', () => {
-  let dir: string
-  let projectId: string
-  let transcriptPath: string
+  const fixture = { dir: '', projectId: '', transcriptPath: '' }
 
   async function seedDecision(
     content: string,
@@ -163,7 +161,7 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
   ): Promise<void> {
     const ts = new Date(Date.now() - (opts.ageMs ?? 7 * 24 * 60 * 60 * 1000)).toISOString()
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       "INSERT INTO events (type, data, timestamp) VALUES ('memory.remember.decision', ?, ?)",
       JSON.stringify({
         content,
@@ -176,25 +174,25 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
 
   beforeEach(async () => {
     prjctDb.close()
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-skillmiss-test-'))
-    await fs.mkdir(path.join(dir, '.prjct'), { recursive: true })
-    projectId = `skillmiss-${crypto.randomUUID()}`
-    await configManager.writeConfig(dir, {
-      projectId,
-      dataPath: path.join(dir, '.prjct-data'),
+    fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-skillmiss-test-'))
+    await fs.mkdir(path.join(fixture.dir, '.prjct'), { recursive: true })
+    fixture.projectId = `skillmiss-${crypto.randomUUID()}`
+    await configManager.writeConfig(fixture.dir, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.dir, '.prjct-data'),
     } as Parameters<typeof configManager.writeConfig>[1])
-    await pathManager.ensureProjectStructure(projectId)
-    transcriptPath = path.join(dir, 'transcript.jsonl')
+    await pathManager.ensureProjectStructure(fixture.projectId)
+    fixture.transcriptPath = path.join(fixture.dir, 'transcript.jsonl')
   })
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
     prjctDb.close()
   })
 
   function writeTranscript(text: string): Promise<void> {
     return fs.writeFile(
-      transcriptPath,
+      fixture.transcriptPath,
       [
         JSON.stringify({ role: 'user', content: 'do the work' }),
         JSON.stringify({ role: 'assistant', content: text }),
@@ -206,14 +204,17 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
     await seedDecision('Set sqlite pragma busy_timeout to 5000 on every connection')
     await writeTranscript('edited the sqlite pragma handling in the storage layer')
 
-    const r1 = await detectSkillMisses(dir, transcriptPath, 'sess-1')
+    const r1 = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 'sess-1')
     expect(r1.signalsRecorded).toBe(1)
 
-    const signals = (await import('../../memory/project-memory')).projectMemory.recall(projectId, {
-      types: ['improvement-signal'],
-      tags: { source: 'skill-miss-detector' },
-      dedupeByKey: false,
-    })
+    const signals = (await import('../../memory/project-memory')).projectMemory.recall(
+      fixture.projectId,
+      {
+        types: ['improvement-signal'],
+        tags: { source: 'skill-miss-detector' },
+        dedupeByKey: false,
+      }
+    )
     expect(signals.length).toBe(1)
     expect(signals[0]?.tags.kind).toBe('skill-miss')
     expect(signals[0]?.tags.category).toBe('skill-miss')
@@ -221,27 +222,30 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
     expect(signals[0]?.content).toContain('[skill-miss]')
 
     // Re-run on the same transcript → dedup, no second row.
-    const r2 = await detectSkillMisses(dir, transcriptPath, 'sess-1')
+    const r2 = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 'sess-1')
     expect(r2.signalsRecorded).toBe(0)
-    const after = (await import('../../memory/project-memory')).projectMemory.recall(projectId, {
-      types: ['improvement-signal'],
-      tags: { source: 'skill-miss-detector' },
-      dedupeByKey: false,
-    })
+    const after = (await import('../../memory/project-memory')).projectMemory.recall(
+      fixture.projectId,
+      {
+        types: ['improvement-signal'],
+        tags: { source: 'skill-miss-detector' },
+        dedupeByKey: false,
+      }
+    )
     expect(after.length).toBe(1)
   })
 
   it('excludes inferred-provenance candidates', async () => {
     await seedDecision('Set sqlite pragma busy_timeout to 5000', { provenance: 'inferred' })
     await writeTranscript('edited the sqlite pragma handling in the storage layer')
-    const r = await detectSkillMisses(dir, transcriptPath, 's')
+    const r = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 's')
     expect(r.signalsRecorded).toBe(0)
   })
 
   it('excludes memories captured this session (recency containment)', async () => {
     await seedDecision('Set sqlite pragma busy_timeout to 5000', { ageMs: 60 * 1000 })
     await writeTranscript('edited the sqlite pragma handling in the storage layer')
-    const r = await detectSkillMisses(dir, transcriptPath, 's')
+    const r = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 's')
     expect(r.signalsRecorded).toBe(0)
   })
 
@@ -249,17 +253,20 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
     await seedDecision('Set sqlite pragma busy_timeout to 5000 on every connection')
     await writeTranscript('edited the sqlite pragma handling in the storage layer')
 
-    const r = await detectSkillMisses(dir, transcriptPath, 'sess-1')
+    const r = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 'sess-1')
     expect(r.signalsRecorded).toBe(1)
 
-    const signals = (await import('../../memory/project-memory')).projectMemory.recall(projectId, {
-      types: ['improvement-signal'],
-      tags: { source: 'skill-miss-detector' },
-      dedupeByKey: false,
-    })
+    const signals = (await import('../../memory/project-memory')).projectMemory.recall(
+      fixture.projectId,
+      {
+        types: ['improvement-signal'],
+        tags: { source: 'skill-miss-detector' },
+        dedupeByKey: false,
+      }
+    )
     const missedId = signals[0]?.tags.relates as string
     const row = prjctDb.get<{ score: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT score FROM memory_usefulness WHERE memory_id = ?',
       missedId
     )
@@ -272,9 +279,9 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
   it('writes nothing to disk outside SQLite (persistence rule)', async () => {
     await seedDecision('Set sqlite pragma busy_timeout to 5000 on every connection')
     await writeTranscript('edited the sqlite pragma handling in the storage layer')
-    const before = (await fs.readdir(dir)).sort()
-    await detectSkillMisses(dir, transcriptPath, 's')
-    const afterEntries = (await fs.readdir(dir)).sort()
+    const before = (await fs.readdir(fixture.dir)).sort()
+    await detectSkillMisses(fixture.dir, fixture.transcriptPath, 's')
+    const afterEntries = (await fs.readdir(fixture.dir)).sort()
     // Only the things we created (.prjct, .prjct-data, transcript.jsonl)
     // — the detector must not drop a report/markdown file in the project.
     expect(afterEntries).toEqual(before)
@@ -340,13 +347,11 @@ describe('skill-miss-detector — crew-isolation guard (analyze)', () => {
 })
 
 describe('skill-miss-detector — crew-isolation guard (DB + git)', () => {
-  let dir: string
-  let projectId: string
-  let transcriptPath: string
+  const fixture = { dir: '', projectId: '', transcriptPath: '' }
 
   function seedOldDecision(content: string, fileTag: string): void {
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       "INSERT INTO events (type, data, timestamp) VALUES ('memory.remember.decision', ?, ?)",
       JSON.stringify({
         content,
@@ -359,27 +364,27 @@ describe('skill-miss-detector — crew-isolation guard (DB + git)', () => {
 
   beforeEach(async () => {
     prjctDb.close()
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-skillmiss-crew-'))
-    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: dir })
-    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir })
-    await execFileAsync('git', ['config', 'user.name', 'Tester'], { cwd: dir })
-    await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir })
-    await fs.mkdir(path.join(dir, '.prjct'), { recursive: true })
-    await fs.mkdir(path.join(dir, 'core'), { recursive: true })
-    await fs.writeFile(path.join(dir, 'core/auth-service.ts'), 'export const v = 1\n')
-    await execFileAsync('git', ['add', '.'], { cwd: dir })
-    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: dir })
+    fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-skillmiss-crew-'))
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.dir })
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: fixture.dir })
+    await execFileAsync('git', ['config', 'user.name', 'Tester'], { cwd: fixture.dir })
+    await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: fixture.dir })
+    await fs.mkdir(path.join(fixture.dir, '.prjct'), { recursive: true })
+    await fs.mkdir(path.join(fixture.dir, 'core'), { recursive: true })
+    await fs.writeFile(path.join(fixture.dir, 'core/auth-service.ts'), 'export const v = 1\n')
+    await execFileAsync('git', ['add', '.'], { cwd: fixture.dir })
+    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.dir })
     // Uncommitted modification → getModifiedFiles() sees core/auth-service.ts.
-    await fs.writeFile(path.join(dir, 'core/auth-service.ts'), 'export const v = 2\n')
-    projectId = `skillmiss-crew-${crypto.randomUUID()}`
-    await configManager.writeConfig(dir, {
-      projectId,
-      dataPath: path.join(dir, '.prjct-data'),
+    await fs.writeFile(path.join(fixture.dir, 'core/auth-service.ts'), 'export const v = 2\n')
+    fixture.projectId = `skillmiss-crew-${crypto.randomUUID()}`
+    await configManager.writeConfig(fixture.dir, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.dir, '.prjct-data'),
     } as Parameters<typeof configManager.writeConfig>[1])
-    await pathManager.ensureProjectStructure(projectId)
-    transcriptPath = path.join(dir, 'transcript.jsonl')
+    await pathManager.ensureProjectStructure(fixture.projectId)
+    fixture.transcriptPath = path.join(fixture.dir, 'transcript.jsonl')
     await fs.writeFile(
-      transcriptPath,
+      fixture.transcriptPath,
       [
         JSON.stringify({ role: 'user', content: 'do the work' }),
         JSON.stringify({
@@ -392,36 +397,36 @@ describe('skill-miss-detector — crew-isolation guard (DB + git)', () => {
   })
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
     prjctDb.close()
   })
 
   it('flags a path-overlap miss when NO crew run is present (control)', async () => {
-    const r = await detectSkillMisses(dir, transcriptPath, 's')
+    const r = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 's')
     expect(r.signalsRecorded).toBe(1)
   })
 
   it('suppresses the miss when a RECENT crew run touched the file', async () => {
-    crewRunStorage.record(projectId, {
+    crewRunStorage.record(fixture.projectId, {
       filesTouched: ['core/auth-service.ts'],
       reviewerVerdict: 'APPROVED',
       implementerSummary: 'edited auth-service',
       endedAt: new Date().toISOString(),
     })
-    const r = await detectSkillMisses(dir, transcriptPath, 's')
+    const r = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 's')
     expect(r.signalsRecorded).toBe(0)
   })
 
   it('does NOT suppress when the crew run is older than the recency window', async () => {
     const old = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString()
-    crewRunStorage.record(projectId, {
+    crewRunStorage.record(fixture.projectId, {
       filesTouched: ['core/auth-service.ts'],
       reviewerVerdict: 'APPROVED',
       implementerSummary: 'edited auth-service long ago',
       startedAt: old,
       endedAt: old,
     })
-    const r = await detectSkillMisses(dir, transcriptPath, 's')
+    const r = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 's')
     expect(r.signalsRecorded).toBe(1)
   })
 })

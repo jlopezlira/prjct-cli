@@ -1,12 +1,3 @@
-#!/usr/bin/env bun
-
-/**
- * Command Registry Validator
- *
- * Validates the actual command manifest instead of a stale hardcoded list.
- * Run: bun scripts/validate-commands.js
- */
-
 const { COMMANDS } = require('../core/commands/command-data.ts')
 const { BIN_COMMANDS_SET, REGISTERED_VERBS_SET } = require('../core/commands/verb-names.ts')
 const { REMOVED_VERBS } = require('../core/commands/removed-verbs.ts')

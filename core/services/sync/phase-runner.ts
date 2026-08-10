@@ -29,14 +29,16 @@ export function syncPhaseTimeoutMs(): number {
  * phases that mutate SQLite/filesystem state unless that work is abort-aware.
  */
 export function withPhaseTimeout<T>(promise: Promise<T>, phase: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
   const timeoutMs = syncPhaseTimeoutMs()
-  const timeout = new Promise<T>((_, reject) => {
-    timer = setTimeout(() => reject(new SyncPhaseTimeoutError(phase, timeoutMs)), timeoutMs)
-  })
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer)
-  })
+  const timeout = (() => {
+    const deferred = Promise.withResolvers<T>()
+    const timer = setTimeout(
+      () => deferred.reject(new SyncPhaseTimeoutError(phase, timeoutMs)),
+      timeoutMs
+    )
+    return { promise: deferred.promise, cancel: () => clearTimeout(timer) }
+  })()
+  return Promise.race([promise, timeout.promise]).finally(timeout.cancel)
 }
 
 export async function runSyncPhase<T>(name: string, fn: () => Promise<T>): Promise<T> {

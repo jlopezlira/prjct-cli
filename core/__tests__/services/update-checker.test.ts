@@ -18,8 +18,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { readUpdateStatus, refreshUpdateStatus } from '../../services/update-checker'
 
-let tmpHome: string
-let prevHome: string | undefined
+const fixture: {
+  tmpHome: string
+  prevHome: string | undefined
+} = {
+  tmpHome: '',
+  prevHome: undefined as unknown as string | undefined,
+}
+
 const realFetch = globalThis.fetch
 
 function stubFetch(version: string | null): void {
@@ -30,16 +36,16 @@ function stubFetch(version: string | null): void {
 }
 
 beforeEach(() => {
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-update-'))
-  prevHome = process.env.PRJCT_CLI_HOME
-  process.env.PRJCT_CLI_HOME = tmpHome
+  fixture.tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-update-'))
+  fixture.prevHome = process.env.PRJCT_CLI_HOME
+  process.env.PRJCT_CLI_HOME = fixture.tmpHome
 })
 
 afterEach(() => {
   globalThis.fetch = realFetch
-  if (prevHome === undefined) delete process.env.PRJCT_CLI_HOME
-  else process.env.PRJCT_CLI_HOME = prevHome
-  fs.rmSync(tmpHome, { recursive: true, force: true })
+  if (fixture.prevHome === undefined) delete process.env.PRJCT_CLI_HOME
+  else process.env.PRJCT_CLI_HOME = fixture.prevHome
+  fs.rmSync(fixture.tmpHome, { recursive: true, force: true })
 })
 
 describe('update-checker — refreshUpdateStatus', () => {

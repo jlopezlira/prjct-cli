@@ -31,17 +31,17 @@ interface ParsedCommandArgs {
 }
 
 async function main(): Promise<void> {
-  let [commandName, ...rawArgs] = process.argv.slice(2)
+  const [initialCommandName, ...initialRawArgs] = process.argv.slice(2)
 
   // === SPECIAL COMMANDS (version, help) ===
 
-  if (['-v', '--version', 'version'].includes(commandName)) {
+  if (['-v', '--version', 'version'].includes(initialCommandName)) {
     const packageJson = await import('../package.json')
     await displayVersion(packageJson.version)
     process.exit(0)
   }
 
-  if (['-h', '--help', undefined].includes(commandName)) {
+  if (['-h', '--help', undefined].includes(initialCommandName)) {
     displayHelp()
     process.exit(0)
   }
@@ -52,11 +52,15 @@ async function main(): Promise<void> {
   // reach the GTD auto-route below, which would silently capture them as
   // inbox notes — a quiet data-loss bug since users expect `prjct done`
   // to complete the active task. See `core/commands/removed-verbs.ts`.
-  if (commandName && isRemovedVerb(commandName) && !commandRegistry.getByName(commandName)) {
-    const entry = REMOVED_VERBS[commandName]
+  if (
+    initialCommandName &&
+    isRemovedVerb(initialCommandName) &&
+    !commandRegistry.getByName(initialCommandName)
+  ) {
+    const entry = REMOVED_VERBS[initialCommandName]
     if (entry) {
       out.failWithHint({
-        message: `'prjct ${commandName}' was removed in v2. ${entry.note}`,
+        message: `'prjct ${initialCommandName}' was removed in v2. ${entry.note}`,
         hint: `Use: ${entry.replacement}`,
       })
       process.exit(1)
@@ -74,15 +78,17 @@ async function main(): Promise<void> {
   // Exception: a single-word input that's a near-match of a real verb
   // (edit distance ≤ 2, no whitespace) is probably a typo. Surface the
   // did-you-mean instead of silently capturing "shipp".
-  if (commandName && !commandRegistry.getByName(commandName)) {
-    const looksLikeTypo = rawArgs.length === 0 && findClosestCommand(commandName) !== null
-    if (!looksLikeTypo) {
-      const fullDescription = [commandName, ...rawArgs.filter((a) => !a.startsWith('-'))].join(' ')
-      const passthroughFlags = rawArgs.filter((a) => a.startsWith('-'))
-      commandName = 'capture'
-      rawArgs = [fullDescription, ...passthroughFlags]
-    }
-  }
+  const shouldCapture =
+    Boolean(initialCommandName) &&
+    !commandRegistry.getByName(initialCommandName) &&
+    !(initialRawArgs.length === 0 && findClosestCommand(initialCommandName as string) !== null)
+  const commandName = shouldCapture ? 'capture' : initialCommandName
+  const rawArgs = shouldCapture
+    ? [
+        [initialCommandName, ...initialRawArgs.filter((arg) => !arg.startsWith('-'))].join(' '),
+        ...initialRawArgs.filter((arg) => arg.startsWith('-')),
+      ]
+    : initialRawArgs
 
   // === DYNAMIC COMMAND EXECUTION ===
 
@@ -150,32 +156,29 @@ async function main(): Promise<void> {
     }
 
     // 4.6. Session tracking — touch/create session before command execution
-    let projectId: string | null = null
     const commandStartTime = Date.now()
-    try {
-      projectId = await configManager.getProjectId(process.cwd())
-      if (projectId) {
-        await sessionTracker.expireIfStale(projectId)
-        await sessionTracker.touch(projectId)
+    const projectId = await (async (): Promise<string | null> => {
+      try {
+        const id = await configManager.getProjectId(process.cwd())
+        if (id) {
+          await sessionTracker.expireIfStale(id)
+          await sessionTracker.touch(id)
+        }
+        return id
+      } catch {
+        return null
       }
-    } catch {
-      // Session tracking is non-critical — silent fail
-    }
+    })()
 
     // 5. Instantiate commands handler
     const commands = new PrjctCommands()
 
     // 6. Execute command
-    let result: CommandResult | undefined
+    const result: CommandResult | undefined = await (async () => {
+      if (commandName === 'analyze') return commands.analyze(options)
+      if (commandName === 'setup') return commands.setup(options)
+      if (commandName === 'update' || commandName === 'upgrade') return commands.update(options)
 
-    // Commands with special option handling
-    if (commandName === 'analyze') {
-      result = await commands.analyze(options)
-    } else if (commandName === 'setup') {
-      result = await commands.setup(options)
-    } else if (commandName === 'update' || commandName === 'upgrade') {
-      result = await commands.update(options)
-    } else {
       // Standard commands - type-safe invocation
       const param = parsedArgs.join(' ') || null
       const md = options.md === true
@@ -186,7 +189,7 @@ async function main(): Promise<void> {
       // broken via daemon" class.
       const meta = commandRegistry.getByName(commandName)
       if (meta?.optionSchema) {
-        result = await commandRegistry.executeWithOptions(
+        return commandRegistry.executeWithOptions(
           commandName,
           param,
           process.cwd(),
@@ -254,13 +257,10 @@ async function main(): Promise<void> {
         }
 
         const handler = standardCommands[commandName]
-        if (handler) {
-          result = await handler(param)
-        } else {
-          throw new Error(`Command '${commandName}' has no handler`)
-        }
+        if (handler) return handler(param)
+        throw new Error(`Command '${commandName}' has no handler`)
       }
-    }
+    })()
 
     // 7. Track command in session + performance metrics
     if (projectId) {
@@ -360,22 +360,26 @@ function parseCommandArgs(_cmd: CommandMeta, rawArgs: string[]): ParsedCommandAr
   const parsedArgs: string[] = []
   const options: Record<string, string | boolean> = {}
 
-  for (let i = 0; i < rawArgs.length; i++) {
-    const arg = rawArgs[i]
-
+  const parseAt = (index: number): void => {
+    if (index >= rawArgs.length) return
+    const arg = rawArgs[index]
     if (arg.startsWith('--')) {
       // Handle flags
       const flagName = arg.slice(2)
 
-      if (i + 1 < rawArgs.length && !rawArgs[i + 1].startsWith('--')) {
-        options[flagName] = rawArgs[++i]
+      if (index + 1 < rawArgs.length && !rawArgs[index + 1].startsWith('--')) {
+        options[flagName] = rawArgs[index + 1]
+        parseAt(index + 2)
       } else {
         options[flagName] = true
+        parseAt(index + 1)
       }
     } else {
       parsedArgs.push(arg)
+      parseAt(index + 1)
     }
   }
+  parseAt(0)
 
   return { parsedArgs, options }
 }

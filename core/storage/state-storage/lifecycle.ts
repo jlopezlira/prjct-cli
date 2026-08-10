@@ -129,11 +129,12 @@ export async function archiveStalePausedTasks(
   projectId: string
 ): Promise<PreviousTask[]> {
   const threshold = Date.now() - backend.stalenessThresholdDays * 24 * 60 * 60 * 1000
-  let stale: PreviousTask[] = []
+  const archivedBatches: PreviousTask[][] = []
 
   await backend.update(projectId, (state) => {
     const pausedTasks = backend.getPausedTasksFromState(state)
-    stale = pausedTasks.filter((t) => new Date(t.pausedAt).getTime() < threshold)
+    const stale = pausedTasks.filter((t) => new Date(t.pausedAt).getTime() < threshold)
+    archivedBatches.push(stale)
     if (stale.length === 0) return state
     const fresh = pausedTasks.filter((t) => new Date(t.pausedAt).getTime() >= threshold)
     return {
@@ -144,6 +145,7 @@ export async function archiveStalePausedTasks(
     }
   })
 
+  const stale = archivedBatches[0] ?? []
   if (stale.length === 0) return []
 
   archiveStorage.archiveMany(

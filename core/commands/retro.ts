@@ -134,25 +134,24 @@ function toLocalIso(d: Date): string {
 async function readCommits(projectPath: string, sinceIso: string): Promise<CommitRow[]> {
   // `--shortstat` would force a per-commit two-line block; we keep this
   // simple for now and do a separate diff query for stats.
-  let stdout = ''
-  try {
-    const result = await execFileAsync(
-      'git',
-      ['log', `--since=${sinceIso}`, '--pretty=format:%H%x09%an%x09%ae%x09%aI%x09%s'],
-      { cwd: projectPath, maxBuffer: 16 * 1024 * 1024 }
-    )
-    stdout = result.stdout
-  } catch (error) {
-    // Empty repo (no HEAD) is the common case for first-run; treat as
-    // "zero commits in window" rather than an error. Real git failures
-    // (corruption, missing binary) still bubble up via the outer handler.
-    const msg =
-      (error as { stderr?: string; message?: string }).stderr ?? (error as Error).message ?? ''
-    if (/does not have any commits|unknown revision|bad revision|HEAD/i.test(msg)) {
-      return []
-    }
-    throw error
-  }
+  const stdout = await execFileAsync(
+    'git',
+    ['log', `--since=${sinceIso}`, '--pretty=format:%H%x09%an%x09%ae%x09%aI%x09%s'],
+    { cwd: projectPath, maxBuffer: 16 * 1024 * 1024 }
+  )
+    .then((result) => result.stdout)
+    .catch((error) => {
+      // Empty repo (no HEAD) is the common case for first-run; treat as
+      // "zero commits in window" rather than an error. Real git failures
+      // (corruption, missing binary) still bubble up via the outer handler.
+      const msg =
+        (error as { stderr?: string; message?: string }).stderr ?? (error as Error).message ?? ''
+      if (/does not have any commits|unknown revision|bad revision|HEAD/i.test(msg)) {
+        return null
+      }
+      throw error
+    })
+  if (stdout === null) return []
   return stdout
     .split('\n')
     .filter(Boolean)
@@ -173,9 +172,10 @@ function groupByAuthor(commits: CommitRow[]): PerAuthor[] {
   const map = new Map<string, PerAuthor>()
   for (const c of commits) {
     const key = c.authorEmail || c.authorName
-    let a = map.get(key)
-    if (!a) {
-      a = {
+    const existing = map.get(key)
+    const a =
+      existing ??
+      ({
         name: c.authorName,
         email: c.authorEmail,
         commits: 0,
@@ -186,9 +186,8 @@ function groupByAuthor(commits: CommitRow[]): PerAuthor[] {
         files: 0,
         firstCommit: c.date,
         lastCommit: c.date,
-      }
-      map.set(key, a)
-    }
+      } satisfies PerAuthor)
+    if (!existing) map.set(key, a)
     a.commits++
     if (c.date < a.firstCommit) a.firstCommit = c.date
     if (c.date > a.lastCommit) a.lastCommit = c.date

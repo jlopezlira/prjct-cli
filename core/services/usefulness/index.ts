@@ -68,7 +68,7 @@ export function extractRefIds(content: string, tags: Record<string, string>): st
     if (!v) continue
     for (const m of String(v).matchAll(MEM_REF_RE)) ids.add(`mem_${m[1]}`)
   }
-  for (const m of content.matchAll(MEM_REF_RE)) ids.add(`mem_${m[1]}`)
+  for (const m2 of content.matchAll(MEM_REF_RE)) ids.add(`mem_${m2[1]}`)
   // A correction naturally NAMES the entry it corrects (inline or in the
   // tag), which would otherwise credit a positive reference that cancels the
   // penalty. An entry you're marking WRONG must not also be rewarded — drop
@@ -329,33 +329,35 @@ export const usefulnessService = {
     ids?: readonly string[]
   ): Map<string, number> {
     const out = new Map<string, number>()
-    let rows: UsefulnessRow[]
-    try {
-      if (ids && ids.length > 0) {
-        const unique = [...new Set(ids)].slice(0, 200)
-        const placeholders = unique.map(() => '?').join(',')
-        rows = prjctDb.query<UsefulnessRow>(
-          projectId,
-          `SELECT memory_id, score, last_used_at FROM memory_usefulness WHERE memory_id IN (${placeholders})`,
-          ...unique
-        )
-      } else if (ids && ids.length === 0) {
-        return out
-      } else {
-        rows = prjctDb.query<UsefulnessRow>(
-          projectId,
-          'SELECT memory_id, score, last_used_at FROM memory_usefulness'
-        )
+    const rows = (() => {
+      try {
+        if (ids && ids.length > 0) {
+          const unique = [...new Set(ids)].slice(0, 200)
+          const placeholders = unique.map(() => '?').join(',')
+          return prjctDb.query<UsefulnessRow>(
+            projectId,
+            `SELECT memory_id, score, last_used_at FROM memory_usefulness WHERE memory_id IN (${placeholders})`,
+            ...unique
+          )
+        } else if (ids && ids.length === 0) {
+          return []
+        } else {
+          return prjctDb.query<UsefulnessRow>(
+            projectId,
+            'SELECT memory_id, score, last_used_at FROM memory_usefulness'
+          )
+        }
+      } catch {
+        return null
       }
-    } catch {
-      return out
-    }
-    for (const r of rows) {
-      const last = Date.parse(r.last_used_at)
+    })()
+    if (!rows) return out
+    for (const r2 of rows) {
+      const last = Date.parse(r2.last_used_at)
       const factor = Number.isNaN(last)
         ? 1
         : 0.5 ** (Math.max(0, nowMs - last) / MS_PER_DAY / HALF_LIFE_DAYS)
-      out.set(r.memory_id, r.score * factor)
+      out.set(r2.memory_id, r2.score * factor)
     }
     return out
   },
@@ -368,17 +370,19 @@ export const usefulnessService = {
    */
   rerank(projectId: string, entries: MemoryEntry[], nowMs: number = Date.now()): MemoryEntry[] {
     if (entries.length < 2) return entries
-    let scores: Map<string, number>
-    try {
-      // Only load usefulness for candidates being reranked (not full table).
-      scores = this.decayedScores(
-        projectId,
-        nowMs,
-        entries.map((e) => e.id)
-      )
-    } catch {
-      return entries
-    }
+    const scores = (() => {
+      try {
+        // Only load usefulness for candidates being reranked (not full table).
+        return this.decayedScores(
+          projectId,
+          nowMs,
+          entries.map((e) => e.id)
+        )
+      } catch {
+        return null
+      }
+    })()
+    if (!scores) return entries
     if (scores.size === 0) return entries
 
     const max = Math.max(1, ...scores.values())

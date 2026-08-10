@@ -83,8 +83,8 @@ export function registerCodeIntelTools(server: McpServer) {
 
         if (propagated.affectedByImports.length > 0) {
           parts.push(`\n### Affected via Imports (${propagated.affectedByImports.length})`)
-          for (const f of propagated.affectedByImports) {
-            parts.push(`- ${f}`)
+          for (const f2 of propagated.affectedByImports) {
+            parts.push(`- ${f2}`)
           }
         }
 
@@ -254,10 +254,9 @@ export function registerCodeIntelTools(server: McpServer) {
       async (args: { projectPath: string; file?: string; rebuild: boolean }) => {
         const projectId = await resolveProjectId(args.projectPath)
 
-        let graph = args.rebuild ? null : loadGraph(projectId)
-        if (!graph) {
-          graph = await indexImports(resolveProjectPath(args.projectPath), projectId)
-        }
+        const graph =
+          (args.rebuild ? null : loadGraph(projectId)) ??
+          (await indexImports(resolveProjectPath(args.projectPath), projectId))
 
         if (args.file) {
           const imports = graph.forward[args.file] || []
@@ -305,10 +304,9 @@ export function registerCodeIntelTools(server: McpServer) {
       }) => {
         const projectId = await resolveProjectId(args.projectPath)
 
-        let index = args.rebuild ? null : loadMatrix(projectId)
-        if (!index) {
-          index = await indexCoChanges(resolveProjectPath(args.projectPath), projectId)
-        }
+        const index =
+          (args.rebuild ? null : loadMatrix(projectId)) ??
+          (await indexCoChanges(resolveProjectPath(args.projectPath), projectId))
 
         const scores = cochangeScore(args.seedFiles, index).slice(0, args.maxResults)
 
@@ -359,12 +357,15 @@ export function registerCodeIntelTools(server: McpServer) {
         for (const s of importScores) {
           merged.set(s.path, { importScore: s.score, cochangeScore: 0 })
         }
-        for (const s of cochangeScores) {
-          const existing = merged.get(s.path)
+        for (const s2 of cochangeScores) {
+          const existing = merged.get(s2.path)
           if (existing) {
-            existing.cochangeScore = s.score
+            existing.cochangeScore = s2.score
           } else {
-            merged.set(s.path, { importScore: 0, cochangeScore: s.score })
+            merged.set(s2.path, {
+              importScore: 0,
+              cochangeScore: s2.score,
+            })
           }
         }
 

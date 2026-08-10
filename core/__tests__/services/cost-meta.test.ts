@@ -12,27 +12,33 @@ import pathManager from '../../infrastructure/path-manager'
 import { recordTaskTokenUsage, TASK_TOKENS_EVENT } from '../../services/work-cost-service'
 import { prjctDb } from '../../storage/database'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
+
 const original = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('recordTaskTokenUsage meta', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cost-meta-'))
-    projectId = `costmeta-${Math.random().toString(36).slice(2, 10)}`
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-    prjctDb.getDb(projectId)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cost-meta-'))
+    fixture.projectId = `costmeta-${Math.random().toString(36).slice(2, 10)}`
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+    prjctDb.getDb(fixture.projectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = original
-    await fs.rm(tmpRoot, { recursive: true, force: true })
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   function lastTokenEvent(): Record<string, unknown> {
     const rows = prjctDb.query<{ data: string }>(
-      projectId,
+      fixture.projectId,
       'SELECT data FROM events WHERE type = ? ORDER BY id DESC LIMIT 1',
       TASK_TOKENS_EVENT
     )
@@ -41,7 +47,7 @@ describe('recordTaskTokenUsage meta', () => {
   }
 
   it('persists model, runtime, isEstimated and source', () => {
-    recordTaskTokenUsage(projectId, 'task-1', 1000, 200, {
+    recordTaskTokenUsage(fixture.projectId, 'task-1', 1000, 200, {
       model: 'claude-opus-4-8',
       runtime: 'claude',
       isEstimated: false,
@@ -57,7 +63,7 @@ describe('recordTaskTokenUsage meta', () => {
   })
 
   it('omits unknown fields and keeps backward-compatible payload', () => {
-    recordTaskTokenUsage(projectId, 'task-2', 5, 5)
+    recordTaskTokenUsage(fixture.projectId, 'task-2', 5, 5)
     const data = lastTokenEvent()
     expect(data.taskId).toBe('task-2')
     expect('model' in data).toBe(false)
@@ -65,21 +71,24 @@ describe('recordTaskTokenUsage meta', () => {
   })
 
   it('marks estimated counts explicitly', () => {
-    recordTaskTokenUsage(projectId, 'task-3', 10, 10, { isEstimated: true, source: 'cli' })
+    recordTaskTokenUsage(fixture.projectId, 'task-3', 10, 10, { isEstimated: true, source: 'cli' })
     const data = lastTokenEvent()
     expect(data.isEstimated).toBe(true)
     expect(data.source).toBe('cli')
   })
 
   it('C2: dual-writes a typed token_usage row with is_estimated + model, upserting latest', () => {
-    recordTaskTokenUsage(projectId, 'task-tu', 1000, 200, {
+    recordTaskTokenUsage(fixture.projectId, 'task-tu', 1000, 200, {
       model: 'claude-opus-4-8',
       runtime: 'claude',
       isEstimated: false,
       source: 'mcp',
     })
     // A later (cumulative) report for the same cycle+source upserts, not duplicates.
-    recordTaskTokenUsage(projectId, 'task-tu', 1500, 300, { isEstimated: false, source: 'mcp' })
+    recordTaskTokenUsage(fixture.projectId, 'task-tu', 1500, 300, {
+      isEstimated: false,
+      source: 'mcp',
+    })
 
     const rows = prjctDb.query<{
       input_tokens: number
@@ -88,7 +97,7 @@ describe('recordTaskTokenUsage meta', () => {
       model_id: string | null
       source: string
     }>(
-      projectId,
+      fixture.projectId,
       'SELECT input_tokens, output_tokens, is_estimated, model_id, source FROM token_usage WHERE work_cycle_id = ?',
       'task-tu'
     )
@@ -101,9 +110,9 @@ describe('recordTaskTokenUsage meta', () => {
 
   it('C2: silently rejects corrupted out-of-range token counts (CHECK bound)', () => {
     // Event still records, but the typed token_usage row is rejected by CHECK.
-    recordTaskTokenUsage(projectId, 'task-huge', 999_999_999, 1, { source: 'cli' })
+    recordTaskTokenUsage(fixture.projectId, 'task-huge', 999_999_999, 1, { source: 'cli' })
     const rows = prjctDb.query(
-      projectId,
+      fixture.projectId,
       'SELECT id FROM token_usage WHERE work_cycle_id = ?',
       'task-huge'
     )
@@ -116,14 +125,14 @@ describe('recordTaskTokenUsage meta', () => {
     // same 'cli' bucket -> identical event_key `${taskId}:cli` -> the second
     // write silently overwrote the first via ON CONFLICT DO UPDATE. Each caller
     // now passes its own distinct source.
-    recordTaskTokenUsage(projectId, 'task-shared', 50000, 8000, {
+    recordTaskTokenUsage(fixture.projectId, 'task-shared', 50000, 8000, {
       source: 'claude-transcript',
       isEstimated: false,
     })
-    recordTaskTokenUsage(projectId, 'task-shared', 120, 40, { source: 'cli-manual' })
+    recordTaskTokenUsage(fixture.projectId, 'task-shared', 120, 40, { source: 'cli-manual' })
 
     const rows = prjctDb.query<{ source: string; input_tokens: number; output_tokens: number }>(
-      projectId,
+      fixture.projectId,
       'SELECT source, input_tokens, output_tokens FROM token_usage WHERE work_cycle_id = ? ORDER BY source',
       'task-shared'
     )

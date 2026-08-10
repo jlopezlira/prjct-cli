@@ -40,18 +40,10 @@ export async function detectCbm(): Promise<CbmStatus> {
       note: 'CBM not on PATH. Native prjct symbol graph is active. Install: https://github.com/DeusData/codebase-memory-mcp',
     }
   }
-  let version: string | null = null
-  try {
-    const { stdout, stderr } = await execFileAsync(bin, ['--version'], { timeout: 3000 })
-    version = (stdout || stderr).trim().split(/\r?\n/)[0] || null
-  } catch {
-    try {
-      const { stdout, stderr } = await execFileAsync(bin, ['version'], { timeout: 3000 })
-      version = (stdout || stderr).trim().split(/\r?\n/)[0] || null
-    } catch {
-      version = 'unknown'
-    }
-  }
+  const version = await execFileAsync(bin, ['--version'], { timeout: 3000 })
+    .catch(() => execFileAsync(bin, ['version'], { timeout: 3000 }))
+    .then(({ stdout, stderr }) => (stdout || stderr).trim().split(/\r?\n/)[0] || null)
+    .catch(() => 'unknown')
   return {
     available: true,
     path: bin,
@@ -171,27 +163,20 @@ export async function cbmFallback(
   // If unknown, still try tools that accept repo_path / omit project
   const base: Record<string, unknown> = project ? { project } : {}
 
-  let tool: string
-  let args: Record<string, unknown>
-  if (kind === 'trace') {
-    if (!opts.name) return null
-    tool = 'trace_path'
-    args = {
-      ...base,
-      function_name: opts.name,
-      direction: 'both',
-    }
-  } else if (kind === 'architecture') {
-    tool = 'get_architecture'
-    args = { ...base }
-  } else {
-    tool = 'search_graph'
-    args = {
-      ...base,
-      name_pattern: opts.pattern ? `.*${escapeRegex(opts.pattern)}.*` : '.*',
-      limit: 30,
-    }
-  }
+  if (kind === 'trace' && !opts.name) return null
+  const [tool, args]: [string, Record<string, unknown>] =
+    kind === 'trace'
+      ? ['trace_path', { ...base, function_name: opts.name, direction: 'both' }]
+      : kind === 'architecture'
+        ? ['get_architecture', { ...base }]
+        : [
+            'search_graph',
+            {
+              ...base,
+              name_pattern: opts.pattern ? `.*${escapeRegex(opts.pattern)}.*` : '.*',
+              limit: 30,
+            },
+          ]
 
   const r = await cbmCli(tool, args, { timeoutMs: 20_000 })
   if (!r.ok) return null

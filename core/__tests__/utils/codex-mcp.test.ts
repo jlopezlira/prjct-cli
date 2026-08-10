@@ -24,23 +24,28 @@ import {
   ensureCodexMcpServer,
 } from '../../utils/codex-mcp'
 
-let dir: string
-let configPath: string
+const fixture: {
+  dir: string
+  configPath: string
+} = {
+  dir: '',
+  configPath: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-codex-mcp-test-'))
-  configPath = path.join(dir, 'config.toml')
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-codex-mcp-test-'))
+  fixture.configPath = path.join(fixture.dir, 'config.toml')
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('ensureCodexMcpServer', () => {
   it('creates config.toml with the prjct server when missing', async () => {
-    const r = await ensureCodexMcpServer(configPath)
+    const r = await ensureCodexMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('[mcp_servers.prjct]')
     expect(body).toContain('# prjct:mcp:start')
     expect(body).toContain('# prjct:mcp:end')
@@ -53,47 +58,47 @@ describe('ensureCodexMcpServer', () => {
 
   it('appends to an existing config without touching user content', async () => {
     const user = '[projects."/Users/x/app"]\ntrust_level = "trusted"\n'
-    await fs.writeFile(configPath, user, 'utf-8')
+    await fs.writeFile(fixture.configPath, user, 'utf-8')
 
-    const r = await ensureCodexMcpServer(configPath)
+    const r = await ensureCodexMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('trust_level = "trusted"')
     expect(body.indexOf('[projects.')).toBeLessThan(body.indexOf('[mcp_servers.prjct]'))
     expect(body.indexOf('[mcp_servers.prjct]')).toBeLessThan(body.indexOf('[tui]'))
   })
 
   it('replaces a stale managed block in place', async () => {
-    await ensureCodexMcpServer(configPath)
-    const before = await fs.readFile(configPath, 'utf-8')
+    await ensureCodexMcpServer(fixture.configPath)
+    const before = await fs.readFile(fixture.configPath, 'utf-8')
     const stale = before.replace(/command = "[^"]*"/, 'command = "old-binary"')
-    await fs.writeFile(configPath, stale, 'utf-8')
+    await fs.writeFile(fixture.configPath, stale, 'utf-8')
 
-    const r = await ensureCodexMcpServer(configPath)
+    const r = await ensureCodexMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
-    const after = await fs.readFile(configPath, 'utf-8')
+    const after = await fs.readFile(fixture.configPath, 'utf-8')
     expect(after).not.toContain('old-binary')
     // Exactly one managed block — replacement, not accumulation.
     expect(after.split('[mcp_servers.prjct]').length - 1).toBe(1)
   })
 
   it('is idempotent — second run reports unchanged', async () => {
-    await ensureCodexMcpServer(configPath)
-    const first = await fs.readFile(configPath, 'utf-8')
-    const r = await ensureCodexMcpServer(configPath)
+    await ensureCodexMcpServer(fixture.configPath)
+    const first = await fs.readFile(fixture.configPath, 'utf-8')
+    const r = await ensureCodexMcpServer(fixture.configPath)
     expect(r.changed).toBe(false)
-    expect(await fs.readFile(configPath, 'utf-8')).toBe(first)
+    expect(await fs.readFile(fixture.configPath, 'utf-8')).toBe(first)
   })
 
   it('preserves a user-managed [mcp_servers.prjct] entry while adding status_line', async () => {
     const user = '[mcp_servers.prjct]\ncommand = "my-custom-wrapper"\nargs = []\n'
-    await fs.writeFile(configPath, user, 'utf-8')
+    await fs.writeFile(fixture.configPath, user, 'utf-8')
 
-    const r = await ensureCodexMcpServer(configPath)
+    const r = await ensureCodexMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
     expect(r.skipped).toBe('user-managed')
     expect(r.statusLineChanged).toBe(true)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('command = "my-custom-wrapper"')
     expect(body).toContain(
       'status_line = ["model-with-reasoning", "current-dir", "git-branch", "context-remaining", "five-hour-limit", "weekly-limit", "task-progress"]'
@@ -102,23 +107,23 @@ describe('ensureCodexMcpServer', () => {
 
   it('does not override an existing Codex status_line', async () => {
     const user = '[tui]\nstatus_line = ["model"]\n'
-    await fs.writeFile(configPath, user, 'utf-8')
+    await fs.writeFile(fixture.configPath, user, 'utf-8')
 
-    const r = await ensureCodexMcpServer(configPath)
+    const r = await ensureCodexMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
     expect(r.statusLineChanged).toBe(false)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('status_line = ["model"]')
     expect(body).not.toContain('five-hour-limit')
     expect(body).toContain('[mcp_servers.prjct]')
   })
 
   it('inserts status_line into an existing [tui] table', async () => {
-    await fs.writeFile(configPath, '[tui]\nraw_output_mode = true\n', 'utf-8')
+    await fs.writeFile(fixture.configPath, '[tui]\nraw_output_mode = true\n', 'utf-8')
 
-    const r = await ensureCodexMcpServer(configPath)
+    const r = await ensureCodexMcpServer(fixture.configPath)
     expect(r.statusLineChanged).toBe(true)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain(
       '[tui]\nstatus_line = ["model-with-reasoning", "current-dir", "git-branch", "context-remaining", "five-hour-limit", "weekly-limit", "task-progress"]\nraw_output_mode = true'
     )
@@ -127,19 +132,19 @@ describe('ensureCodexMcpServer', () => {
 
 describe('ensureCodexContext7Server', () => {
   it('creates config.toml with the context7 server when missing', async () => {
-    const r = await ensureCodexContext7Server(configPath)
+    const r = await ensureCodexContext7Server(fixture.configPath)
     expect(r.changed).toBe(true)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('[mcp_servers.context7]')
     expect(body).toContain('# prjct:mcp:context7:start')
     expect(body).toContain('# prjct:mcp:context7:end')
-    expect(await codexHasContext7Server(configPath)).toBe(true)
+    expect(await codexHasContext7Server(fixture.configPath)).toBe(true)
   })
 
   it('co-exists with the prjct MCP block (both managed independently)', async () => {
-    await ensureCodexMcpServer(configPath)
-    await ensureCodexContext7Server(configPath)
-    const body = await fs.readFile(configPath, 'utf-8')
+    await ensureCodexMcpServer(fixture.configPath)
+    await ensureCodexContext7Server(fixture.configPath)
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('[mcp_servers.prjct]')
     expect(body).toContain('[mcp_servers.context7]')
     // Exactly one of each — no accumulation.
@@ -148,24 +153,24 @@ describe('ensureCodexContext7Server', () => {
   })
 
   it('is idempotent — second run reports unchanged', async () => {
-    await ensureCodexContext7Server(configPath)
-    const first = await fs.readFile(configPath, 'utf-8')
-    const r = await ensureCodexContext7Server(configPath)
+    await ensureCodexContext7Server(fixture.configPath)
+    const first = await fs.readFile(fixture.configPath, 'utf-8')
+    const r = await ensureCodexContext7Server(fixture.configPath)
     expect(r.changed).toBe(false)
-    expect(await fs.readFile(configPath, 'utf-8')).toBe(first)
+    expect(await fs.readFile(fixture.configPath, 'utf-8')).toBe(first)
   })
 
   it('preserves a user-managed [mcp_servers.context7] entry', async () => {
     const user = '[mcp_servers.context7]\ncommand = "my-context7"\nargs = []\n'
-    await fs.writeFile(configPath, user, 'utf-8')
-    const r = await ensureCodexContext7Server(configPath)
+    await fs.writeFile(fixture.configPath, user, 'utf-8')
+    const r = await ensureCodexContext7Server(fixture.configPath)
     expect(r.skipped).toBe('user-managed')
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('command = "my-context7"')
   })
 
   it('codexHasContext7Server is false for a missing file', async () => {
-    expect(await codexHasContext7Server(path.join(dir, 'nope.toml'))).toBe(false)
+    expect(await codexHasContext7Server(path.join(fixture.dir, 'nope.toml'))).toBe(false)
   })
 })
 

@@ -141,10 +141,10 @@ class ContextFeedbackStorage {
       }
 
       // Negative signal for false positives (suggested but not used)
-      for (const file of suggested) {
-        if (!actual.has(file)) {
-          const current = rawScores.get(file) ?? 0
-          rawScores.set(file, current - overlap * 0.5)
+      for (const file2 of suggested) {
+        if (!actual.has(file2)) {
+          const current = rawScores.get(file2) ?? 0
+          rawScores.set(file2, current - overlap * 0.5)
         }
       }
     }

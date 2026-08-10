@@ -31,39 +31,46 @@ describe('search verb', () => {
     expect(REGISTERED_VERBS_SET.has('search')).toBe(true)
   })
 
-  let projectPath: string
-  let cmd: ContextCommands
+  const fixture: {
+    projectPath: string
+    cmd: ContextCommands
+  } = {
+    projectPath: '',
+    cmd: undefined as unknown as ContextCommands,
+  }
 
   beforeEach(async () => {
-    projectPath = await freshProject()
-    cmd = new ContextCommands()
+    fixture.projectPath = await freshProject()
+    fixture.cmd = new ContextCommands()
   })
 
   afterEach(async () => {
-    await fs.rm(projectPath, { recursive: true, force: true })
+    await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('rejects an empty query', async () => {
-    const result = await cmd.search('', projectPath, { md: true })
+    const result = await fixture.cmd.search('', fixture.projectPath, { md: true })
     expect(result.success).toBe(false)
   })
 
   test('finds a memory entry by its content (markdown output)', async () => {
-    await projectMemory.remember(projectPath, {
+    await projectMemory.remember(fixture.projectPath, {
       type: 'decision',
       content: 'we chose JWT with refresh-token rotation for the auth flow',
     })
-    const result = await cmd.search('refresh-token rotation', projectPath, { md: true })
+    const result = await fixture.cmd.search('refresh-token rotation', fixture.projectPath, {
+      md: true,
+    })
     expect(result.success).toBe(true)
     expect(result.message).toContain('refresh-token rotation')
   })
 
   test('returns a JSON envelope when --md is not set (LLM-consumable)', async () => {
-    await projectMemory.remember(projectPath, {
+    await projectMemory.remember(fixture.projectPath, {
       type: 'gotcha',
       content: 'stale daemon caches old hook code; stop it before testing',
     })
-    const result = await cmd.search('stale daemon', projectPath, {})
+    const result = await fixture.cmd.search('stale daemon', fixture.projectPath, {})
     expect(result.success).toBe(true)
     const parsed = JSON.parse(result.message ?? '')
     expect(parsed.tool).toBe('memory')
@@ -73,7 +80,7 @@ describe('search verb', () => {
   test('fails cleanly outside a prjct project', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-search-noproj-'))
     try {
-      const result = await cmd.search('anything', dir, { md: true })
+      const result = await fixture.cmd.search('anything', dir, { md: true })
       expect(result.success).toBe(false)
     } finally {
       await fs.rm(dir, { recursive: true, force: true })

@@ -18,31 +18,36 @@ import { prjctDb } from '../../storage/database'
 
 // Test Setup
 
-let tmpRoot: string
-let testProjectId: string
+const fixture: {
+  tmpRoot: string
+  testProjectId: string
+} = {
+  tmpRoot: '',
+  testProjectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('Custom Workflow Storage', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-workflow-test-'))
-    testProjectId = 'test-workflow-project'
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-workflow-test-'))
+    fixture.testProjectId = 'test-workflow-project'
 
-    pathManager.getGlobalProjectPath = (projectId: string) => path.join(tmpRoot, projectId)
+    pathManager.getGlobalProjectPath = (projectId: string) => path.join(fixture.tmpRoot, projectId)
 
     // Ensure required dirs exist
-    await fs.mkdir(path.join(tmpRoot, testProjectId), { recursive: true })
+    await fs.mkdir(path.join(fixture.tmpRoot, fixture.testProjectId), { recursive: true })
 
     // Initialize the database (triggers migration v4 which seeds built-in workflows)
-    prjctDb.getDb(testProjectId)
+    prjctDb.getDb(fixture.testProjectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
 
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
     }
   })
 
@@ -50,7 +55,7 @@ describe('Custom Workflow Storage', () => {
 
   describe('built-in workflows', () => {
     it('should seed 4 built-in workflows on first migration', () => {
-      const workflows = customWorkflowStorage.getAllWorkflows(testProjectId)
+      const workflows = customWorkflowStorage.getAllWorkflows(fixture.testProjectId)
       const builtins = workflows.filter((w) => w.isBuiltin)
 
       expect(builtins).toHaveLength(4)
@@ -58,24 +63,24 @@ describe('Custom Workflow Storage', () => {
     })
 
     it('should mark built-in workflows with isBuiltin=true', () => {
-      const task = customWorkflowStorage.getWorkflow(testProjectId, 'task')
+      const task = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'task')
       expect(task).toBeTruthy()
       expect(task?.isBuiltin).toBe(true)
     })
 
     it('should prevent deletion of built-in workflows', () => {
       expect(() => {
-        customWorkflowStorage.deleteWorkflow(testProjectId, 'ship')
+        customWorkflowStorage.deleteWorkflow(fixture.testProjectId, 'ship')
       }).toThrow('Cannot delete built-in workflow')
     })
 
     it('should allow soft-disable of built-in workflows', () => {
-      const updated = customWorkflowStorage.updateWorkflow(testProjectId, 'ship', {
+      const updated = customWorkflowStorage.updateWorkflow(fixture.testProjectId, 'ship', {
         enabled: false,
       })
       expect(updated).toBe(true)
 
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'ship')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'ship')
       expect(workflow?.enabled).toBe(false)
     })
   })
@@ -84,14 +89,14 @@ describe('Custom Workflow Storage', () => {
 
   describe('create custom workflow', () => {
     it('should create a new custom workflow', () => {
-      const id = customWorkflowStorage.createWorkflow(testProjectId, {
+      const id = customWorkflowStorage.createWorkflow(fixture.testProjectId, {
         name: 'qa',
         description: 'Quality assurance checks',
       })
 
       expect(id).toBeGreaterThan(0)
 
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'qa')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'qa')
       expect(workflow).toBeTruthy()
       expect(workflow?.name).toBe('qa')
       expect(workflow?.description).toBe('Quality assurance checks')
@@ -100,13 +105,13 @@ describe('Custom Workflow Storage', () => {
     })
 
     it('should create workflow with metadata', () => {
-      const _id = customWorkflowStorage.createWorkflow(testProjectId, {
+      const _id = customWorkflowStorage.createWorkflow(fixture.testProjectId, {
         name: 'deploy',
         description: 'Deploy to production',
         metadata: { environment: 'production', requiresApproval: true },
       })
 
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'deploy')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'deploy')
       expect(workflow?.metadata).toEqual({ environment: 'production', requiresApproval: true })
     })
 
@@ -143,29 +148,29 @@ describe('Custom Workflow Storage', () => {
 
   describe('read workflows', () => {
     beforeEach(() => {
-      customWorkflowStorage.createWorkflow(testProjectId, {
+      customWorkflowStorage.createWorkflow(fixture.testProjectId, {
         name: 'qa',
         description: 'QA checks',
       })
-      customWorkflowStorage.createWorkflow(testProjectId, {
+      customWorkflowStorage.createWorkflow(fixture.testProjectId, {
         name: 'deploy',
         description: 'Deploy',
       })
     })
 
     it('should get workflow by name', () => {
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'qa')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'qa')
       expect(workflow).toBeTruthy()
       expect(workflow?.name).toBe('qa')
     })
 
     it('should return null for non-existent workflow', () => {
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'nonexistent')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'nonexistent')
       expect(workflow).toBeNull()
     })
 
     it('should list all workflows (built-in + custom)', () => {
-      const workflows = customWorkflowStorage.getAllWorkflows(testProjectId)
+      const workflows = customWorkflowStorage.getAllWorkflows(fixture.testProjectId)
       expect(workflows.length).toBeGreaterThanOrEqual(6) // 4 built-in + 2 custom
 
       const names = workflows.map((w) => w.name)
@@ -179,18 +184,18 @@ describe('Custom Workflow Storage', () => {
 
     it('should exclude disabled workflows by default', () => {
       // Disable the qa workflow
-      customWorkflowStorage.updateWorkflow(testProjectId, 'qa', { enabled: false })
+      customWorkflowStorage.updateWorkflow(fixture.testProjectId, 'qa', { enabled: false })
 
-      const workflows = customWorkflowStorage.getAllWorkflows(testProjectId)
+      const workflows = customWorkflowStorage.getAllWorkflows(fixture.testProjectId)
       const names = workflows.map((w) => w.name)
       expect(names).not.toContain('qa')
     })
 
     it('should include disabled workflows when includeDisabled=true', () => {
       // Disable the qa workflow
-      customWorkflowStorage.updateWorkflow(testProjectId, 'qa', { enabled: false })
+      customWorkflowStorage.updateWorkflow(fixture.testProjectId, 'qa', { enabled: false })
 
-      const workflows = customWorkflowStorage.getAllWorkflows(testProjectId, true)
+      const workflows = customWorkflowStorage.getAllWorkflows(fixture.testProjectId, true)
       const names = workflows.map((w) => w.name)
       expect(names).toContain('qa')
 
@@ -201,44 +206,44 @@ describe('Custom Workflow Storage', () => {
 
   describe('update workflow', () => {
     beforeEach(() => {
-      customWorkflowStorage.createWorkflow(testProjectId, {
+      customWorkflowStorage.createWorkflow(fixture.testProjectId, {
         name: 'qa',
         description: 'QA checks',
       })
     })
 
     it('should update workflow description', () => {
-      const updated = customWorkflowStorage.updateWorkflow(testProjectId, 'qa', {
+      const updated = customWorkflowStorage.updateWorkflow(fixture.testProjectId, 'qa', {
         description: 'Quality Assurance',
       })
       expect(updated).toBe(true)
 
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'qa')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'qa')
       expect(workflow?.description).toBe('Quality Assurance')
     })
 
     it('should update workflow metadata', () => {
-      const updated = customWorkflowStorage.updateWorkflow(testProjectId, 'qa', {
+      const updated = customWorkflowStorage.updateWorkflow(fixture.testProjectId, 'qa', {
         metadata: { autoRun: true },
       })
       expect(updated).toBe(true)
 
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'qa')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'qa')
       expect(workflow?.metadata).toEqual({ autoRun: true })
     })
 
     it('should disable workflow', () => {
-      const updated = customWorkflowStorage.updateWorkflow(testProjectId, 'qa', {
+      const updated = customWorkflowStorage.updateWorkflow(fixture.testProjectId, 'qa', {
         enabled: false,
       })
       expect(updated).toBe(true)
 
-      const workflow = customWorkflowStorage.getWorkflow(testProjectId, 'qa')
+      const workflow = customWorkflowStorage.getWorkflow(fixture.testProjectId, 'qa')
       expect(workflow?.enabled).toBe(false)
     })
 
     it('should return false for non-existent workflow', () => {
-      const updated = customWorkflowStorage.updateWorkflow(testProjectId, 'nonexistent', {
+      const updated = customWorkflowStorage.updateWorkflow(fixture.testProjectId, 'nonexistent', {
         description: 'test',
       })
       expect(updated).toBe(false)
@@ -247,30 +252,30 @@ describe('Custom Workflow Storage', () => {
 
   describe('delete workflow', () => {
     beforeEach(() => {
-      customWorkflowStorage.createWorkflow(testProjectId, {
+      customWorkflowStorage.createWorkflow(fixture.testProjectId, {
         name: 'qa',
         description: 'QA checks',
       })
     })
 
     it('should soft-delete custom workflow', () => {
-      const deleted = customWorkflowStorage.deleteWorkflow(testProjectId, 'qa')
+      const deleted = customWorkflowStorage.deleteWorkflow(fixture.testProjectId, 'qa')
       expect(deleted).toBe(true)
 
       // Workflow should not appear in default list
-      const workflows = customWorkflowStorage.getAllWorkflows(testProjectId)
+      const workflows = customWorkflowStorage.getAllWorkflows(fixture.testProjectId)
       const names = workflows.map((w) => w.name)
       expect(names).not.toContain('qa')
 
       // But should still exist when includeDisabled=true
-      const allWorkflows = customWorkflowStorage.getAllWorkflows(testProjectId, true)
+      const allWorkflows = customWorkflowStorage.getAllWorkflows(fixture.testProjectId, true)
       const qa = allWorkflows.find((w) => w.name === 'qa')
       expect(qa).toBeTruthy()
       expect(qa?.enabled).toBe(false)
     })
 
     it('should return false for non-existent workflow', () => {
-      const deleted = customWorkflowStorage.deleteWorkflow(testProjectId, 'nonexistent')
+      const deleted = customWorkflowStorage.deleteWorkflow(fixture.testProjectId, 'nonexistent')
       expect(deleted).toBe(false)
     })
   })
@@ -279,18 +284,18 @@ describe('Custom Workflow Storage', () => {
 
   describe('utility methods', () => {
     it('should check if workflow is built-in', () => {
-      expect(customWorkflowStorage.isBuiltin(testProjectId, 'task')).toBe(true)
-      expect(customWorkflowStorage.isBuiltin(testProjectId, 'ship')).toBe(true)
+      expect(customWorkflowStorage.isBuiltin(fixture.testProjectId, 'task')).toBe(true)
+      expect(customWorkflowStorage.isBuiltin(fixture.testProjectId, 'ship')).toBe(true)
 
-      customWorkflowStorage.createWorkflow(testProjectId, {
+      customWorkflowStorage.createWorkflow(fixture.testProjectId, {
         name: 'qa',
         description: 'QA',
       })
-      expect(customWorkflowStorage.isBuiltin(testProjectId, 'qa')).toBe(false)
+      expect(customWorkflowStorage.isBuiltin(fixture.testProjectId, 'qa')).toBe(false)
     })
 
     it('should return false for non-existent workflow in isBuiltin', () => {
-      expect(customWorkflowStorage.isBuiltin(testProjectId, 'nonexistent')).toBe(false)
+      expect(customWorkflowStorage.isBuiltin(fixture.testProjectId, 'nonexistent')).toBe(false)
     })
   })
 })

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.81.0] - 2026-08-10
+
+### Added
+- const only modern js
+
 ## [3.80.1] - 2026-08-03
 
 ### Fixed

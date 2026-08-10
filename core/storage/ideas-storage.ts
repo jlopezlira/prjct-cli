@@ -33,23 +33,23 @@ interface IdeaRow {
 }
 
 function rowToIdea(r: IdeaRow): Idea {
-  let tags: string[] = []
-  if (r.tags) {
+  const tags = (() => {
+    if (!r.tags) return []
     try {
       const parsed = JSON.parse(r.tags)
-      if (Array.isArray(parsed)) tags = parsed
+      return Array.isArray(parsed) ? parsed : []
     } catch {
-      /* cold column — tolerate junk */
+      return []
     }
-  }
-  let extra: Partial<Idea> = {}
-  if (r.data) {
+  })()
+  const extra = (() => {
+    if (!r.data) return {}
     try {
-      extra = JSON.parse(r.data) as Partial<Idea>
+      return JSON.parse(r.data) as Partial<Idea>
     } catch {
-      extra = {}
+      return {}
     }
-  }
+  })()
   const idea: Idea = {
     ...extra,
     id: r.id,

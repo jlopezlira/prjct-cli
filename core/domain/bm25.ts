@@ -152,8 +152,7 @@ export function tokenizeFile(content: string, filePath: string): string[] {
   ]
 
   for (const pattern of exportPatterns) {
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(content)) !== null) {
+    for (const match of content.matchAll(pattern)) {
       if (match[1]) {
         tokens.push(...splitIdentifier(match[1]))
       }
@@ -168,19 +167,17 @@ export function tokenizeFile(content: string, filePath: string): string[] {
     /type\s+(\w+)\s*=/g,
   ]
 
-  for (const pattern of declPatterns) {
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(content)) !== null) {
-      if (match[1]) {
-        tokens.push(...splitIdentifier(match[1]))
+  for (const pattern2 of declPatterns) {
+    for (const match2 of content.matchAll(pattern2)) {
+      if (match2[1]) {
+        tokens.push(...splitIdentifier(match2[1]))
       }
     }
   }
 
   // 4. Import sources
   const importPattern = /(?:from|import)\s+['"]([^'"]+)['"]/g
-  let importMatch: RegExpExecArray | null
-  while ((importMatch = importPattern.exec(content)) !== null) {
+  for (const importMatch of content.matchAll(importPattern)) {
     const source = importMatch[1]
     if (source.startsWith('.') || source.startsWith('@/')) {
       // Internal import — extract path tokens
@@ -196,8 +193,7 @@ export function tokenizeFile(content: string, filePath: string): string[] {
 
   // 5. Comments (single-line)
   const singleLineComments = /\/\/\s*(.+)/g
-  let commentMatch: RegExpExecArray | null
-  while ((commentMatch = singleLineComments.exec(content)) !== null) {
+  for (const commentMatch of content.matchAll(singleLineComments)) {
     const words = commentMatch[1]
       .toLowerCase()
       .split(/\s+/)
@@ -207,8 +203,7 @@ export function tokenizeFile(content: string, filePath: string): string[] {
 
   // 6. JSDoc / multi-line comments — extract meaningful words
   const multiLineComments = /\/\*\*?([\s\S]*?)\*\//g
-  let multiMatch: RegExpExecArray | null
-  while ((multiMatch = multiLineComments.exec(content)) !== null) {
+  for (const multiMatch of content.matchAll(multiLineComments)) {
     const words = multiMatch[1]
       .replace(/@\w+/g, '') // strip JSDoc tags
       .replace(/\*/g, '')
@@ -257,7 +252,6 @@ export async function buildIndex(projectPath: string): Promise<BM25Index> {
 
   const documents: BM25Index['documents'] = {}
   const invertedIndex: BM25Index['invertedIndex'] = emptyInvertedIndex()
-  let totalLength = 0
 
   // Process files in parallel batches of 50
   const results = await batchProcess(files, 50, async (filePath) => {
@@ -272,7 +266,6 @@ export async function buildIndex(projectPath: string): Promise<BM25Index> {
 
   for (const { filePath, tokens } of results) {
     documents[filePath] = { tokens, length: tokens.length }
-    totalLength += tokens.length
 
     for (const [token, tf] of termFrequencies(tokens)) {
       if (!invertedIndex[token]) {
@@ -281,6 +274,7 @@ export async function buildIndex(projectPath: string): Promise<BM25Index> {
       invertedIndex[token].push({ path: filePath, tf })
     }
   }
+  const totalLength = results.reduce((total, result) => total + result.tokens.length, 0)
 
   const totalDocs = Object.keys(documents).length
 
@@ -463,9 +457,9 @@ function updatePerFileTables(
         deleteTerms.run(filePath)
         deleteDoc.run(filePath)
       }
-      for (const filePath of changedFiles) {
-        const doc = index.documents[filePath]
-        if (doc) writeDocumentRows(insertDoc, insertTerm, filePath, doc.tokens, now)
+      for (const filePath2 of changedFiles) {
+        const doc = index.documents[filePath2]
+        if (doc) writeDocumentRows(insertDoc, insertTerm, filePath2, doc.tokens, now)
       }
     })
   } catch {
@@ -522,11 +516,10 @@ function loadIndexFromPerFileTables(
 
     const documents: BM25Index['documents'] = {}
     const invertedIndex: BM25Index['invertedIndex'] = emptyInvertedIndex()
-    let totalLength = 0
     for (const doc of docs) {
       documents[doc.path] = { tokens: [], length: doc.length }
-      totalLength += doc.length
     }
+    const totalLength = docs.reduce((total, doc) => total + doc.length, 0)
 
     const terms = prjctDb.query<{ token: string; path: string; tf: number }>(
       projectId,
@@ -534,7 +527,10 @@ function loadIndexFromPerFileTables(
     )
     for (const term of terms) {
       if (!invertedIndex[term.token]) invertedIndex[term.token] = []
-      invertedIndex[term.token].push({ path: term.path, tf: term.tf })
+      invertedIndex[term.token].push({
+        path: term.path,
+        tf: term.tf,
+      })
     }
 
     const totalDocs = docs.length

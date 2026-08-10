@@ -17,23 +17,28 @@ import { prjctDb } from '../../storage/database'
 import { stateStorage } from '../../storage/state-storage'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
-let tmpRoot: string | null = null
-let projectId: string
+const fixture: {
+  tmpRoot: string | null
+  projectId: string
+} = {
+  tmpRoot: null,
+  projectId: '',
+}
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ws-gate-'))
-  projectId = `test-ws-${Date.now()}`
-  patchPathManager(tmpRoot!)
-  await fs.mkdir(pathManager.getStoragePath(projectId, ''), { recursive: true })
-  await fs.mkdir(path.join(tmpRoot!, projectId, 'sync'), { recursive: true })
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ws-gate-'))
+  fixture.projectId = `test-ws-${Date.now()}`
+  patchPathManager(fixture.tmpRoot!)
+  await fs.mkdir(pathManager.getStoragePath(fixture.projectId, ''), { recursive: true })
+  await fs.mkdir(path.join(fixture.tmpRoot!, fixture.projectId, 'sync'), { recursive: true })
 })
 
 afterEach(async () => {
   prjctDb.close()
   restorePathManager()
-  if (tmpRoot) {
-    await fs.rm(tmpRoot, { recursive: true, force: true })
-    tmpRoot = null
+  if (fixture.tmpRoot) {
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+    fixture.tmpRoot = null
   }
 })
 
@@ -47,66 +52,70 @@ const task = (id: string, wsId: string): Omit<WorkspaceTask, 'startedAt'> =>
 
 describe('per-workspace gate + isolation', () => {
   it('two workspaces can each hold an active task concurrently', async () => {
-    await stateStorage.startTaskInWorkspace(projectId, task('a', 'ws-a'), 'ws-a')
-    await stateStorage.startTaskInWorkspace(projectId, task('b', 'ws-b'), 'ws-b')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('a', 'ws-a'), 'ws-a')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('b', 'ws-b'), 'ws-b')
 
-    const active = await stateStorage.getActiveTasks(projectId)
+    const active = await stateStorage.getActiveTasks(fixture.projectId)
     expect(active.map((t) => t.workspaceId).sort()).toEqual(['ws-a', 'ws-b'])
   })
 
   it('a second task in the SAME workspace is gated', async () => {
-    await stateStorage.startTaskInWorkspace(projectId, task('a', 'ws-a'), 'ws-a')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('a', 'ws-a'), 'ws-a')
     await expect(
-      stateStorage.startTaskInWorkspace(projectId, task('a2', 'ws-a'), 'ws-a')
+      stateStorage.startTaskInWorkspace(fixture.projectId, task('a2', 'ws-a'), 'ws-a')
     ).rejects.toThrow()
   })
 
   it('a main-worktree currentTask does NOT block a child workspace', async () => {
-    await stateStorage.startTask(projectId, {
+    await stateStorage.startTask(fixture.projectId, {
       id: 'main',
       description: 'main task',
       sessionId: 'sess-main',
     } as Parameters<typeof stateStorage.startTask>[1])
 
     // Should not throw — the child workspace is independent of currentTask.
-    await stateStorage.startTaskInWorkspace(projectId, task('a', 'ws-a'), 'ws-a')
-    const wsTask = await stateStorage.getCurrentTaskForWorkspace(projectId, 'ws-a')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('a', 'ws-a'), 'ws-a')
+    const wsTask = await stateStorage.getCurrentTaskForWorkspace(fixture.projectId, 'ws-a')
     expect(wsTask?.id).toBe('a')
   })
 
   it('addTokens accumulates against the named workspace only', async () => {
-    await stateStorage.startTaskInWorkspace(projectId, task('a', 'ws-a'), 'ws-a')
-    await stateStorage.startTaskInWorkspace(projectId, task('b', 'ws-b'), 'ws-b')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('a', 'ws-a'), 'ws-a')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('b', 'ws-b'), 'ws-b')
 
-    await stateStorage.addTokens(projectId, 10, 5, 'ws-a')
-    const r = await stateStorage.addTokens(projectId, 3, 2, 'ws-a')
+    await stateStorage.addTokens(fixture.projectId, 10, 5, 'ws-a')
+    const r = await stateStorage.addTokens(fixture.projectId, 3, 2, 'ws-a')
     expect(r).toEqual({ tokensIn: 13, tokensOut: 7 })
 
-    const a = await stateStorage.getCurrentTaskForWorkspace(projectId, 'ws-a')
-    const b = await stateStorage.getCurrentTaskForWorkspace(projectId, 'ws-b')
+    const a = await stateStorage.getCurrentTaskForWorkspace(fixture.projectId, 'ws-a')
+    const b = await stateStorage.getCurrentTaskForWorkspace(fixture.projectId, 'ws-b')
     expect(a?.tokensIn).toBe(13)
     expect(b?.tokensIn ?? 0).toBe(0) // ws-b untouched
   })
 
   it('updateWorkspaceTask merges by workspaceId', async () => {
-    await stateStorage.startTaskInWorkspace(projectId, task('a', 'ws-a'), 'ws-a')
-    const updated = await stateStorage.updateWorkspaceTask(projectId, 'ws-a', {
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('a', 'ws-a'), 'ws-a')
+    const updated = await stateStorage.updateWorkspaceTask(fixture.projectId, 'ws-a', {
       type: 'bug',
     })
     expect(updated?.type).toBe('bug')
-    expect((await stateStorage.getCurrentTaskForWorkspace(projectId, 'ws-a'))?.type).toBe('bug')
+    expect((await stateStorage.getCurrentTaskForWorkspace(fixture.projectId, 'ws-a'))?.type).toBe(
+      'bug'
+    )
   })
 
   it('completing one workspace leaves the others untouched', async () => {
-    await stateStorage.startTaskInWorkspace(projectId, task('a', 'ws-a'), 'ws-a')
-    await stateStorage.startTaskInWorkspace(projectId, task('b', 'ws-b'), 'ws-b')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('a', 'ws-a'), 'ws-a')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('b', 'ws-b'), 'ws-b')
 
-    await stateStorage.completeTaskInWorkspace(projectId, 'ws-a')
+    await stateStorage.completeTaskInWorkspace(fixture.projectId, 'ws-a')
 
-    expect(await stateStorage.getCurrentTaskForWorkspace(projectId, 'ws-a')).toBeNull()
-    expect((await stateStorage.getCurrentTaskForWorkspace(projectId, 'ws-b'))?.id).toBe('b')
+    expect(await stateStorage.getCurrentTaskForWorkspace(fixture.projectId, 'ws-a')).toBeNull()
+    expect((await stateStorage.getCurrentTaskForWorkspace(fixture.projectId, 'ws-b'))?.id).toBe('b')
     // After completing its task, the workspace is idle → can start again.
-    await stateStorage.startTaskInWorkspace(projectId, task('a3', 'ws-a'), 'ws-a')
-    expect((await stateStorage.getCurrentTaskForWorkspace(projectId, 'ws-a'))?.id).toBe('a3')
+    await stateStorage.startTaskInWorkspace(fixture.projectId, task('a3', 'ws-a'), 'ws-a')
+    expect((await stateStorage.getCurrentTaskForWorkspace(fixture.projectId, 'ws-a'))?.id).toBe(
+      'a3'
+    )
   })
 })

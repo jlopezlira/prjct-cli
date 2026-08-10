@@ -138,63 +138,65 @@ function mergeScope(
   }
 
   // 2) Code index: BM25 + symbols → import/cochange expand inside rankFiles
-  let indexHits = 0
-  if (indexes.bm25 || indexes.symbols) {
+  const rankedFiles = (() => {
+    if (!(indexes.bm25 || indexes.symbols)) return []
     try {
-      const ranked = rankFiles(projectId, query, { topN: Math.max(limit * 2, 12) })
-      indexHits = ranked.length
-      for (const f of ranked) {
-        const sym = f.signals.symbols ?? 0
-        const signals = [
-          f.signals.bm25 > 0 ? 'bm25' : null,
-          sym > 0 ? 'symbols' : null,
-          f.signals.imports > 0 ? 'imports' : null,
-          f.signals.cochange > 0 ? 'cochange' : null,
-        ].filter((s): s is string => s !== null)
-        const topSignal = Math.max(f.signals.bm25, sym, f.signals.imports, f.signals.cochange)
-        const reason =
-          sym >= topSignal && sym > 0
-            ? 'matches function/class/route symbols in code graph'
-            : f.signals.bm25 >= f.signals.imports && f.signals.bm25 >= f.signals.cochange
-              ? 'matches task terms in code index (BM25)'
-              : f.signals.imports >= f.signals.cochange
-                ? 'import-graph neighbor of matched files'
-                : 'historically co-changes with matched files'
-        bump(f.path, f.finalScore, signals[0] ?? 'bm25', reason)
-        for (const s of signals.slice(1)) {
-          const hit = scores.get(f.path)
-          if (hit && !hit.signals.includes(s)) hit.signals.push(s)
-        }
-      }
+      return rankFiles(projectId, query, { topN: Math.max(limit * 2, 12) })
     } catch {
-      /* best-effort */
+      return []
+    }
+  })()
+  for (const f of rankedFiles) {
+    const sym = f.signals.symbols ?? 0
+    const signals = [
+      f.signals.bm25 > 0 ? 'bm25' : null,
+      sym > 0 ? 'symbols' : null,
+      f.signals.imports > 0 ? 'imports' : null,
+      f.signals.cochange > 0 ? 'cochange' : null,
+    ].filter((s): s is string => s !== null)
+    const topSignal = Math.max(f.signals.bm25, sym, f.signals.imports, f.signals.cochange)
+    const reason =
+      sym >= topSignal && sym > 0
+        ? 'matches function/class/route symbols in code graph'
+        : f.signals.bm25 >= f.signals.imports && f.signals.bm25 >= f.signals.cochange
+          ? 'matches task terms in code index (BM25)'
+          : f.signals.imports >= f.signals.cochange
+            ? 'import-graph neighbor of matched files'
+            : 'historically co-changes with matched files'
+    bump(f.path, f.finalScore, signals[0] ?? 'bm25', reason)
+    for (const s of signals.slice(1)) {
+      const hit = scores.get(f.path)
+      if (hit && !hit.signals.includes(s)) hit.signals.push(s)
     }
   }
+  const indexHits = rankedFiles.length
 
   // 3) Graph expand from top seeds
-  let graphNeighbors = 0
   const seedForGraph = [...scores.keys()].slice(0, 5)
   if (seedForGraph.length === 0 && memorySeeds.size > 0) {
     seedForGraph.push(...[...memorySeeds].slice(0, 5))
   }
-  if (seedForGraph.length > 0) {
+  const graphImpact = (() => {
+    if (seedForGraph.length === 0) return null
     try {
-      const impact = breakImpact(projectId, seedForGraph, limit)
-      for (const n of impact.neighbors) {
-        graphNeighbors++
-        bump(
-          n.path,
-          0.35 * Math.min(1, n.score + 0.1),
-          n.via === 'both' ? 'imports' : n.via,
-          n.via === 'cochange'
-            ? 'historically co-changes with seed files'
-            : 'import-graph neighbor of seed files'
-        )
-      }
+      return breakImpact(projectId, seedForGraph, limit)
     } catch {
-      /* best-effort */
+      return null
+    }
+  })()
+  if (graphImpact) {
+    for (const n of graphImpact.neighbors) {
+      bump(
+        n.path,
+        0.35 * Math.min(1, n.score + 0.1),
+        n.via === 'both' ? 'imports' : n.via,
+        n.via === 'cochange'
+          ? 'historically co-changes with seed files'
+          : 'import-graph neighbor of seed files'
+      )
     }
   }
+  const graphNeighbors = graphImpact?.neighbors.length ?? 0
 
   const files = [...scores.values()].sort((a, b) => b.score - a.score).slice(0, limit)
 
@@ -221,20 +223,23 @@ function memoryFileSeedsSync(projectId: string, query: string): Set<string> {
       .split(/\s+/)
       .filter((w) => w.length > 2)
       .slice(0, 12)
-    let entries: MemoryEntry[] = []
-    if (keywords.length > 0) {
-      try {
-        entries = projectMemory.searchFts(projectId, keywords, 15)
-      } catch {
-        entries = []
-      }
-    }
-    if (entries.length === 0) {
-      entries = projectMemory.recall(projectId, {
-        types: ['gotcha', 'decision', 'anti-pattern', 'context'],
-        limit: 20,
-      })
-    }
+    const lexicalEntries =
+      keywords.length > 0
+        ? (() => {
+            try {
+              return projectMemory.searchFts(projectId, keywords, 15)
+            } catch {
+              return []
+            }
+          })()
+        : []
+    const entries =
+      lexicalEntries.length > 0
+        ? lexicalEntries
+        : projectMemory.recall(projectId, {
+            types: ['gotcha', 'decision', 'anti-pattern', 'context'],
+            limit: 20,
+          })
     for (const p of extractFilePathsFromEntries(entries, projectId)) seeds.add(p)
   } catch {
     /* empty */
@@ -270,8 +275,7 @@ export function extractFilePathsFromEntries(entries: MemoryEntry[], projectId?: 
     }
     const content = e.content ?? ''
     REPO_PATH_RE.lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = REPO_PATH_RE.exec(content)) !== null) {
+    for (const m of content.matchAll(REPO_PATH_RE)) {
       accept(m[1]!)
     }
   }

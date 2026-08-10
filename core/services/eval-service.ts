@@ -125,12 +125,8 @@ export async function loadEvalRunByVersion(
 ): Promise<EvalRun | null> {
   if (!version) return loadLatestEvalRun(projectPath)
   const dir = path.join(evalProjectDir(await detectGit(projectPath)), 'runs')
-  let entries: string[] = []
-  try {
-    entries = await fs.readdir(dir)
-  } catch {
-    return null
-  }
+  const entries = await fs.readdir(dir).catch(() => null)
+  if (!entries) return null
 
   const runs = (
     await Promise.all(
@@ -166,10 +162,17 @@ export async function compareEvalRuns(
     const c = candidate?.scenarios.find((scenario) => scenario.id === id)
     const delta = b && c ? Math.round((c.score - b.score) * 10) / 10 : undefined
     const actionables: EvalActionable[] = []
-    let status: EvalComparison['scenarios'][number]['status'] = 'unchanged'
+    const status: EvalComparison['scenarios'][number]['status'] = !b
+      ? 'missing-baseline'
+      : !c
+        ? 'missing-candidate'
+        : (delta ?? 0) <= SCORE_REGRESSION_THRESHOLD
+          ? 'regressed'
+          : (delta ?? 0) >= SCORE_IMPROVEMENT_THRESHOLD
+            ? 'improved'
+            : 'unchanged'
 
     if (!b) {
-      status = 'missing-baseline'
       actionables.push({
         severity: 'warning',
         title: `No baseline result for ${id}`,
@@ -177,7 +180,6 @@ export async function compareEvalRuns(
           'Run `prjct eval run --candidate <baseline-version>` before comparing releases.',
       })
     } else if (!c) {
-      status = 'missing-candidate'
       actionables.push({
         severity: 'blocking',
         title: `No candidate result for ${id}`,
@@ -185,14 +187,12 @@ export async function compareEvalRuns(
           'Run `prjct eval run` for the candidate version before publishing a comparison.',
       })
     } else if ((delta ?? 0) <= SCORE_REGRESSION_THRESHOLD) {
-      status = 'regressed'
       actionables.push({
         severity: 'blocking',
         title: `${id} regressed by ${Math.abs(delta ?? 0)} points`,
         recommendation: regressionRecommendation(id),
       })
     } else if ((delta ?? 0) >= SCORE_IMPROVEMENT_THRESHOLD) {
-      status = 'improved'
       actionables.push({
         severity: 'info',
         title: `${id} improved by ${delta} points`,
@@ -537,15 +537,16 @@ async function evalQualityCommandReadiness(
   projectPath: string
 ): Promise<Omit<EvalScenario, 'id' | 'name' | 'durationMs'>> {
   const pkgPath = path.join(projectPath, 'package.json')
-  let scripts: Record<string, unknown> = {}
-  try {
-    const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8')) as {
-      scripts?: Record<string, unknown>
+  const scripts = await (async (): Promise<Record<string, unknown>> => {
+    try {
+      const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8')) as {
+        scripts?: Record<string, unknown>
+      }
+      return pkg.scripts ?? {}
+    } catch {
+      return {}
     }
-    scripts = pkg.scripts ?? {}
-  } catch {
-    // Non-JS projects can still use evals, but this scenario becomes advisory.
-  }
+  })()
   const hasTest = typeof scripts.test === 'string'
   const hasCheck = typeof scripts.check === 'string' || typeof scripts.lint === 'string'
   const score = (hasTest ? 50 : 0) + (hasCheck ? 50 : 0)

@@ -143,13 +143,14 @@ export function collectRetentionInputs(projectId: string, nowMs: number): Retent
     for (const id of extractCorrectionIds(entry.tags)) correctedIds.add(id)
   }
 
-  let indexedPaths: Set<string> | null = null
-  try {
-    const index = loadBm25Index(projectId)
-    if (index) indexedPaths = new Set(Object.keys(index.documents))
-  } catch {
-    /* first run */
-  }
+  const indexedPaths = (() => {
+    try {
+      const index = loadBm25Index(projectId)
+      return index ? new Set(Object.keys(index.documents)) : null
+    } catch {
+      return null
+    }
+  })()
 
   const R = buildReferenceModel(entries)
   const refIndex = buildReferenceIndex(R)
@@ -199,11 +200,10 @@ export function scoreEntry(
   }
 
   // Start from excess — high novelty is the keep signal (Rho).
-  let score = ex.excess * EXCESS_MAX
   reasons.push(`excess ${ex.excess.toFixed(2)} (sim ${ex.maxSim.toFixed(2)})`)
 
-  if (ex.exactDup || ex.nearDup || ex.excess < LOW_EXCESS_CUTOFF) {
-    score -= LOW_EXCESS_PENALTY
+  const lowExcess = ex.exactDup || ex.nearDup || ex.excess < LOW_EXCESS_CUTOFF
+  if (lowExcess) {
     reasons.push(
       ex.exactDup
         ? `exact dup of ${ex.nearestId}`
@@ -215,68 +215,76 @@ export function scoreEntry(
 
   // ── Real usage ─────────────────────────────────────────────────────
   const usefulness = inputs.usefulness.get(entry.id) ?? 0
+  const usefulnessBonus = Math.min(USEFULNESS_MAX_BONUS, Math.max(0, usefulness * 8))
   if (usefulness > 0) {
-    const bonus = Math.min(USEFULNESS_MAX_BONUS, usefulness * 8)
-    score += bonus
-    reasons.push(`used (+${Math.round(bonus)})`)
+    reasons.push(`used (+${Math.round(usefulnessBonus)})`)
   }
 
   const ageDays = Math.max(0, (inputs.nowMs - Date.parse(entry.rememberedAt)) / MS_PER_DAY)
-  if (Number.isFinite(ageDays)) {
-    const recency = Math.max(0, RECENCY_MAX_BONUS * (1 - ageDays / RECENCY_WINDOW_DAYS))
-    score += recency
-  }
+  const recencyBonus = Number.isFinite(ageDays)
+    ? Math.max(0, RECENCY_MAX_BONUS * (1 - ageDays / RECENCY_WINDOW_DAYS))
+    : 0
 
-  if (usefulness <= 0 && Number.isFinite(ageDays) && ageDays > IDLE_AFTER_DAYS) {
-    const idle = Math.min(IDLE_MAX_PENALTY, (ageDays - IDLE_AFTER_DAYS) * IDLE_PENALTY_PER_DAY)
-    if (idle > 0) {
-      score -= idle
-      reasons.push(`idle ${Math.round(ageDays)}d`)
-    }
+  const idlePenalty =
+    usefulness <= 0 && Number.isFinite(ageDays) && ageDays > IDLE_AFTER_DAYS
+      ? Math.min(IDLE_MAX_PENALTY, (ageDays - IDLE_AFTER_DAYS) * IDLE_PENALTY_PER_DAY)
+      : 0
+  if (idlePenalty > 0) {
+    reasons.push(`idle ${Math.round(ageDays)}d`)
   }
 
   // ── Groundedness / refutation ──────────────────────────────────────
   const superseded = inputs.supersededIds.has(entry.id)
   if (superseded) {
-    score -= SUPERSEDED_PENALTY
     reasons.push('superseded')
   }
-  if (inputs.correctedIds.has(entry.id)) {
-    score -= CORRECTED_PENALTY
+  const corrected = inputs.correctedIds.has(entry.id)
+  if (corrected) {
     reasons.push('corrected')
   }
 
   const noise = !isModelMemory(entry) || isIrrelevantGeneratedContext(entry)
   if (noise) {
-    score -= NOISE_PENALTY
     reasons.push('generated noise')
   }
 
-  if (inputs.indexedPaths && isUngrounded(entry, inputs.indexedPaths)) {
-    score -= UNGROUNDED_PENALTY
+  const ungrounded = Boolean(inputs.indexedPaths && isUngrounded(entry, inputs.indexedPaths))
+  if (ungrounded) {
     reasons.push('cites files missing at HEAD')
   }
 
-  // Corpus-level exact older dup
-  if (corpusDup) {
-    score -= 20
-  }
+  const score = Math.max(
+    0,
+    Math.min(
+      100,
+      ex.excess * EXCESS_MAX +
+        usefulnessBonus +
+        recencyBonus -
+        (lowExcess ? LOW_EXCESS_PENALTY : 0) -
+        idlePenalty -
+        (superseded ? SUPERSEDED_PENALTY : 0) -
+        (corrected ? CORRECTED_PENALTY : 0) -
+        (noise ? NOISE_PENALTY : 0) -
+        (ungrounded ? UNGROUNDED_PENALTY : 0) -
+        (corpusDup ? 20 : 0)
+    )
+  )
 
-  score = Math.max(0, Math.min(100, score))
-
-  let verdict: RetentionVerdict =
+  const scoredVerdict: RetentionVerdict =
     score >= ACTIVE_MIN ? 'active' : score >= ARCHIVE_MIN ? 'archive' : 'delete'
 
   // Grace: brand-new high-stakes knowledge gets time to be used —
   // unless already known-dead (dup/superseded/near-dup of R).
   const knownDead = corpusDup || ex.exactDup || ex.nearDup || superseded
-  if (verdict !== 'active' && ageDays < GRACE_DAYS && !knownDead) {
-    verdict = 'active'
+  const graceVerdict =
+    scoredVerdict !== 'active' && ageDays < GRACE_DAYS && !knownDead ? 'active' : scoredVerdict
+  if (graceVerdict !== scoredVerdict) {
     reasons.push('grace period')
   }
 
-  if (verdict === 'delete' && PROTECTED_TYPES.has(entry.type)) {
-    verdict = 'archive'
+  const verdict =
+    graceVerdict === 'delete' && PROTECTED_TYPES.has(entry.type) ? 'archive' : graceVerdict
+  if (verdict !== graceVerdict) {
     reasons.push('protected type')
   }
 
@@ -418,66 +426,64 @@ export function applyRetention(
     (r) => (r.verdict === 'archive' || r.verdict === 'delete') && !isRetentionRemovableId(r.id)
   ).length
 
-  let archived = 0
-  let deleted = 0
-  let skipped = unremovable
+  const applied = dryRun
+    ? { archived: 0, deleted: 0, skipped: unremovable }
+    : (() => {
+        const archiveBatch = toArchive.slice(0, maxArchive)
+        const archiveResults = archiveBatch.map((result) => {
+          // Ships archive inside forgetShippedFeature; mem_* get a memory_entry
+          // archive row here (ships already write entityType:shipped).
+          if (!result.id.startsWith('ship_')) {
+            try {
+              archiveStorage.archive(projectId, {
+                entityType: 'memory_entry',
+                entityId: result.id,
+                entityData: {
+                  id: result.id,
+                  type: result.type,
+                  score: result.score,
+                  excess: result.excess,
+                  reasons: result.reasons,
+                  verdict: result.verdict,
+                },
+                summary: `retention archive [${result.type}] excess=${result.excess?.toFixed(2) ?? '?'} score=${result.score}`,
+                reason: 'retention-archive',
+              })
+            } catch {
+              /* best-effort */
+            }
+          }
+          return forgetEntry(projectId, result.id)
+        })
+        const archived = archiveResults.filter(Boolean).length
+        const archiveSkipped =
+          Math.max(0, toArchive.length - archiveBatch.length) +
+          archiveResults.filter((success) => !success).length
 
-  if (!dryRun) {
-    const archiveBatch = toArchive.slice(0, maxArchive)
-    skipped += Math.max(0, toArchive.length - archiveBatch.length)
-    for (const r of archiveBatch) {
-      // Ships archive inside forgetShippedFeature; mem_* get a memory_entry
-      // archive row here (ships already write entityType:shipped).
-      if (!r.id.startsWith('ship_')) {
-        try {
-          archiveStorage.archive(projectId, {
-            entityType: 'memory_entry',
-            entityId: r.id,
-            entityData: {
-              id: r.id,
-              type: r.type,
-              score: r.score,
-              excess: r.excess,
-              reasons: r.reasons,
-              verdict: r.verdict,
-            },
-            summary: `retention archive [${r.type}] excess=${r.excess?.toFixed(2) ?? '?'} score=${r.score}`,
-            reason: 'retention-archive',
-          })
-        } catch {
-          /* best-effort */
-        }
-      }
-      if (forgetEntry(projectId, r.id)) archived++
-      else skipped++
-    }
-
-    // Delete verdict = no future value (not even statistical): HARD-delete.
-    // Protected types never reach here (floored to archive).
-    const deleteBatch = toDelete.slice(0, maxDelete)
-    skipped += Math.max(0, toDelete.length - deleteBatch.length)
-    const hardIds: string[] = []
-    for (const r of deleteBatch) {
-      if (PROTECTED_TYPES.has(r.type)) {
-        skipped++
-        continue
-      }
-      hardIds.push(r.id)
-    }
-    if (hardIds.length > 0) {
-      deleted = hardDeleteEntries(projectId, hardIds)
-      skipped += hardIds.length - deleted
-    }
-  }
+        // Delete verdict = no future value (not even statistical): HARD-delete.
+        // Protected types never reach here (floored to archive).
+        const deleteBatch = toDelete.slice(0, maxDelete)
+        const hardIds = deleteBatch
+          .filter((result) => !PROTECTED_TYPES.has(result.type))
+          .map((result) => result.id)
+        const protectedSkipped = deleteBatch.length - hardIds.length
+        const deleted = hardIds.length > 0 ? hardDeleteEntries(projectId, hardIds) : 0
+        const deleteSkipped =
+          Math.max(0, toDelete.length - deleteBatch.length) +
+          protectedSkipped +
+          hardIds.length -
+          deleted
+        return { archived, deleted, skipped: unremovable + archiveSkipped + deleteSkipped }
+      })()
 
   return {
     evaluated: report.evaluated,
     active: report.active,
     wouldArchive: toArchive.length,
     wouldDelete: toDelete.length,
-    archived: dryRun ? 0 : archived,
-    deleted: dryRun ? 0 : deleted,
-    skipped,
+    archived: applied.archived,
+    deleted: applied.deleted,
+    skipped: applied.skipped,
     dryRun,
     samples: report.flagged.slice(0, 10),
     referenceSize: report.referenceSize,
@@ -503,12 +509,12 @@ export function forgetJunkCaptures(
   // Include gotcha/spec so precision shape failures (open narration, empty
   // mirrors) leave living surfaces on dream — not only low-stakes junk.
   const types = options.types ?? ['inbox', 'context', 'idea', 'todo', 'question', 'gotcha', 'spec']
-  let forgotten = 0
+  const forgottenEntries: MemoryEntry[] = []
   const samples: string[] = []
   try {
     const entries = projectMemory.allEntriesForIndex(projectId)
     for (const e of entries) {
-      if (forgotten >= max) break
+      if (forgottenEntries.length >= max) break
       if (!types.includes(e.type)) continue
       const j = isJunkCaptureContent(e.content, e.type)
       const precision = classifyCapturePrecision(e.content, e.type)
@@ -519,7 +525,7 @@ export function forgetJunkCaptures(
         (e.type === 'gotcha' && precision.action === 'demote')
       if (!drop) continue
       if (forgetEntry(projectId, e.id)) {
-        forgotten++
+        forgottenEntries.push(e)
         if (samples.length < 8) {
           samples.push(`${e.id}:${j.junk ? j.reason : precision.reasonCode}`)
         }
@@ -528,7 +534,7 @@ export function forgetJunkCaptures(
   } catch {
     return { forgotten: 0, samples: [] }
   }
-  return { forgotten, samples }
+  return { forgotten: forgottenEntries.length, samples }
 }
 
 export function triageInbox(
@@ -540,12 +546,9 @@ export function triageInbox(
   if (inbox.length === 0) return { merged: 0, archived: 0, junkForgotten: 0 }
 
   // First pass: junk content (always drop from living rotation).
-  let junkForgotten = 0
-  for (const item of inbox) {
-    if (isJunkCaptureContent(item.content, item.type).junk && forgetEntry(projectId, item.id)) {
-      junkForgotten++
-    }
-  }
+  const junkForgotten = inbox.filter(
+    (item) => isJunkCaptureContent(item.content, item.type).junk && forgetEntry(projectId, item.id)
+  ).length
 
   const remaining = projectMemory.allEntriesForIndex(projectId).filter((e) => e.type === 'inbox')
   if (remaining.length === 0) return { merged: 0, archived: 0, junkForgotten }
@@ -554,13 +557,13 @@ export function triageInbox(
   const refIndex = buildReferenceIndex(R)
   const report = evaluateRetention(projectId, nowMs)
 
-  let merged = 0
-  let archived = 0
+  const mergedIds: string[] = []
+  const archivedIds: string[] = []
 
   for (const item of remaining) {
     const ex = excessAgainstIndex(item.content, refIndex)
     if (ex.exactDup || ex.nearDup || ex.excess < 0.15) {
-      if (forgetEntry(projectId, item.id)) merged++
+      if (forgetEntry(projectId, item.id)) mergedIds.push(item.id)
       continue
     }
     const verdict = report.byId.get(item.id)
@@ -582,11 +585,11 @@ export function triageInbox(
       } catch {
         /* best-effort */
       }
-      if (forgetEntry(projectId, item.id)) archived++
+      if (forgetEntry(projectId, item.id)) archivedIds.push(item.id)
     }
   }
 
-  return { merged, archived, junkForgotten }
+  return { merged: mergedIds.length, archived: archivedIds.length, junkForgotten }
 }
 
 export type { CaptureGateResult } from './capture-gate'

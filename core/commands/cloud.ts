@@ -247,8 +247,8 @@ export class CloudCommands extends PrjctCommandsBase {
       return failHard('Not authenticated. Run `prjct login` first.', options)
     }
     const all = await listCloudProjectCandidates()
-    let targets = actionableCandidates(all, 'connect')
-    if (targets.length === 0) {
+    const availableTargets = actionableCandidates(all, 'connect')
+    if (availableTargets.length === 0) {
       const msg =
         'No unconnected projects with a known path. Open each repo and run `prjct connect`, or `prjct sync` first so paths are recorded.'
       if (options.md) console.log(mdOutput('## Connect', `> ${msg}`))
@@ -256,21 +256,24 @@ export class CloudCommands extends PrjctCommandsBase {
       return { success: true, connected: 0, skipped: 0 }
     }
 
+    const targets =
+      flags.interactive && !flags.all
+        ? await this.pickInteractively(availableTargets, 'connect', options)
+        : availableTargets
+    if (targets === null) {
+      return failWith(
+        'No TTY for one-by-one prompts. Confirm with the human, then run `prjct cloud link --all --yes`, or `cd <path> && prjct connect` per project.',
+        options
+      )
+    }
     if (flags.interactive && !flags.all) {
-      const picked = await this.pickInteractively(targets, 'connect', options)
-      if (picked === null) {
-        return failWith(
-          'No TTY for one-by-one prompts. Confirm with the human, then run `prjct cloud link --all --yes`, or `cd <path> && prjct connect` per project.',
-          options
-        )
-      }
+      const picked = targets
       if (picked.length === 0) {
         const msg = 'No projects selected.'
         if (options.md) console.log(mdOutput('## Connect', `> ${msg}`))
         else out.info(msg)
         return { success: true, connected: 0 }
       }
-      targets = picked
     } else {
       // --all (or interactive+all): require --yes unless already confirmed via interactive
       const ok = await this.confirmBulk(
@@ -292,29 +295,32 @@ export class CloudCommands extends PrjctCommandsBase {
 
   private async unlinkBulk(flags: BulkFlags, options: MdOption): Promise<CommandResult> {
     const all = await listCloudProjectCandidates()
-    let targets = actionableCandidates(all, 'disconnect')
-    if (targets.length === 0) {
+    const availableTargets = actionableCandidates(all, 'disconnect')
+    if (availableTargets.length === 0) {
       const msg = 'No connected projects with a known path to disconnect.'
       if (options.md) console.log(mdOutput('## Disconnect', `> ${msg}`))
       else out.info(msg)
       return { success: true, disconnected: 0 }
     }
 
+    const targets =
+      flags.interactive && !flags.all
+        ? await this.pickInteractively(availableTargets, 'disconnect', options)
+        : availableTargets
+    if (targets === null) {
+      return failWith(
+        'No TTY for one-by-one prompts. Confirm with the human, then run `prjct cloud unlink --all --yes`, or `cd <path> && prjct disconnect` per project.',
+        options
+      )
+    }
     if (flags.interactive && !flags.all) {
-      const picked = await this.pickInteractively(targets, 'disconnect', options)
-      if (picked === null) {
-        return failWith(
-          'No TTY for one-by-one prompts. Confirm with the human, then run `prjct cloud unlink --all --yes`, or `cd <path> && prjct disconnect` per project.',
-          options
-        )
-      }
+      const picked = targets
       if (picked.length === 0) {
         const msg = 'No projects selected.'
         if (options.md) console.log(mdOutput('## Disconnect', `> ${msg}`))
         else out.info(msg)
         return { success: true, disconnected: 0 }
       }
-      targets = picked
     } else {
       const ok = await this.confirmBulk(
         `Disconnect ${targets.length} project(s)? Cloud history kept; local vaults untouched.`,
@@ -338,8 +344,8 @@ export class CloudCommands extends PrjctCommandsBase {
     mode: 'connect' | 'disconnect',
     options: MdOption
   ): Promise<CommandResult> {
-    let ok = 0
-    let fail = 0
+    const succeeded: CloudProjectCandidate[] = []
+    const failed: CloudProjectCandidate[] = []
     const errors: string[] = []
     for (const t of targets) {
       if (!t.projectPath) continue
@@ -348,20 +354,20 @@ export class CloudCommands extends PrjctCommandsBase {
           ? await this.link(t.projectPath, { ...options, md: true })
           : await this.unlink(t.projectPath, { ...options, md: true })
       if (res.success || (mode === 'connect' && res.paymentRequired)) {
-        ok++
+        succeeded.push(t)
         if (!options.md) {
           out.done(
             `${mode === 'connect' ? 'Connected' : 'Disconnected'}: ${t.name} (${t.projectPath})`
           )
         }
       } else {
-        fail++
+        failed.push(t)
         errors.push(`${t.name}: ${res.error ?? res.message ?? 'failed'}`)
         if (!options.md) out.warn(`Failed: ${t.name} — ${res.error ?? res.message ?? 'failed'}`)
       }
     }
     const label = mode === 'connect' ? 'Connected' : 'Disconnected'
-    const summary = `${label} ${ok} project(s)${fail ? ` · ${fail} failed` : ''}.`
+    const summary = `${label} ${succeeded.length} project(s)${failed.length ? ` · ${failed.length} failed` : ''}.`
     if (options.md) {
       console.log(
         mdOutput(
@@ -374,9 +380,9 @@ export class CloudCommands extends PrjctCommandsBase {
       out.done(summary)
     }
     return {
-      success: fail === 0,
-      [mode === 'connect' ? 'connected' : 'disconnected']: ok,
-      failed: fail,
+      success: failed.length === 0,
+      [mode === 'connect' ? 'connected' : 'disconnected']: succeeded.length,
+      failed: failed.length,
       errors,
     }
   }

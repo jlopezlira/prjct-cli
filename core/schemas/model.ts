@@ -194,7 +194,12 @@ export function resolveAgentModel(
   }
   for (const tier of MODEL_TIER_FALLBACK[policy.model]) {
     if (available.has(tier)) {
-      return { ...policy, model: tier, preferred: policy.model, degraded: tier !== policy.model }
+      return {
+        ...policy,
+        model: tier,
+        preferred: policy.model,
+        degraded: tier !== policy.model,
+      }
     }
   }
   return { ...policy, preferred: policy.model, degraded: false }
@@ -331,7 +336,7 @@ export function isValidModelForProvider(provider: string, model: string): boolea
 export function compareSemver(a: string, b: string): -1 | 0 | 1 {
   const pa = a.split('.').map(Number)
   const pb = b.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
+  for (const i of [0, 1, 2]) {
     const va = pa[i] ?? 0
     const vb = pb[i] ?? 0
     if (va < vb) return -1

@@ -148,7 +148,10 @@ export async function detectAndPersistPatterns(
       const alreadyMarked = collectAlreadyMarkedRecurringBugs(config.projectId)
       for (const r of recurring) {
         if (alreadyMarked.has(r.topic)) {
-          result.skipped.push({ reason: 'recurring-bug-already-marked', file: r.topic })
+          result.skipped.push({
+            reason: 'recurring-bug-already-marked',
+            file: r.topic,
+          })
           continue
         }
         try {
@@ -292,12 +295,13 @@ function detectRecurringBugs(projectId: string): RecurringBug[] {
     )
     const counts = new Map<string, number>()
     for (const row of rows) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(row.data)
-      } catch {
-        continue
-      }
+      const parsed: unknown = (() => {
+        try {
+          return JSON.parse(row.data)
+        } catch {
+          return null
+        }
+      })()
       if (!parsed || typeof parsed !== 'object') continue
       const tags = (parsed as { tags?: Record<string, unknown> }).tags
       if (!tags) continue
@@ -344,14 +348,13 @@ async function measureTechDebt(projectPath: string): Promise<DebtSnapshot> {
     if (exitCodeMeans(res, 1)) return { totalCount: 0 }
     throwProc(res)
   }
-  let total = 0
-  for (const line of res.stdout.split('\n')) {
+  const total = res.stdout.split('\n').reduce((sum, line) => {
     // git grep -c emits "<file>:<count>" per file
     const idx = line.lastIndexOf(':')
-    if (idx <= 0) continue
-    const num = Number.parseInt(line.slice(idx + 1), 10)
-    if (Number.isFinite(num)) total += num
-  }
+    if (idx <= 0) return sum
+    const count = Number.parseInt(line.slice(idx + 1), 10)
+    return Number.isFinite(count) ? sum + count : sum
+  }, 0)
   return { totalCount: total }
 }
 
@@ -372,12 +375,13 @@ function collectPreviousDebtSnapshot(projectId: string): number {
       "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 50"
     )
     for (const row of rows) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(row.data)
-      } catch {
-        continue
-      }
+      const parsed: unknown = (() => {
+        try {
+          return JSON.parse(row.data)
+        } catch {
+          return null
+        }
+      })()
       if (!parsed || typeof parsed !== 'object') continue
       const tags = (parsed as { tags?: Record<string, unknown> }).tags
       if (!tags || tags.source !== TECH_DEBT_SOURCE_TAG) continue
@@ -412,12 +416,13 @@ function collectAlreadyMarkedHotFiles(projectId: string): Set<string> {
     )
     const cutoffMs = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000
     for (const row of rows) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(row.data)
-      } catch {
-        continue
-      }
+      const parsed: unknown = (() => {
+        try {
+          return JSON.parse(row.data)
+        } catch {
+          return null
+        }
+      })()
       if (!parsed || typeof parsed !== 'object') continue
       const tags = (parsed as { tags?: Record<string, unknown> }).tags
       if (!tags || tags.source !== HOT_FILE_SOURCE_TAG) continue
@@ -455,12 +460,13 @@ function collectAlreadyMarkedRecurringBugs(projectId: string): Set<string> {
     )
     const cutoffMs = Date.now() - RECURRING_WINDOW_DAYS * 24 * 60 * 60 * 1000
     for (const row of rows) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(row.data)
-      } catch {
-        continue
-      }
+      const parsed: unknown = (() => {
+        try {
+          return JSON.parse(row.data)
+        } catch {
+          return null
+        }
+      })()
       if (!parsed || typeof parsed !== 'object') continue
       const tags = (parsed as { tags?: Record<string, unknown> }).tags
       if (!tags || tags.source !== RECURRING_BUG_SOURCE_TAG) continue

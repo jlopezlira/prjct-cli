@@ -36,7 +36,7 @@ export function tryAcquireSpawnLock(
   fs.mkdirSync(runDir, { recursive: true })
   const lockPath = spawnLockPath(runDir)
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (const _ of [0, 1]) {
     try {
       const fd = fs.openSync(lockPath, 'wx')
       try {
@@ -57,12 +57,13 @@ export function tryAcquireSpawnLock(
       return { fd, path: lockPath }
     } catch {
       // Lock exists — reclaim if the holder is dead, otherwise yield.
-      let holderPid: number | null = null
-      try {
-        holderPid = parseInt(fs.readFileSync(lockPath, 'utf-8').trim(), 10)
-      } catch {
-        holderPid = null
-      }
+      const holderPid = (() => {
+        try {
+          return parseInt(fs.readFileSync(lockPath, 'utf-8').trim(), 10)
+        } catch {
+          return null
+        }
+      })()
 
       if (holderPid && !Number.isNaN(holderPid) && isProcessRunning(holderPid)) {
         return null

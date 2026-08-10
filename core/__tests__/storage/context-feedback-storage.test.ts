@@ -19,30 +19,35 @@ import { prjctDb } from '../../storage/database'
 
 // Test Setup
 
-let tmpRoot: string
-let testProjectId: string
+const fixture: {
+  tmpRoot: string
+  testProjectId: string
+} = {
+  tmpRoot: '',
+  testProjectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('Context Feedback Storage', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cf-test-'))
-    testProjectId = 'test-cf-project'
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cf-test-'))
+    fixture.testProjectId = 'test-cf-project'
 
-    pathManager.getGlobalProjectPath = (projectId: string) => path.join(tmpRoot, projectId)
+    pathManager.getGlobalProjectPath = (projectId: string) => path.join(fixture.tmpRoot, projectId)
 
-    await fs.mkdir(path.join(tmpRoot, testProjectId), { recursive: true })
+    await fs.mkdir(path.join(fixture.tmpRoot, fixture.testProjectId), { recursive: true })
 
     // Initialize the database (triggers all migrations)
-    prjctDb.getDb(testProjectId)
+    prjctDb.getDb(fixture.testProjectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
 
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
     }
   })
 
@@ -50,14 +55,14 @@ describe('Context Feedback Storage', () => {
 
   it('should record suggestions and persist to DB', () => {
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-1',
       ['auth', 'login', 'user'],
       ['src/auth/login.ts', 'src/models/user.ts']
     )
 
     const row = prjctDb.get<{ task_id: string; keywords: string; suggested_files: string }>(
-      testProjectId,
+      fixture.testProjectId,
       'SELECT task_id, keywords, suggested_files FROM context_feedback WHERE task_id = ?',
       'task-1'
     )
@@ -73,13 +78,13 @@ describe('Context Feedback Storage', () => {
   it('should calculate precision and recall correctly', () => {
     // Suggested 2 files, only 1 was actually used, but user also used 1 extra
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-2',
       ['auth', 'login'],
       ['src/auth/login.ts', 'src/auth/session.ts']
     )
 
-    contextFeedbackStorage.completeFeedback(testProjectId, 'task-2', [
+    contextFeedbackStorage.completeFeedback(fixture.testProjectId, 'task-2', [
       'src/auth/login.ts',
       'src/auth/middleware.ts',
     ])
@@ -90,7 +95,7 @@ describe('Context Feedback Storage', () => {
       actual_files: string
       completed_at: string
     }>(
-      testProjectId,
+      fixture.testProjectId,
       'SELECT precision, recall, actual_files, completed_at FROM context_feedback WHERE task_id = ?',
       'task-2'
     )
@@ -106,16 +111,18 @@ describe('Context Feedback Storage', () => {
 
   it('should handle perfect precision and recall', () => {
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-3',
       ['button', 'component'],
       ['src/components/Button.tsx']
     )
 
-    contextFeedbackStorage.completeFeedback(testProjectId, 'task-3', ['src/components/Button.tsx'])
+    contextFeedbackStorage.completeFeedback(fixture.testProjectId, 'task-3', [
+      'src/components/Button.tsx',
+    ])
 
     const row = prjctDb.get<{ precision: number; recall: number }>(
-      testProjectId,
+      fixture.testProjectId,
       'SELECT precision, recall FROM context_feedback WHERE task_id = ?',
       'task-3'
     )
@@ -129,18 +136,21 @@ describe('Context Feedback Storage', () => {
   it('should return positive scores for previously-relevant files', () => {
     // Record a completed task where auth files were actually used
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-a',
       ['auth', 'login'],
       ['src/auth/login.ts']
     )
-    contextFeedbackStorage.completeFeedback(testProjectId, 'task-a', [
+    contextFeedbackStorage.completeFeedback(fixture.testProjectId, 'task-a', [
       'src/auth/login.ts',
       'src/auth/middleware.ts',
     ])
 
     // Query boosts for a similar task
-    const boosts = contextFeedbackStorage.getHistoricalBoosts(testProjectId, ['auth', 'session'])
+    const boosts = contextFeedbackStorage.getHistoricalBoosts(fixture.testProjectId, [
+      'auth',
+      'session',
+    ])
 
     // auth/login.ts and auth/middleware.ts should have positive boosts
     expect(boosts.get('src/auth/login.ts')).toBeGreaterThan(0)
@@ -150,14 +160,17 @@ describe('Context Feedback Storage', () => {
   it('should return negative scores for false-positive suggestions', () => {
     // Record a task where suggested file was NOT actually used
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-b',
       ['auth', 'login'],
       ['src/auth/login.ts', 'src/unrelated/file.ts']
     )
-    contextFeedbackStorage.completeFeedback(testProjectId, 'task-b', ['src/auth/login.ts'])
+    contextFeedbackStorage.completeFeedback(fixture.testProjectId, 'task-b', ['src/auth/login.ts'])
 
-    const boosts = contextFeedbackStorage.getHistoricalBoosts(testProjectId, ['auth', 'login'])
+    const boosts = contextFeedbackStorage.getHistoricalBoosts(fixture.testProjectId, [
+      'auth',
+      'login',
+    ])
 
     // unrelated/file.ts was suggested but not used — should be penalized
     expect(boosts.get('src/unrelated/file.ts')).toBeLessThan(0)
@@ -166,50 +179,56 @@ describe('Context Feedback Storage', () => {
   })
 
   it('should return empty map on cold start (no data)', () => {
-    const boosts = contextFeedbackStorage.getHistoricalBoosts(testProjectId, ['auth', 'login'])
+    const boosts = contextFeedbackStorage.getHistoricalBoosts(fixture.testProjectId, [
+      'auth',
+      'login',
+    ])
     expect(boosts.size).toBe(0)
   })
 
   it('should return empty map for empty keywords', () => {
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-c',
       ['auth'],
       ['src/auth/login.ts']
     )
-    contextFeedbackStorage.completeFeedback(testProjectId, 'task-c', ['src/auth/login.ts'])
+    contextFeedbackStorage.completeFeedback(fixture.testProjectId, 'task-c', ['src/auth/login.ts'])
 
-    const boosts = contextFeedbackStorage.getHistoricalBoosts(testProjectId, [])
+    const boosts = contextFeedbackStorage.getHistoricalBoosts(fixture.testProjectId, [])
     expect(boosts.size).toBe(0)
   })
 
   it('should filter by keyword overlap — unrelated tasks should not influence', () => {
     // Task about auth
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-auth',
       ['auth', 'login', 'session'],
       ['src/auth/login.ts']
     )
-    contextFeedbackStorage.completeFeedback(testProjectId, 'task-auth', [
+    contextFeedbackStorage.completeFeedback(fixture.testProjectId, 'task-auth', [
       'src/auth/login.ts',
       'src/auth/session.ts',
     ])
 
     // Task about database (completely different keywords)
     contextFeedbackStorage.recordSuggestions(
-      testProjectId,
+      fixture.testProjectId,
       'task-db',
       ['database', 'migration', 'schema'],
       ['src/db/migration.ts']
     )
-    contextFeedbackStorage.completeFeedback(testProjectId, 'task-db', [
+    contextFeedbackStorage.completeFeedback(fixture.testProjectId, 'task-db', [
       'src/db/migration.ts',
       'src/db/schema.ts',
     ])
 
     // Query boosts for a new auth task — DB files should NOT appear
-    const boosts = contextFeedbackStorage.getHistoricalBoosts(testProjectId, ['auth', 'password'])
+    const boosts = contextFeedbackStorage.getHistoricalBoosts(fixture.testProjectId, [
+      'auth',
+      'password',
+    ])
 
     // Auth files should be boosted (keyword overlap with auth task)
     expect(boosts.has('src/auth/login.ts') || boosts.has('src/auth/session.ts')).toBe(true)
@@ -221,19 +240,19 @@ describe('Context Feedback Storage', () => {
 
   it('should normalize scores to [-1, 1] range', () => {
     // Create multiple feedback entries to accumulate scores
-    for (let i = 0; i < 5; i++) {
+    for (const i of Array.from({ length: 5 }, (_, index) => index)) {
       contextFeedbackStorage.recordSuggestions(
-        testProjectId,
+        fixture.testProjectId,
         `task-norm-${i}`,
         ['component', 'button'],
         ['src/components/Button.tsx', 'src/utils/helpers.ts']
       )
-      contextFeedbackStorage.completeFeedback(testProjectId, `task-norm-${i}`, [
+      contextFeedbackStorage.completeFeedback(fixture.testProjectId, `task-norm-${i}`, [
         'src/components/Button.tsx',
       ])
     }
 
-    const boosts = contextFeedbackStorage.getHistoricalBoosts(testProjectId, [
+    const boosts = contextFeedbackStorage.getHistoricalBoosts(fixture.testProjectId, [
       'component',
       'button',
     ])

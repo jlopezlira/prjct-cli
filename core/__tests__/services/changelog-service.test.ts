@@ -10,29 +10,33 @@ import { ChangelogService } from '../../services/changelog-service'
 // one.
 
 describe('ChangelogService.addFeature (idempotency)', () => {
-  let dir: string
+  const fixture: {
+    dir: string
+  } = {
+    dir: '',
+  }
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-changelog-'))
+    fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-changelog-'))
   })
 
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
   })
 
   async function readChangelog(): Promise<string> {
-    return fs.readFile(path.join(dir, 'CHANGELOG.md'), 'utf-8')
+    return fs.readFile(path.join(fixture.dir, 'CHANGELOG.md'), 'utf-8')
   }
 
   it('appends a new entry on first call', async () => {
-    const svc = new ChangelogService(dir)
+    const svc = new ChangelogService(fixture.dir)
     await svc.addFeature('1.2.4', 'first feature')
     expect(await readChangelog()).toContain('## [1.2.4]')
     expect(await readChangelog()).toContain('first feature')
   })
 
   it('does NOT add a duplicate entry when version already exists', async () => {
-    const svc = new ChangelogService(dir)
+    const svc = new ChangelogService(fixture.dir)
     await svc.addFeature('1.2.4', 'first feature')
     const before = await readChangelog()
 
@@ -45,7 +49,7 @@ describe('ChangelogService.addFeature (idempotency)', () => {
   })
 
   it('still adds entries for new versions after an existing entry', async () => {
-    const svc = new ChangelogService(dir)
+    const svc = new ChangelogService(fixture.dir)
     await svc.addFeature('1.2.4', 'patch')
     await svc.addFeature('1.3.0', 'feature')
     const content = await readChangelog()
@@ -54,7 +58,7 @@ describe('ChangelogService.addFeature (idempotency)', () => {
   })
 
   it('PROMOTES [Unreleased] into the release, leaving a fresh empty one (mem_2895)', async () => {
-    const file = path.join(dir, 'CHANGELOG.md')
+    const file = path.join(fixture.dir, 'CHANGELOG.md')
     await fs.writeFile(
       file,
       [
@@ -77,7 +81,7 @@ describe('ChangelogService.addFeature (idempotency)', () => {
         '',
       ].join('\n')
     )
-    const svc = new ChangelogService(dir)
+    const svc = new ChangelogService(fixture.dir)
     await svc.addFeature('1.3.0', 'ship feature line')
     const c = await readChangelog()
 
@@ -97,14 +101,16 @@ describe('ChangelogService.addFeature (idempotency)', () => {
   })
 
   it('does not re-strand across consecutive ships (the 3× recurrence)', async () => {
-    const file = path.join(dir, 'CHANGELOG.md')
+    const file = path.join(fixture.dir, 'CHANGELOG.md')
     await fs.writeFile(file, `${'# Changelog'}\n\nKeep a Changelog\n\n## [Unreleased]\n\n`)
-    const svc = new ChangelogService(dir)
+    const svc = new ChangelogService(fixture.dir)
 
     await svc.addFeature('2.0.0', 'first ship')
     // A dev/process accumulates rich content under the fresh [Unreleased].
-    let c = await readChangelog()
-    c = c.replace(/## \[Unreleased\]\n/, '## [Unreleased]\n\n### Changed\n- accumulated work\n')
+    const c = (await readChangelog()).replace(
+      /## \[Unreleased\]\n/,
+      '## [Unreleased]\n\n### Changed\n- accumulated work\n'
+    )
     await fs.writeFile(file, c)
     await svc.addFeature('2.1.0', 'second ship')
 
@@ -119,9 +125,9 @@ describe('ChangelogService.addFeature (idempotency)', () => {
   })
 
   it('handles generic markdown format (no Keep a Changelog markers)', async () => {
-    const file = path.join(dir, 'CHANGELOG.md')
+    const file = path.join(fixture.dir, 'CHANGELOG.md')
     await fs.writeFile(file, '# Changelog\n\n## 1.2.3 - 2025-01-01\n\n- old entry\n')
-    const svc = new ChangelogService(dir)
+    const svc = new ChangelogService(fixture.dir)
     await svc.addFeature('1.2.4', 'new feature')
     const content = await readChangelog()
     expect(content).toContain('## 1.2.4')

@@ -49,22 +49,21 @@ export class ReviewRiskCommands extends PrjctCommandsBase {
       const protocol = intensityProtocol(intensity)
 
       // Optional structural blast/risk when symbol index exists
-      let blastNote = ''
-      try {
-        const proj = await requireProject(projectPath, options)
-        if (proj.ok) {
+      const blastNote = await (async () => {
+        try {
+          const proj = await requireProject(projectPath, options)
+          if (!proj.ok) return ''
           const { hasSymbolIndex } = await import('../domain/symbol-graph')
-          if (hasSymbolIndex(proj.value)) {
-            const { detectChanges } = await import('../services/detect-changes')
-            const det = await detectChanges(projectPath, proj.value, { source: 'committed' })
-            if (det.changedFiles.length > 0) {
-              blastNote = `Structural risk: critical=${det.summary.critical} high=${det.summary.high} medium=${det.summary.medium} low=${det.summary.low} · blast ${det.affectedFiles.length} files`
-            }
-          }
+          if (!hasSymbolIndex(proj.value)) return ''
+          const { detectChanges } = await import('../services/detect-changes')
+          const det = await detectChanges(projectPath, proj.value, { source: 'committed' })
+          return det.changedFiles.length > 0
+            ? `Structural risk: critical=${det.summary.critical} high=${det.summary.high} medium=${det.summary.medium} low=${det.summary.low} · blast ${det.affectedFiles.length} files`
+            : ''
+        } catch {
+          return ''
         }
-      } catch {
-        /* advisory only */
-      }
+      })()
 
       console.log(
         options.md

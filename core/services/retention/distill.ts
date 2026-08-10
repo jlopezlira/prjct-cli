@@ -29,7 +29,7 @@ const MAX_BULLET_CHARS = 140
 /** Hard-delete live or soft-deleted memory_entries by id (and embeddings). */
 export function hardDeleteEntries(projectId: string, ids: string[]): number {
   if (ids.length === 0) return 0
-  let n = 0
+  const deleted: string[] = []
   try {
     prjctDb.transaction(projectId, (db) => {
       const delEmb = db.prepare('DELETE FROM memory_embeddings WHERE memory_id = ?')
@@ -43,7 +43,7 @@ export function hardDeleteEntries(projectId: string, ids: string[]): number {
           /* ok */
         }
         const r = delEntry.run(id)
-        if ((r as { changes?: number }).changes) n++
+        if ((r as { changes?: number }).changes) deleted.push(id)
         const m = id.match(/^mem_(\d+)$/)
         if (m) {
           try {
@@ -55,9 +55,9 @@ export function hardDeleteEntries(projectId: string, ids: string[]): number {
       }
     })
   } catch {
-    return n
+    return deleted.length
   }
-  return n
+  return deleted.length
 }
 
 /**
@@ -124,9 +124,8 @@ export async function distillAndDiscardAutoSource(
   const topic = `auto-distill:${source}`
   const content = buildDistillContent(source, overflow, nowIso)
 
-  let digested = false
-  try {
-    await projectMemory.remember(projectPath, {
+  const digested = await projectMemory
+    .remember(projectPath, {
       type: 'learning',
       content,
       tags: {
@@ -141,10 +140,8 @@ export async function distillAndDiscardAutoSource(
       provenance: 'inferred',
       projectId,
     })
-    digested = true
-  } catch {
-    digested = false
-  }
+    .then(() => true)
+    .catch(() => false)
 
   // Hard-delete overflow — no soft-delete, no archives table.
   // Exclude the digest if remember re-used an id (won't be in overflow).
@@ -174,15 +171,16 @@ export async function distillAndDiscardAllAutoSources(
     bySource.set(src!, list)
   }
 
-  let discarded = 0
-  let digests = 0
+  const results: DistillDiscardResult[] = []
   for (const [source, list] of bySource) {
     if (list.length <= maxLive) continue
     const r = await distillAndDiscardAutoSource(projectPath, projectId, source, list, maxLive)
-    discarded += r.discarded
-    if (r.digested) digests++
+    results.push(r)
   }
-  return { discarded, digests }
+  return {
+    discarded: results.reduce((total, result) => total + result.discarded, 0),
+    digests: results.filter((result) => result.digested).length,
+  }
 }
 
 /**

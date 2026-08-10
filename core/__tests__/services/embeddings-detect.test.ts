@@ -42,18 +42,23 @@ describe('detectBaseUrlFromKey', () => {
 })
 
 describe('setGlobalEmbeddings partial-update preservation', () => {
-  let tmp: string
-  let orig: string | undefined
+  const fixture: {
+    tmp: string
+    orig: string | undefined
+  } = {
+    tmp: '',
+    orig: undefined as unknown as string | undefined,
+  }
 
   beforeEach(async () => {
-    tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-embset-'))
-    orig = process.env.PRJCT_CLI_HOME
-    process.env.PRJCT_CLI_HOME = tmp
+    fixture.tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-embset-'))
+    fixture.orig = process.env.PRJCT_CLI_HOME
+    process.env.PRJCT_CLI_HOME = fixture.tmp
   })
   afterEach(async () => {
-    if (orig === undefined) delete process.env.PRJCT_CLI_HOME
-    else process.env.PRJCT_CLI_HOME = orig
-    await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
+    if (fixture.orig === undefined) delete process.env.PRJCT_CLI_HOME
+    else process.env.PRJCT_CLI_HOME = fixture.orig
+    await fs.rm(fixture.tmp, { recursive: true, force: true }).catch(() => undefined)
   })
 
   test('first config seeds defaults; later partial set preserves them', () => {

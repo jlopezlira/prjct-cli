@@ -201,9 +201,9 @@ export class LlmCommands extends PrjctCommandsBase {
     const nameRaw = options.name ?? flag(parts, 'name')
     const key = options.key ?? flag(parts, 'key')
     const model = options.model ?? flag(parts, 'model')
-    let baseUrl = options.baseUrl ?? flag(parts, 'base-url') ?? flag(parts, 'baseUrl')
-    let wire = parseWire(options.wire ?? flag(parts, 'wire'))
-    let providerLabel = options.provider ?? flag(parts, 'provider')
+    const explicitBaseUrl = options.baseUrl ?? flag(parts, 'base-url') ?? flag(parts, 'baseUrl')
+    const explicitWire = parseWire(options.wire ?? flag(parts, 'wire'))
+    const explicitProviderLabel = options.provider ?? flag(parts, 'provider')
     const weakExplicit =
       options.weak === true || hasFlag(parts, 'weak')
         ? true
@@ -216,13 +216,12 @@ export class LlmCommands extends PrjctCommandsBase {
       authSchemeRaw === undefined ? undefined : /^none$/i.test(authSchemeRaw) ? '' : authSchemeRaw
 
     // Detection from key / base URL (does not override explicit flags)
-    let detected: ReturnType<typeof detectBrainFromKey> | undefined
-    if (key) detected = detectBrainFromKey(key)
-    if (!detected && baseUrl) detected = detectBrainFromBaseUrl(baseUrl)
-
-    if (!baseUrl && detected) baseUrl = detected.baseUrl
-    if (!wire && detected) wire = detected.wire
-    if (!providerLabel && detected) providerLabel = detected.providerLabel
+    const detected =
+      (key ? detectBrainFromKey(key) : undefined) ??
+      (explicitBaseUrl ? detectBrainFromBaseUrl(explicitBaseUrl) : undefined)
+    const baseUrl = explicitBaseUrl ?? detected?.baseUrl
+    const wire = explicitWire ?? detected?.wire
+    const providerLabel = explicitProviderLabel ?? detected?.providerLabel
 
     // Resolve name: explicit → existing inference → detected label → default
     const provisionalName = slugifyProfileName(
@@ -268,31 +267,30 @@ export class LlmCommands extends PrjctCommandsBase {
       )
     }
 
-    let profile: LlmProfile
-    try {
-      profile = upsertLlmProfile(patch, { activate: true })
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
-
-    let keyLocation: 'keychain' | 'file' | undefined
-    if (key) {
+    const profile: LlmProfile | null = (() => {
       try {
-        keyLocation = await setLlmKey(profile.name, key)
-      } catch (error) {
-        return failHard(`Could not store the key securely: ${getErrorMessage(error)}`, options)
-      }
-    } else if (
-      profile.wire === 'openai-compatible' &&
-      isLocalBaseUrl(profile.baseUrl) &&
-      (await getLlmKeyLocation(profile.name, { isActive: true })) === 'none'
-    ) {
-      try {
-        keyLocation = await setLlmKey(profile.name, LOCAL_DUMMY_KEY)
+        return upsertLlmProfile(patch, { activate: true })
       } catch {
-        /* optional */
+        return null
       }
+    })()
+    if (!profile) return failHard('Could not save the LLM profile.', options)
+
+    const keyResult: { location?: 'keychain' | 'file'; error?: string } = key
+      ? await setLlmKey(profile.name, key)
+          .then((location) => ({ location }))
+          .catch((error) => ({ error: getErrorMessage(error) }))
+      : profile.wire === 'openai-compatible' &&
+          isLocalBaseUrl(profile.baseUrl) &&
+          (await getLlmKeyLocation(profile.name, { isActive: true })) === 'none'
+        ? await setLlmKey(profile.name, LOCAL_DUMMY_KEY)
+            .then((location) => ({ location }))
+            .catch(() => ({}))
+        : {}
+    if (keyResult.error) {
+      return failHard(`Could not store the key securely: ${keyResult.error}`, options)
     }
+    const keyLocation = keyResult.location
 
     const loc =
       keyLocation ??
@@ -398,7 +396,9 @@ export class LlmCommands extends PrjctCommandsBase {
 
     const rows: Array<Record<string, string>> = []
     for (const p of state.profiles) {
-      const loc = await getLlmKeyLocation(p.name, { isActive: state.active === p.name })
+      const loc = await getLlmKeyLocation(p.name, {
+        isActive: state.active === p.name,
+      })
       rows.push({
         name: p.name + (state.active === p.name ? ' *' : ''),
         provider: p.providerLabel,

@@ -116,31 +116,30 @@ export async function applyDoctorHeal(
   const skipped: string[] = []
   const errors: string[] = []
 
-  let hooksInstalled = 0
-  let hooksExpected = 0
-  try {
-    const s = await hookStatus()
-    hooksInstalled = s.installed
-    hooksExpected = s.expected
-  } catch (e) {
-    errors.push(`hook status: ${(e as Error).message}`)
-  }
+  const { hooksInstalled, hooksExpected } = await hookStatus()
+    .then((status) => ({ hooksInstalled: status.installed, hooksExpected: status.expected }))
+    .catch((error) => {
+      errors.push(`hook status: ${(error as Error).message}`)
+      return { hooksInstalled: 0, hooksExpected: 0 }
+    })
 
-  let coverage = await probeHarnessCoverage(projectPath).catch(() => null)
+  const coverageSnapshots = [await probeHarnessCoverage(projectPath).catch(() => null)]
   const projectId = await configManager.getProjectId(projectPath).catch(() => null)
 
-  let skillPoisoned = false
-  try {
-    const fs = await import('node:fs/promises')
-    const path = await import('node:path')
-    const os = await import('node:os')
-    const { skillBodyHasProjectStamp } = await import('./skill-generator')
-    const skillPath = path.join(os.homedir(), '.claude', 'skills', 'prjct', 'SKILL.md')
-    const body = await fs.readFile(skillPath, 'utf-8').catch(() => null)
-    skillPoisoned = body ? skillBodyHasProjectStamp(body) : false
-  } catch {
-    skillPoisoned = false
-  }
+  const skillPoisoned = await (async () => {
+    try {
+      const fs = await import('node:fs/promises')
+      const path = await import('node:path')
+      const os = await import('node:os')
+      const { skillBodyHasProjectStamp } = await import('./skill-generator')
+      const skillPath = path.join(os.homedir(), '.claude', 'skills', 'prjct', 'SKILL.md')
+      const body = await fs.readFile(skillPath, 'utf-8').catch(() => null)
+      return body ? skillBodyHasProjectStamp(body) : false
+    } catch {
+      return false
+    }
+  })()
+  const coverage = coverageSnapshots[0]
 
   const plan = planDoctorHeal({
     hooksInstalled,
@@ -210,7 +209,7 @@ export async function applyDoctorHeal(
         await writeProjectAgentSurfaces(projectPath, { explicit: true })
         applied.push(action.id)
       } else if (action.id === 'organic-board') {
-        coverage = await probeHarnessCoverage(projectPath)
+        coverageSnapshots.push(await probeHarnessCoverage(projectPath))
         applied.push(action.id)
       }
     } catch (e) {
@@ -218,9 +217,10 @@ export async function applyDoctorHeal(
     }
   }
 
-  const liveCount = coverage?.liveCount ?? 0
-  const detectedCount = coverage?.detectedCount ?? 0
-  const organicPct = coverage?.organicPct ?? 0
+  const finalCoverage = coverageSnapshots.at(-1)
+  const liveCount = finalCoverage?.liveCount ?? 0
+  const detectedCount = finalCoverage?.detectedCount ?? 0
+  const organicPct = finalCoverage?.organicPct ?? 0
   const line = `Doctor heal: applied ${applied.length} · skipped ${skipped.length} · errors ${errors.length} · organic ${liveCount}/${detectedCount} (${organicPct}%)`
 
   return {

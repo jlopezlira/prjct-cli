@@ -32,16 +32,13 @@ export function mergeWithMarkers(
   const afterMarker = existing.substring(existing.indexOf(endMarker) + endMarker.length)
 
   // Extract prjct section from template (in case template has extra content around markers)
-  let prjctSection: string
-  if (template.includes(startMarker) && template.includes(endMarker)) {
-    prjctSection = template.substring(
-      template.indexOf(startMarker),
-      template.indexOf(endMarker) + endMarker.length
-    )
-  } else {
-    // Template IS the section
-    prjctSection = template
-  }
+  const prjctSection =
+    template.includes(startMarker) && template.includes(endMarker)
+      ? template.substring(
+          template.indexOf(startMarker),
+          template.indexOf(endMarker) + endMarker.length
+        )
+      : template
 
   return {
     content: beforeMarker + prjctSection + afterMarker,

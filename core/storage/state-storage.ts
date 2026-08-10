@@ -303,15 +303,14 @@ class StateStorage extends StorageManager<StateJson> {
     projectId: string,
     fields: Partial<CurrentTask> & Record<string, unknown>
   ): Promise<CurrentTask | null> {
-    let updated: CurrentTask | null = null
-    await this.update(projectId, (s) => {
+    const state = await this.update(projectId, (s) => {
       if (!s.currentTask) return s
       const next: Record<string, unknown> = { ...s.currentTask }
       for (const [k, v] of Object.entries(fields)) {
         if (v === null) delete next[k]
         else if (v !== undefined) next[k] = v
       }
-      updated = next as CurrentTask
+      const updated = next as CurrentTask
       return {
         ...s,
         currentTask: updated,
@@ -319,7 +318,7 @@ class StateStorage extends StorageManager<StateJson> {
       }
     })
 
-    return updated
+    return state.currentTask
   }
 
   /**

@@ -231,16 +231,15 @@ export function detectTrend(sprints: SprintVelocity[]): VelocityTrend {
   const n = points.length
 
   // Simple linear regression slope
-  let sumX = 0
-  let sumY = 0
-  let sumXY = 0
-  let sumX2 = 0
-  for (let i = 0; i < n; i++) {
-    sumX += i
-    sumY += points[i]
-    sumXY += i * points[i]
-    sumX2 += i * i
-  }
+  const [sumX, sumY, sumXY, sumX2] = points.reduce<[number, number, number, number]>(
+    (sums, point, index) => [
+      sums[0] + index,
+      sums[1] + point,
+      sums[2] + index * point,
+      sums[3] + index * index,
+    ],
+    [0, 0, 0, 0]
+  )
 
   const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
   const avgVelocity = sumY / n
@@ -366,9 +365,9 @@ export function formatVelocityContext(metrics: VelocityMetrics): string {
     )
   }
 
-  for (const pattern of metrics.overEstimated) {
+  for (const pattern2 of metrics.overEstimated) {
     lines.push(
-      `"${pattern.category}" tasks typically finish ${pattern.avgVariance}% faster than estimated`
+      `"${pattern2.category}" tasks typically finish ${pattern2.avgVariance}% faster than estimated`
     )
   }
 
@@ -396,16 +395,9 @@ function derivePoints(outcome: Outcome): number {
   const minutes = parseDurationMinutes(outcome.estimatedDuration)
   if (minutes <= 0) return 0
 
-  let closest = FIBONACCI_MINUTES[0]
-  let smallestDiff = Number.POSITIVE_INFINITY
-
-  for (const entry of FIBONACCI_MINUTES) {
-    const diff = Math.abs(entry.typical - minutes)
-    if (diff < smallestDiff) {
-      smallestDiff = diff
-      closest = entry
-    }
-  }
+  const closest = FIBONACCI_MINUTES.reduce((best, entry) =>
+    Math.abs(entry.typical - minutes) < Math.abs(best.typical - minutes) ? entry : best
+  )
 
   return closest.points
 }

@@ -56,11 +56,9 @@ class PrjctDatabase {
   private statementCache = new WeakMap<SqliteDatabase, Map<string, SqliteStatement>>()
 
   private prepareCached(db: SqliteDatabase, sql: string): SqliteStatement {
-    let cache = this.statementCache.get(db)
-    if (!cache) {
-      cache = new Map()
-      this.statementCache.set(db, cache)
-    }
+    const existingCache = this.statementCache.get(db)
+    const cache = existingCache ?? new Map<string, SqliteStatement>()
+    if (!existingCache) this.statementCache.set(db, cache)
     const hit = cache.get(sql)
     if (hit) return hit
     const stmt = db.prepare(sql)
@@ -87,24 +85,19 @@ class PrjctDatabase {
 
     const dbPath = this.getDbPath(projectId)
     const dbDir = path.dirname(dbPath)
-    let db: SqliteDatabase
-    try {
-      if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
-      // openDatabase bakes in WAL + busy_timeout=5000 — daemon-safety pragmas
-      // every connection needs. Performance tuning stays here.
-      db = openDatabase(dbPath)
-
-      db.run('PRAGMA synchronous = NORMAL')
-      db.run('PRAGMA cache_size = -2000') // 2MB cache
-      db.run('PRAGMA temp_store = MEMORY')
-      db.run('PRAGMA mmap_size = 33554432') // 32MB mmap
-    } catch (error) {
-      // A sandboxed/offline harness (e.g. Codex running with a read-only home)
-      // surfaces this as a cryptic "attempt to write a readonly database" or
-      // EPERM/EACCES on the mkdir/open. Translate it into one actionable line
-      // instead of a raw driver stack trace.
-      throw new Error(describeFsWriteError(error, dbPath, 'database'))
-    }
+    const db = (() => {
+      try {
+        if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
+        const opened = openDatabase(dbPath)
+        opened.run('PRAGMA synchronous = NORMAL')
+        opened.run('PRAGMA cache_size = -2000')
+        opened.run('PRAGMA temp_store = MEMORY')
+        opened.run('PRAGMA mmap_size = 33554432')
+        return opened
+      } catch (error) {
+        throw new Error(describeFsWriteError(error, dbPath, 'database'))
+      }
+    })()
 
     this.runMigrations(db, dbPath)
 

@@ -20,8 +20,10 @@ import { stateStorage } from '../../storage/state-storage'
 
 // Test Setup
 
-let tmpRoot: string | null = null
-let testProjectId: string
+const fixture: { tmpRoot: string | null; testProjectId: string } = {
+  tmpRoot: null,
+  testProjectId: '',
+}
 
 // Mock pathManager to use temp directory
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
@@ -30,27 +32,27 @@ const originalGetFilePath = pathManager.getFilePath.bind(pathManager)
 
 beforeEach(async () => {
   // Create temp directory for test isolation
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-history-test-'))
-  testProjectId = `test-history-${Date.now()}`
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-history-test-'))
+  fixture.testProjectId = `test-history-${Date.now()}`
 
   // Mock pathManager to use temp directory
   pathManager.getGlobalProjectPath = (projectId: string) => {
-    return path.join(tmpRoot!, projectId)
+    return path.join(fixture.tmpRoot!, projectId)
   }
 
   pathManager.getStoragePath = (projectId: string, filename: string) => {
-    return path.join(tmpRoot!, projectId, 'storage', filename)
+    return path.join(fixture.tmpRoot!, projectId, 'storage', filename)
   }
 
   pathManager.getFilePath = (projectId: string, layer: string, filename: string) => {
-    return path.join(tmpRoot!, projectId, layer, filename)
+    return path.join(fixture.tmpRoot!, projectId, layer, filename)
   }
 
   // Create storage and sync directories
-  const storagePath = pathManager.getStoragePath(testProjectId, '')
+  const storagePath = pathManager.getStoragePath(fixture.testProjectId, '')
   await fs.mkdir(storagePath, { recursive: true })
 
-  const syncPath = path.join(tmpRoot!, testProjectId, 'sync')
+  const syncPath = path.join(fixture.tmpRoot!, fixture.testProjectId, 'sync')
   await fs.mkdir(syncPath, { recursive: true })
 })
 
@@ -64,9 +66,9 @@ afterEach(async () => {
   pathManager.getFilePath = originalGetFilePath
 
   // Clean up temp directory
-  if (tmpRoot) {
-    await fs.rm(tmpRoot, { recursive: true, force: true })
-    tmpRoot = null
+  if (fixture.tmpRoot) {
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+    fixture.tmpRoot = null
   }
 })
 
@@ -75,15 +77,14 @@ afterEach(async () => {
 /**
  * Create a mock task for testing
  */
-let mockTaskSeq = 0
 function createMockTask(
   overrides: Partial<CurrentTask> & Record<string, unknown> = {}
 ): CurrentTask {
   // Unique per call: Date.now() alone collides in a fast loop, and the typed
   // history store upserts by id (real tasks use UUIDs).
-  mockTaskSeq++
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return {
-    id: `task-${Date.now()}-${mockTaskSeq}`,
+    id: `task-${uniqueSuffix}`,
     description: 'Test task',
     startedAt: new Date().toISOString(),
     sessionId: `session-${Date.now()}`,
@@ -114,7 +115,7 @@ describe('Task History - Push on Completion', () => {
       description: 'Test task 1',
     })
 
-    const state = await completeTaskAndGetState(testProjectId, task)
+    const state = await completeTaskAndGetState(fixture.testProjectId, task)
 
     expect(state.taskHistory).toBeDefined()
     expect(state.taskHistory?.length).toBe(1)
@@ -128,7 +129,7 @@ describe('Task History - Push on Completion', () => {
       linearUuid: 'uuid-123',
     })
 
-    const state = await completeTaskAndGetState(testProjectId, task)
+    const state = await completeTaskAndGetState(fixture.testProjectId, task)
 
     const entry = state.taskHistory![0]
     expect(entry.taskId).toBe(task.id)
@@ -172,7 +173,7 @@ describe('Task History - Push on Completion', () => {
       ],
     })
 
-    const state = await completeTaskAndGetState(testProjectId, task)
+    const state = await completeTaskAndGetState(fixture.testProjectId, task)
 
     const entry = state.taskHistory![0]
     expect(entry.subtaskCount).toBe(2)
@@ -182,14 +183,14 @@ describe('Task History - Push on Completion', () => {
 
   it('should preserve order - newest entries first', async () => {
     // Complete 3 tasks
-    for (let i = 1; i <= 3; i++) {
+    for (const i of Array.from({ length: 3 }, (_, index) => index + 1)) {
       const task = createMockTask({
         description: `Task ${i}`,
       })
-      await completeTaskAndGetState(testProjectId, task)
+      await completeTaskAndGetState(fixture.testProjectId, task)
     }
 
-    const state = { taskHistory: await stateStorage.getTaskHistory(testProjectId) }
+    const state = { taskHistory: await stateStorage.getTaskHistory(fixture.testProjectId) }
 
     expect(state.taskHistory?.length).toBe(3)
     expect(state.taskHistory![0].title).toBe('Task 3') // Newest first
@@ -203,30 +204,30 @@ describe('Task History - Push on Completion', () => {
 describe('Task History - FIFO Eviction', () => {
   it('should enforce max 20 entries', async () => {
     // Complete 25 tasks
-    for (let i = 1; i <= 25; i++) {
+    for (const i of Array.from({ length: 25 }, (_, index) => index + 1)) {
       const task = createMockTask({
         description: `Task ${i}`,
       })
-      await completeTaskAndGetState(testProjectId, task)
+      await completeTaskAndGetState(fixture.testProjectId, task)
     }
 
     // The typed store keeps the FULL history; the read surface stays capped
     // at 20 for parity with the legacy FIFO list.
-    const state = { taskHistory: await stateStorage.getTaskHistory(testProjectId) }
+    const state = { taskHistory: await stateStorage.getTaskHistory(fixture.testProjectId) }
 
     expect(state.taskHistory?.length).toBe(20) // Max 20
   })
 
   it('should drop oldest entries when exceeding limit', async () => {
     // Complete 22 tasks
-    for (let i = 1; i <= 22; i++) {
+    for (const i of Array.from({ length: 22 }, (_, index) => index + 1)) {
       const task = createMockTask({
         description: `Task ${i}`,
       })
-      await completeTaskAndGetState(testProjectId, task)
+      await completeTaskAndGetState(fixture.testProjectId, task)
     }
 
-    const state = { taskHistory: await stateStorage.getTaskHistory(testProjectId) }
+    const state = { taskHistory: await stateStorage.getTaskHistory(fixture.testProjectId) }
 
     expect(state.taskHistory?.length).toBe(20)
     expect(state.taskHistory![0].title).toBe('Task 22') // Newest
@@ -240,7 +241,7 @@ describe('Task History - FIFO Eviction', () => {
 describe('Task History - Backward Compatibility', () => {
   it('should initialize taskHistory as empty array when undefined', async () => {
     // Read state before any tasks (should use default)
-    const state = await stateStorage.read(testProjectId)
+    const state = await stateStorage.read(fixture.testProjectId)
 
     expect(state.taskHistory).toBeDefined()
     expect(Array.isArray(state.taskHistory)).toBe(true)
@@ -249,7 +250,7 @@ describe('Task History - Backward Compatibility', () => {
 
   it('should handle missing taskHistory field in existing state', async () => {
     // Manually write state without taskHistory field
-    const stateFile = pathManager.getStoragePath(testProjectId, 'state.json')
+    const stateFile = pathManager.getStoragePath(fixture.testProjectId, 'state.json')
 
     await fs.writeFile(
       stateFile,
@@ -263,7 +264,7 @@ describe('Task History - Backward Compatibility', () => {
 
     // Complete a task - should work without error
     const task = createMockTask({ description: 'New task' })
-    const state = await completeTaskAndGetState(testProjectId, task)
+    const state = await completeTaskAndGetState(fixture.testProjectId, task)
 
     expect(state.taskHistory).toBeDefined()
     expect(state.taskHistory?.length).toBe(1)
@@ -283,19 +284,19 @@ describe('Task History - Accessor Methods', () => {
 
     for (const taskData of tasks) {
       const task = createMockTask(taskData)
-      await completeTaskAndGetState(testProjectId, task)
+      await completeTaskAndGetState(fixture.testProjectId, task)
     }
   })
 
   it('getTaskHistory() should return full history', async () => {
-    const history = await stateStorage.getTaskHistory(testProjectId)
+    const history = await stateStorage.getTaskHistory(fixture.testProjectId)
 
     expect(history.length).toBe(3)
     expect(history[0].title).toBe('Feature task 2') // Newest first
   })
 
   it('getMostRecentTask() should return latest entry', async () => {
-    const recent = await stateStorage.getMostRecentTask(testProjectId)
+    const recent = await stateStorage.getMostRecentTask(fixture.testProjectId)
 
     expect(recent).not.toBeNull()
     expect(recent!.title).toBe('Feature task 2')
@@ -314,14 +315,14 @@ describe('Task History - Accessor Methods', () => {
   })
 
   it('getTaskHistoryByType() should filter by classification', async () => {
-    const featureHistory = await stateStorage.getTaskHistoryByType(testProjectId, 'feature')
+    const featureHistory = await stateStorage.getTaskHistoryByType(fixture.testProjectId, 'feature')
 
     expect(featureHistory.length).toBe(2)
     expect(featureHistory.every((h) => h.classification === 'feature')).toBe(true)
   })
 
   it('getTaskHistoryByType() should return empty array for no matches', async () => {
-    const choreHistory = await stateStorage.getTaskHistoryByType(testProjectId, 'chore')
+    const choreHistory = await stateStorage.getTaskHistoryByType(fixture.testProjectId, 'chore')
 
     expect(choreHistory.length).toBe(0)
   })

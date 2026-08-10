@@ -90,12 +90,12 @@ function intentHitCounts(): {
   bareHits: number
   fixtureCount: number
 } {
-  let harnessHits = 0
-  let bareHits = 0
-  for (const f of INTENT_FIXTURES) {
-    if (routeIntent(f.signal) === f.verb) harnessHits++
-    if (routeIntentBare(f.signal) === f.verb) bareHits++
-  }
+  const harnessHits = INTENT_FIXTURES.filter(
+    (fixture) => routeIntent(fixture.signal) === fixture.verb
+  ).length
+  const bareHits = INTENT_FIXTURES.filter(
+    (fixture) => routeIntentBare(fixture.signal) === fixture.verb
+  ).length
   return { harnessHits, bareHits, fixtureCount: INTENT_FIXTURES.length }
 }
 

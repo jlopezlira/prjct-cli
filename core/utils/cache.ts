@@ -123,13 +123,8 @@ export class TTLCache<T> {
    * Remove all expired entries
    */
   prune(): number {
-    let removed = 0
-    for (const key of this.cache.keys()) {
-      if (!this.isValid(key)) {
-        this.cache.delete(key)
-        removed++
-      }
-    }
-    return removed
+    const expired = [...this.cache.keys()].filter((key) => !this.isValid(key))
+    for (const key of expired) this.cache.delete(key)
+    return expired.length
   }
 }

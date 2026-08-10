@@ -25,13 +25,10 @@ async function execCommand(command: string): Promise<{ success: boolean; output:
 // ============ Detection Functions ============
 
 async function detectGitHubUsername(): Promise<string | null> {
-  let result = await execCommand('gh api user --jq .login')
-  if (result.success && result.output) return result.output
-
-  result = await execCommand('git config --global github.user')
-  if (result.success && result.output) return result.output
-
-  return null
+  const cliResult = await execCommand('gh api user --jq .login')
+  if (cliResult.success && cliResult.output) return cliResult.output
+  const configResult = await execCommand('git config --global github.user')
+  return configResult.success && configResult.output ? configResult.output : null
 }
 
 async function detectGitName(): Promise<string | null> {

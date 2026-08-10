@@ -14,23 +14,27 @@ import os from 'node:os'
 import path from 'node:path'
 import { _routing, writeProjectAgentsMd } from '../../services/host-agents-md'
 
-let dir: string
+const fixture: {
+  dir: string
+} = {
+  dir: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agents-md-test-'))
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agents-md-test-'))
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 async function readAgentsMd(): Promise<string> {
-  return fs.readFile(path.join(dir, 'AGENTS.md'), 'utf-8')
+  return fs.readFile(path.join(fixture.dir, 'AGENTS.md'), 'utf-8')
 }
 
 describe('writeProjectAgentsMd', () => {
   it('creates AGENTS.md when none exists', async () => {
-    const r = await writeProjectAgentsMd(dir)
+    const r = await writeProjectAgentsMd(fixture.dir)
     expect(r.action).toBe('created')
     const body = await readAgentsMd()
     expect(body).toContain(_routing.START_MARKER)
@@ -44,10 +48,10 @@ describe('writeProjectAgentsMd', () => {
 
   it('appends the block to an existing AGENTS.md without markers', async () => {
     await fs.writeFile(
-      path.join(dir, 'AGENTS.md'),
+      path.join(fixture.dir, 'AGENTS.md'),
       '# Contributor guide\n\nHandwritten conventions.\n'
     )
-    const r = await writeProjectAgentsMd(dir)
+    const r = await writeProjectAgentsMd(fixture.dir)
     expect(r.action).toBe('updated')
     const body = await readAgentsMd()
     expect(body).toContain('# Contributor guide')
@@ -60,8 +64,8 @@ describe('writeProjectAgentsMd', () => {
 
   it('refreshes a stale block between markers, preserving outside content', async () => {
     const stale = `# Mine\n\n${_routing.START_MARKER}\nOLD CONTENT\n${_routing.END_MARKER}\n\nTrailing notes.\n`
-    await fs.writeFile(path.join(dir, 'AGENTS.md'), stale)
-    const r = await writeProjectAgentsMd(dir)
+    await fs.writeFile(path.join(fixture.dir, 'AGENTS.md'), stale)
+    const r = await writeProjectAgentsMd(fixture.dir)
     expect(r.action).toBe('updated')
     const body = await readAgentsMd()
     expect(body).not.toContain('OLD CONTENT')
@@ -71,22 +75,22 @@ describe('writeProjectAgentsMd', () => {
   })
 
   it('is idempotent — re-run reports unchanged', async () => {
-    await writeProjectAgentsMd(dir)
+    await writeProjectAgentsMd(fixture.dir)
     const first = await readAgentsMd()
-    const r = await writeProjectAgentsMd(dir)
+    const r = await writeProjectAgentsMd(fixture.dir)
     expect(r.action).toBe('unchanged')
     expect(await readAgentsMd()).toBe(first)
   })
 
   it('block is vendor-neutral — no Claude-only paths', async () => {
-    await writeProjectAgentsMd(dir)
+    await writeProjectAgentsMd(fixture.dir)
     const body = await readAgentsMd()
     expect(body).not.toContain('.claude/')
     expect(body).not.toContain('Claude Code')
   })
 
   it('is a MAP of the harness organs (pull commands), carrying no ruleset', async () => {
-    await writeProjectAgentsMd(dir)
+    await writeProjectAgentsMd(fixture.dir)
     const body = await readAgentsMd()
     expect(body).toContain('This file holds no rules')
     // Names each organ + the one command to pull it — the map, not the rules.

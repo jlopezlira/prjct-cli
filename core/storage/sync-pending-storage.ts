@@ -156,19 +156,19 @@ class SyncPendingStorage {
   }
 
   private rowToEntry(row: SyncPendingRow): PendingEntry {
-    let event: SyncEvent
-    try {
-      event = JSON.parse(row.payload) as SyncEvent
-    } catch {
-      // Corrupt row — return a placeholder so the caller can drop it.
-      event = {
-        type: 'unknown.corrupt',
-        path: [],
-        data: null,
-        timestamp: row.enqueued_at,
-        projectId: row.project_id,
+    const event = (() => {
+      try {
+        return JSON.parse(row.payload) as SyncEvent
+      } catch {
+        return {
+          type: 'unknown.corrupt',
+          path: [],
+          data: null,
+          timestamp: row.enqueued_at,
+          projectId: row.project_id,
+        } satisfies SyncEvent
       }
-    }
+    })()
     return { id: row.id, event, enqueuedAt: row.enqueued_at }
   }
 }

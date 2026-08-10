@@ -14,21 +14,27 @@ import out, {
 } from '../../utils/output'
 
 describe('Output Module', () => {
-  let consoleLogSpy: ReturnType<typeof spyOn>
-  let consoleErrorSpy: ReturnType<typeof spyOn>
-  let stdoutWriteSpy: ReturnType<typeof spyOn>
+  const fixture: {
+    consoleLogSpy: ReturnType<typeof spyOn>
+    consoleErrorSpy: ReturnType<typeof spyOn>
+    stdoutWriteSpy: ReturnType<typeof spyOn>
+  } = {
+    consoleLogSpy: undefined as unknown as ReturnType<typeof spyOn>,
+    consoleErrorSpy: undefined as unknown as ReturnType<typeof spyOn>,
+    stdoutWriteSpy: undefined as unknown as ReturnType<typeof spyOn>,
+  }
 
   beforeEach(() => {
-    consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {})
-    consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {})
-    stdoutWriteSpy = spyOn(process.stdout, 'write').mockImplementation(() => true)
+    fixture.consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {})
+    fixture.consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {})
+    fixture.stdoutWriteSpy = spyOn(process.stdout, 'write').mockImplementation(() => true)
     out.stop()
   })
 
   afterEach(() => {
-    consoleLogSpy.mockRestore()
-    consoleErrorSpy.mockRestore()
-    stdoutWriteSpy.mockRestore()
+    fixture.consoleLogSpy.mockRestore()
+    fixture.consoleErrorSpy.mockRestore()
+    fixture.stdoutWriteSpy.mockRestore()
     out.stop()
   })
 
@@ -36,8 +42,8 @@ describe('Output Module', () => {
     it('should output success message with checkmark', () => {
       out.done('task completed')
 
-      expect(consoleLogSpy).toHaveBeenCalledTimes(1)
-      const output = consoleLogSpy.mock.calls[0][0]
+      expect(fixture.consoleLogSpy).toHaveBeenCalledTimes(1)
+      const output = fixture.consoleLogSpy.mock.calls[0][0]
       expect(output).toContain('✓')
       expect(output).toContain('task completed')
     })
@@ -49,7 +55,7 @@ describe('Output Module', () => {
         const longMessage = 'a'.repeat(100)
         out.done(longMessage)
 
-        const output = consoleLogSpy.mock.calls[0][0]
+        const output = fixture.consoleLogSpy.mock.calls[0][0]
         expect(output.length).toBeLessThan(80)
       } finally {
         process.stdout.isTTY = prevOut
@@ -65,7 +71,7 @@ describe('Output Module', () => {
         const longMessage = 'a'.repeat(100)
         out.done(longMessage)
 
-        const output = consoleLogSpy.mock.calls[0][0]
+        const output = fixture.consoleLogSpy.mock.calls[0][0]
         expect(output).toContain(longMessage)
       } finally {
         process.stdout.isTTY = prevOut
@@ -83,8 +89,8 @@ describe('Output Module', () => {
     it('should output error message with X mark', () => {
       out.fail('something failed')
 
-      expect(consoleErrorSpy).toHaveBeenCalledTimes(1)
-      const output = consoleErrorSpy.mock.calls[0][0]
+      expect(fixture.consoleErrorSpy).toHaveBeenCalledTimes(1)
+      const output = fixture.consoleErrorSpy.mock.calls[0][0]
       expect(output).toContain('✗')
       expect(output).toContain('something failed')
     })
@@ -96,7 +102,7 @@ describe('Output Module', () => {
         const longMessage = 'error '.repeat(50)
         out.fail(longMessage)
 
-        const output = consoleErrorSpy.mock.calls[0][0]
+        const output = fixture.consoleErrorSpy.mock.calls[0][0]
         expect(output.length).toBeLessThan(80)
       } finally {
         process.stdout.isTTY = prevOut
@@ -112,7 +118,7 @@ describe('Output Module', () => {
         const longMessage = 'error '.repeat(50)
         out.fail(longMessage)
 
-        const output = consoleErrorSpy.mock.calls[0][0]
+        const output = fixture.consoleErrorSpy.mock.calls[0][0]
         expect(output).toContain(longMessage.trim())
       } finally {
         process.stdout.isTTY = prevOut
@@ -130,8 +136,8 @@ describe('Output Module', () => {
     it('should output warning message with warning symbol', () => {
       out.warn('be careful')
 
-      expect(consoleLogSpy).toHaveBeenCalledTimes(1)
-      const output = consoleLogSpy.mock.calls[0][0]
+      expect(fixture.consoleLogSpy).toHaveBeenCalledTimes(1)
+      const output = fixture.consoleLogSpy.mock.calls[0][0]
       expect(output).toContain('⚠')
       expect(output).toContain('be careful')
     })
@@ -148,8 +154,8 @@ describe('Output Module', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 150))
 
-      expect(stdoutWriteSpy).toHaveBeenCalled()
-      const output = stdoutWriteSpy.mock.calls[0][0]
+      expect(fixture.stdoutWriteSpy).toHaveBeenCalled()
+      const output = fixture.stdoutWriteSpy.mock.calls[0][0]
       expect(output).toContain('loading')
 
       out.stop()
@@ -167,15 +173,15 @@ describe('Output Module', () => {
       out.spin('loading')
       await new Promise((resolve) => setTimeout(resolve, 150))
 
-      stdoutWriteSpy.mockClear()
+      fixture.stdoutWriteSpy.mockClear()
       out.stop()
 
       // In TTY, stop() writes a clear sequence; in non-TTY, spinner doesn't
       // use setInterval so stop() is a no-op (clear skips in non-TTY)
       if (process.stdout.isTTY) {
-        expect(stdoutWriteSpy).toHaveBeenCalled()
+        expect(fixture.stdoutWriteSpy).toHaveBeenCalled()
       } else {
-        expect(stdoutWriteSpy).not.toHaveBeenCalled()
+        expect(fixture.stdoutWriteSpy).not.toHaveBeenCalled()
       }
     })
 
@@ -207,7 +213,7 @@ describe('Output Module', () => {
 
     it('should handle messages with special characters', () => {
       out.done('test with émojis 🎉 and spëcial çhars')
-      expect(consoleLogSpy).toHaveBeenCalled()
+      expect(fixture.consoleLogSpy).toHaveBeenCalled()
     })
   })
 

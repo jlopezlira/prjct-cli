@@ -53,12 +53,11 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
     { role: 'user', content: opts.intent },
   ]
 
-  let toolCalls = 0
-  let steps = 0
+  const runState = { toolCalls: 0, steps: 0 }
 
   try {
-    for (let step = 1; step <= maxSteps; step++) {
-      steps = step
+    for (const step of Array.from({ length: maxSteps }, (_, index) => index + 1)) {
+      runState.steps = step
       opts.onStep?.({ type: 'generate', step })
 
       const completion = await opts.provider.generate({
@@ -82,8 +81,8 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
         return {
           success: true,
           content: completion.content,
-          steps,
-          toolCalls,
+          steps: runState.steps,
+          toolCalls: runState.toolCalls,
           messages: [
             ...messages,
             { role: 'assistant', content: completion.content, tool_calls: undefined },
@@ -101,7 +100,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
       })
 
       for (const call of calls) {
-        toolCalls++
+        runState.toolCalls++
         const result = await executeToolCall(call, toolMap, ctx)
         const preview = result.content.slice(0, 200)
         opts.onStep?.({
@@ -123,8 +122,8 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
     return {
       success: false,
       content: null,
-      steps,
-      toolCalls,
+      steps: runState.steps,
+      toolCalls: runState.toolCalls,
       messages,
       error: `Reached maxSteps (${maxSteps}) without a final answer`,
       profile: profile.name,
@@ -134,8 +133,8 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
     return {
       success: false,
       content: null,
-      steps,
-      toolCalls,
+      steps: runState.steps,
+      toolCalls: runState.toolCalls,
       messages,
       error: e instanceof Error ? e.message : String(e),
       profile: profile.name,

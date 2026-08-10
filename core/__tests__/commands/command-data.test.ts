@@ -81,11 +81,11 @@ describe('COMMANDS', () => {
       expect(REGISTERED_VERBS_SET.has(name)).toBe(true)
     }
 
-    for (const name of ['task', 'status', 'tag', 'capture', 'spec', 'audit-spec']) {
-      const command = COMMANDS.find((entry) => entry.name === name)
+    for (const name2 of ['task', 'status', 'tag', 'capture', 'spec', 'audit-spec']) {
+      const command = COMMANDS.find((entry) => entry.name === name2)
       expect(command?.surface).toBe('legacy')
       expect(command?.usage.claude).toBeNull()
-      expect(REGISTERED_VERBS_SET.has(name)).toBe(true)
+      expect(REGISTERED_VERBS_SET.has(name2)).toBe(true)
     }
   })
 })

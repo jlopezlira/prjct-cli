@@ -99,70 +99,72 @@ export class AgentsDiscovery {
 
 function parseAgents(content: string): AgentDefinition[] {
   const agents: AgentDefinition[] = []
-  let current: AgentDefinition | null = null
-  let subsection: string | null = null
-  let buf: string[] = []
+  const parser = {
+    current: null as AgentDefinition | null,
+    subsection: null as string | null,
+    buffer: [] as string[],
+  }
 
   const flushBuf = () => {
-    if (!current) return
-    if (subsection) {
-      const text = buf.join('\n').trim()
-      switch (subsection.toLowerCase()) {
+    if (!parser.current) return
+    if (parser.subsection) {
+      const text = parser.buffer.join('\n').trim()
+      switch (parser.subsection.toLowerCase()) {
         case 'triggers':
-          current.triggers = parseListItems(text)
+          parser.current.triggers = parseListItems(text)
           break
         case 'rules':
-          current.rules = parseListItems(text)
+          parser.current.rules = parseListItems(text)
           break
         case 'patterns':
-          current.patterns = parseCodeBlocks(text)
+          parser.current.patterns = parseCodeBlocks(text)
           break
         case 'examples':
-          current.examples = parseListItems(text)
+          parser.current.examples = parseListItems(text)
           break
         case 'domain':
-          current.domain = text
+          parser.current.domain = text
           break
       }
     } else {
-      const desc = buf.join('\n').trim()
-      if (desc && !current.description) current.description = desc
+      const desc = parser.buffer.join('\n').trim()
+      if (desc && !parser.current.description) parser.current.description = desc
     }
-    buf = []
+    parser.buffer = []
   }
 
   for (const line of content.split('\n')) {
     const agentMatch = line.match(/^##\s+([^#].+)$/)
     if (agentMatch) {
-      if (current) {
+      if (parser.current) {
         flushBuf()
-        agents.push(current)
+        agents.push(parser.current)
       }
       const name = agentMatch[1]
-      current = {
+      parser.current = {
         name: name.replace(/@override|\(override\)/gi, '').trim(),
         description: '',
         override: name.includes('@override') || name.includes('(override)'),
       }
-      subsection = null
-      buf = []
+      parser.subsection = null
+      parser.buffer = []
       continue
     }
 
     const subMatch = line.match(/^###\s+(.+)$/)
-    if (subMatch && current) {
+    if (subMatch && parser.current) {
       flushBuf()
-      subsection = subMatch[1].trim()
-      buf = []
+      parser.subsection = subMatch[1].trim()
+      parser.buffer = []
       continue
     }
 
-    if (current) buf.push(line)
+    if (parser.current) parser.buffer.push(line)
   }
 
-  if (current) {
+  if (parser.current) {
     flushBuf()
-    agents.push(current)
+    agents.push(parser.current)
   }
 
   return agents
@@ -179,9 +181,7 @@ function parseListItems(content: string): string[] {
 function parseCodeBlocks(content: string): string[] {
   const blocks: string[] = []
   const re = /```[\w]*\n([\s\S]*?)```/g
-  let match: RegExpExecArray | null
-
-  while ((match = re.exec(content)) !== null) {
+  for (const match of content.matchAll(re)) {
     blocks.push(match[1].trim())
   }
 

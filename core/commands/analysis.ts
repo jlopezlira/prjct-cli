@@ -217,64 +217,54 @@ export class AnalysisCommands extends PrjctCommandsBase {
         const skillCount = result.generatedSkills?.generated?.length ?? 0
 
         // Check for analysis diff (PRJ-275)
-        let analysisDiffSection: string | null = null
-        try {
-          const analysisDiff = await analysisStorage.diff(projectId)
-          if (analysisDiff?.hasChanges) {
-            analysisDiffSection = formatAnalysisDiffMd(analysisDiff)
-          }
-        } catch {
-          // Non-critical
-        }
+        const analysisDiffSection: string | null = await analysisStorage
+          .diff(projectId)
+          .then((diff) => (diff?.hasChanges ? formatAnalysisDiffMd(diff) : null))
+          .catch(() => null)
 
         // Auto-include analysis payload if analysis is stale (instead of suggesting manual step)
         const currentCommit = result.git.recentCommits[0]?.hash ?? null
         const analysisIsCurrent =
           currentCommit && llmAnalysisStorage.isCurrent(projectId, currentCommit)
-        let llmAnalysisInstructions: string | null = null
-        if (!analysisIsCurrent) {
-          try {
-            const payload = await buildAnalysisPayload(
-              projectId,
-              projectPath,
-              result.git,
-              result.stats
-            )
-            llmAnalysisInstructions = [
-              `## Analysis Payload`,
-              ANALYSIS_NOTES_INSTRUCTIONS,
-              '### Data',
-              '```json',
-              JSON.stringify(payload),
-              '```',
-            ].join('\n')
-          } catch {
-            // Fall back to manual instruction if payload build fails
-            llmAnalysisInstructions = `### Next: Run \`prjct analysis-payload --md\` to update project analysis`
-          }
-        }
+        const llmAnalysisInstructions: string | null = analysisIsCurrent
+          ? null
+          : await buildAnalysisPayload(projectId, projectPath, result.git, result.stats)
+              .then((payload) =>
+                [
+                  `## Analysis Payload`,
+                  ANALYSIS_NOTES_INSTRUCTIONS,
+                  '### Data',
+                  '```json',
+                  JSON.stringify(payload),
+                  '```',
+                ].join('\n')
+              )
+              .catch(
+                () => `### Next: Run \`prjct analysis-payload --md\` to update project analysis`
+              )
 
         const steps = getNextSteps('sync', true)
         // Evaluate the recent context: surface the task contexts captured since
         // the last sync so the agent folds their patterns/anti-patterns into the
         // project's understanding (incremental — "lo que se generó al final").
-        let contextReviewSection: string | null = null
-        try {
-          const recentContexts = projectMemory
-            .recall(projectId, { types: ['context'], limit: 5 })
-            .map((e) => `- ${deriveTitle(e)}  \`${e.id}\``)
-          if (recentContexts.length > 0) {
-            contextReviewSection = [
-              '### Evaluate recent context',
-              'Task contexts captured recently — fold their decisions, patterns and',
-              'anti-patterns into the project analysis (and supersede anything now wrong):',
-              '',
-              ...recentContexts,
-            ].join('\n')
+        const contextReviewSection: string | null = (() => {
+          try {
+            const recentContexts = projectMemory
+              .recall(projectId, { types: ['context'], limit: 5 })
+              .map((e) => `- ${deriveTitle(e)}  \`${e.id}\``)
+            return recentContexts.length > 0
+              ? [
+                  '### Evaluate recent context',
+                  'Task contexts captured recently — fold their decisions, patterns and',
+                  'anti-patterns into the project analysis (and supersede anything now wrong):',
+                  '',
+                  ...recentContexts,
+                ].join('\n')
+              : null
+          } catch {
+            return null
           }
-        } catch {
-          /* best-effort — sync output is fine without it */
-        }
+        })()
         const idx = result.syncMetrics?.indexes
         const mdStatsObj: Record<string, string | number> = {
           Duration: `${(elapsed / 1000).toFixed(1)}s`,
@@ -294,8 +284,8 @@ export class AnalysisCommands extends PrjctCommandsBase {
           mdStatsObj['Context removed'] = result.contextQuality.irrelevantRemoved
           mdStatsObj['Context repairs'] = result.contextQuality.repairEntriesCreated
         }
-        let retentionSection: string | null = null
-        if (result.retentionDryRun) {
+        const retentionSection: string | null = (() => {
+          if (!result.retentionDryRun) return null
           const r = result.retentionDryRun
           const mode = r.dryRun === false ? 'applied' : 'dry-run'
           const acted =
@@ -316,7 +306,7 @@ export class AnalysisCommands extends PrjctCommandsBase {
             mdStatsObj.Vault = `${v.live} live · soft-del ${v.softDeleted} · archives ${v.archives} · auto ${v.autoSourceLive}${purged}`
           }
           if (r.samples.length > 0) {
-            retentionSection = mdSection(
+            return mdSection(
               r.dryRun === false
                 ? 'Retention (Rho) — worst excess/score (actions applied)'
                 : 'Retention (Rho) dry-run — worst excess/score (nothing removed)',
@@ -331,33 +321,28 @@ export class AnalysisCommands extends PrjctCommandsBase {
               )
             )
           }
-        }
+          return null
+        })()
         // Dual evolution surfaces (project + developer)
-        let projectEvolutionSection: string | null = null
-        if (result.projectStyle?.evolutionMd) {
-          projectEvolutionSection = result.projectStyle.evolutionMd
-        } else if (result.projectStyle?.summary) {
-          projectEvolutionSection = [
-            '## Project style',
-            '',
-            result.projectStyle.summary,
-            '',
-            `Coverage: ${result.projectStyle.styleCoverage}/100 · ` +
-              `${result.projectStyle.patternCount} patterns · ` +
-              `${result.projectStyle.conventionCount} conventions · ` +
-              `${result.projectStyle.antiPatternCount} anti-patterns`,
-          ].join('\n')
-        }
-        let developerEvolutionSection: string | null = null
-        if (result.developerSnapshotCaptured) {
-          try {
-            const { renderDeveloperEvolution } = await import('../services/developer-evolution')
-            developerEvolutionSection = renderDeveloperEvolution(projectId, 4)
-          } catch {
-            developerEvolutionSection =
-              '## Developer evolution\n\nWeekly developer snapshot captured.'
-          }
-        }
+        const projectEvolutionSection: string | null = result.projectStyle?.evolutionMd
+          ? result.projectStyle.evolutionMd
+          : result.projectStyle?.summary
+            ? [
+                '## Project style',
+                '',
+                result.projectStyle.summary,
+                '',
+                `Coverage: ${result.projectStyle.styleCoverage}/100 · ` +
+                  `${result.projectStyle.patternCount} patterns · ` +
+                  `${result.projectStyle.conventionCount} conventions · ` +
+                  `${result.projectStyle.antiPatternCount} anti-patterns`,
+              ].join('\n')
+            : null
+        const developerEvolutionSection: string | null = result.developerSnapshotCaptured
+          ? await import('../services/developer-evolution')
+              .then(({ renderDeveloperEvolution }) => renderDeveloperEvolution(projectId, 4))
+              .catch(() => '## Developer evolution\n\nWeekly developer snapshot captured.')
+          : null
 
         const md = mdOutput(
           mdDone(`Sync Complete`),

@@ -5,29 +5,35 @@ import path from 'node:path'
 import { probeHarnessCoverage, renderHarnessCoverageMd } from '../../services/harness-coverage'
 
 describe('harness coverage (organic multi-runtime board)', () => {
-  let home: string
-  let prevHome: string | undefined
-  let prevTestMode: string | undefined
+  const fixture: {
+    home: string
+    prevHome: string | undefined
+    prevTestMode: string | undefined
+  } = {
+    home: '',
+    prevHome: undefined as unknown as string | undefined,
+    prevTestMode: undefined as unknown as string | undefined,
+  }
 
   beforeEach(async () => {
-    home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-coverage-home-'))
-    prevHome = process.env.HOME
-    prevTestMode = process.env.PRJCT_TEST_MODE
-    process.env.HOME = home
+    fixture.home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-coverage-home-'))
+    fixture.prevHome = process.env.HOME
+    fixture.prevTestMode = process.env.PRJCT_TEST_MODE
+    process.env.HOME = fixture.home
     process.env.PRJCT_TEST_MODE = '1'
     // Isolate codex/gemini/cursor paths under test home via resolveUserPath + PRJCT_TEST_MODE
   })
 
   afterEach(async () => {
-    if (prevHome === undefined) delete process.env.HOME
-    else process.env.HOME = prevHome
-    if (prevTestMode === undefined) delete process.env.PRJCT_TEST_MODE
-    else process.env.PRJCT_TEST_MODE = prevTestMode
-    await fs.rm(home, { recursive: true, force: true }).catch(() => {})
+    if (fixture.prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = fixture.prevHome
+    if (fixture.prevTestMode === undefined) delete process.env.PRJCT_TEST_MODE
+    else process.env.PRJCT_TEST_MODE = fixture.prevTestMode
+    await fs.rm(fixture.home, { recursive: true, force: true }).catch(() => {})
   })
 
   it('reports absent when no runtimes are wired', async () => {
-    const report = await probeHarnessCoverage(home)
+    const report = await probeHarnessCoverage(fixture.home)
     // Claude, Codex, Gemini, Cursor, Grok, OpenCode, Pi
     expect(report.runtimes.length).toBe(7)
     expect(report.runtimes.map((r) => r.id)).toEqual(
@@ -39,7 +45,7 @@ describe('harness coverage (organic multi-runtime board)', () => {
   })
 
   it('marks OpenCode full when mcp.prjct is present and Pi full when skill is present', async () => {
-    const ocDir = path.join(home, '.prjct-tests', 'opencode')
+    const ocDir = path.join(fixture.home, '.prjct-tests', 'opencode')
     await fs.mkdir(ocDir, { recursive: true })
     await fs.writeFile(
       path.join(ocDir, 'opencode.json'),
@@ -56,9 +62,9 @@ describe('harness coverage (organic multi-runtime board)', () => {
     )
     // Detect via ~/.config/opencode in real path — PRJCT_TEST_MODE uses .prjct-tests.
     // Create home config dir so detection fires, and ensure MCP path is test path.
-    await fs.mkdir(path.join(home, '.config', 'opencode'), { recursive: true })
+    await fs.mkdir(path.join(fixture.home, '.config', 'opencode'), { recursive: true })
     await fs.writeFile(
-      path.join(home, '.config', 'opencode', 'opencode.json'),
+      path.join(fixture.home, '.config', 'opencode', 'opencode.json'),
       JSON.stringify({
         mcp: {
           prjct: {
@@ -71,12 +77,12 @@ describe('harness coverage (organic multi-runtime board)', () => {
       'utf-8'
     )
 
-    const piSkillDir = path.join(home, '.prjct-tests', 'pi', 'agent', 'skills', 'prjct')
+    const piSkillDir = path.join(fixture.home, '.prjct-tests', 'pi', 'agent', 'skills', 'prjct')
     await fs.mkdir(piSkillDir, { recursive: true })
     await fs.writeFile(path.join(piSkillDir, 'SKILL.md'), '# prjct\n', 'utf-8')
-    await fs.mkdir(path.join(home, '.pi', 'agent'), { recursive: true })
+    await fs.mkdir(path.join(fixture.home, '.pi', 'agent'), { recursive: true })
 
-    const report = await probeHarnessCoverage(home)
+    const report = await probeHarnessCoverage(fixture.home)
     const oc = report.runtimes.find((r) => r.id === 'opencode')
     expect(oc?.detected).toBe(true)
     // Probe reads getOpenCodeConfigPath() which under PRJCT_TEST_MODE is .prjct-tests/opencode
@@ -89,7 +95,7 @@ describe('harness coverage (organic multi-runtime board)', () => {
   })
 
   it('marks Claude full when settings + mcp.json have prjct wire', async () => {
-    const claude = path.join(home, '.claude')
+    const claude = path.join(fixture.home, '.claude')
     await fs.mkdir(claude, { recursive: true })
     await fs.writeFile(
       path.join(claude, 'settings.json'),
@@ -120,7 +126,7 @@ describe('harness coverage (organic multi-runtime board)', () => {
       'utf-8'
     )
 
-    const report = await probeHarnessCoverage(home)
+    const report = await probeHarnessCoverage(fixture.home)
     const claudeRow = report.runtimes.find((r) => r.id === 'claude')
     expect(claudeRow?.detected).toBe(true)
     expect(claudeRow?.hooksLive).toBe(true)
@@ -129,7 +135,7 @@ describe('harness coverage (organic multi-runtime board)', () => {
   })
 
   it('renders dominance board markdown', async () => {
-    const report = await probeHarnessCoverage(home)
+    const report = await probeHarnessCoverage(fixture.home)
     const md = renderHarnessCoverageMd(report)
     expect(md).toContain('Organic multi-runtime board')
     expect(md).toContain('Claude Code')
@@ -141,7 +147,7 @@ describe('harness coverage (organic multi-runtime board)', () => {
 
   it('grades higher when more detected surfaces are live', async () => {
     // Wire Claude full — at least one live when detected
-    const claude = path.join(home, '.claude')
+    const claude = path.join(fixture.home, '.claude')
     await fs.mkdir(claude, { recursive: true })
     await fs.writeFile(
       path.join(claude, 'settings.json'),
@@ -163,7 +169,7 @@ describe('harness coverage (organic multi-runtime board)', () => {
       JSON.stringify({ mcpServers: { prjct: { command: 'prjct', args: ['mcp-server'] } } }),
       'utf-8'
     )
-    const report = await probeHarnessCoverage(home)
+    const report = await probeHarnessCoverage(fixture.home)
     const claudeRow = report.runtimes.find((r) => r.id === 'claude')
     if (claudeRow?.detected) {
       expect(report.liveCount).toBeGreaterThanOrEqual(1)

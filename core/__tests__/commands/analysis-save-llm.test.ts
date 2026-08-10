@@ -38,18 +38,24 @@ const MINIMAL_VALID = {
 }
 
 describe('analysis-save-llm', () => {
-  let projectPath: string
-  let projectId: string
-  let spies: Array<ReturnType<typeof spyOn>> = []
+  const fixture: {
+    projectPath: string
+    projectId: string
+    spies: Array<ReturnType<typeof spyOn>>
+  } = {
+    projectPath: '',
+    projectId: '',
+    spies: [],
+  }
 
   beforeEach(async () => {
-    ;({ projectPath, projectId } = await freshProject())
+    ;({ projectPath: fixture.projectPath, projectId: fixture.projectId } = await freshProject())
   })
 
   afterEach(async () => {
-    for (const s of spies) s.mockRestore()
-    spies = []
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true })
+    for (const s of fixture.spies) s.mockRestore()
+    fixture.spies = []
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('saves freeform Markdown notes as safe LLM analysis', async () => {
@@ -68,7 +74,7 @@ describe('analysis-save-llm', () => {
       logs.push(args.map(String).join(' '))
     }
     try {
-      const result = await saveLlmAnalysis(notes, projectPath, { md: true })
+      const result = await saveLlmAnalysis(notes, fixture.projectPath, { md: true })
       expect(result.success).toBe(true)
     } finally {
       console.log = origLog
@@ -77,7 +83,7 @@ describe('analysis-save-llm', () => {
     expect(out).toMatch(/thin/i)
     expect(out).toMatch(/schema v1 JSON/i)
 
-    const saved = llmAnalysisStorage.getActive(projectId)
+    const saved = llmAnalysisStorage.getActive(fixture.projectId)
     expect(saved?.architecture.style).toBe('unknown')
     expect(saved?.projectInsights).toContain('Commands should route through the manifest.')
     expect(saved?.projectInsights).toContain('AGENTS.md is the universal agent surface.')
@@ -106,14 +112,14 @@ describe('analysis-save-llm', () => {
         { category: 'imports', rule: 'No barrel files', example: 'import from source' },
       ],
     }
-    const first = await saveLlmAnalysis(JSON.stringify(rich), projectPath, { md: true })
+    const first = await saveLlmAnalysis(JSON.stringify(rich), fixture.projectPath, { md: true })
     expect(first.success).toBe(true)
 
     const notes = ['# Notes', '- Extra insight about ship gates.', '- WIP'].join('\n')
-    const second = await saveLlmAnalysis(notes, projectPath, { md: true })
+    const second = await saveLlmAnalysis(notes, fixture.projectPath, { md: true })
     expect(second.success).toBe(true)
 
-    const saved = llmAnalysisStorage.getActive(projectId)
+    const saved = llmAnalysisStorage.getActive(fixture.projectId)
     expect(saved?.architecture.style).toBe('modular-monolith')
     expect(saved?.patterns).toHaveLength(1)
     expect(saved?.patterns[0]?.name).toBe('Command registry')
@@ -122,13 +128,13 @@ describe('analysis-save-llm', () => {
   })
 
   test('reads a JSON analysis file path instead of parsing the path string as JSON', async () => {
-    const file = path.join(projectPath, 'analysis.json')
+    const file = path.join(fixture.projectPath, 'analysis.json')
     await fs.writeFile(file, JSON.stringify(MINIMAL_VALID), 'utf-8')
 
-    const result = await saveLlmAnalysis(file, projectPath, { md: true })
+    const result = await saveLlmAnalysis(file, fixture.projectPath, { md: true })
 
     expect(result.success).toBe(true)
-    const saved = llmAnalysisStorage.getActive(projectId)
+    const saved = llmAnalysisStorage.getActive(fixture.projectId)
     expect(saved?.architecture.style).toBe('modular-monolith')
     expect(saved?.projectInsights).toContain('Use direct imports.')
   })

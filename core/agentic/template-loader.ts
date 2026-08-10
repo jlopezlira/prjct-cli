@@ -25,21 +25,23 @@ const cache = new Map<string, ParsedTemplate>()
 const cacheOrder: string[] = []
 
 // Lazily loaded template bundle (production mode)
-let templateBundle: Record<string, string> | null = null
-let bundleLoaded = false
+const bundleState: { templates: Record<string, string> | null; loaded: boolean } = {
+  templates: null,
+  loaded: false,
+}
 
 // ============ Bundle Loading ============
 
 function loadBundle(): Record<string, string> | null {
-  if (bundleLoaded) return templateBundle
+  if (bundleState.loaded) return bundleState.templates
 
-  bundleLoaded = true
+  bundleState.loaded = true
   const bundlePath = path.join(PACKAGE_ROOT, 'dist', 'templates.json')
 
   try {
     const content = fsSync.readFileSync(bundlePath, 'utf-8')
-    templateBundle = JSON.parse(content)
-    return templateBundle
+    bundleState.templates = JSON.parse(content)
+    return bundleState.templates
   } catch {
     // Bundle not available (dev mode) — fall back to filesystem
     return null
@@ -104,24 +106,16 @@ async function load(commandName: string): Promise<ParsedTemplate> {
     return cache.get(commandName)!
   }
 
-  let rawContent: string | undefined
-
   // Try bundled templates first (production)
   const bundle = loadBundle()
-  if (bundle) {
-    const key = `commands/${commandName}.md`
-    rawContent = bundle[key]
-  }
-
-  // Fall back to filesystem (development)
-  if (!rawContent) {
-    const templatePath = path.join(PACKAGE_ROOT, 'templates', 'commands', `${commandName}.md`)
-    try {
-      rawContent = await fs.readFile(templatePath, 'utf-8')
-    } catch (_error) {
-      throw TemplateError.notFound(commandName)
-    }
-  }
+  const bundledContent = bundle?.[`commands/${commandName}.md`]
+  const rawContent =
+    bundledContent ??
+    (await fs
+      .readFile(path.join(PACKAGE_ROOT, 'templates', 'commands', `${commandName}.md`), 'utf-8')
+      .catch(() => {
+        throw TemplateError.notFound(commandName)
+      }))
 
   const parsed = parseFrontmatter(rawContent)
 
@@ -150,8 +144,8 @@ function clearCache(): void {
  * Called after `prjct update` installs a new version to pick up new templates.
  */
 export function resetBundle(): void {
-  templateBundle = null
-  bundleLoaded = false
+  bundleState.templates = null
+  bundleState.loaded = false
   clearCache()
 }
 

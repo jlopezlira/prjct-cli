@@ -32,15 +32,9 @@ export function uuidv5(name: string, namespace = PRJCT_NAMESPACE): string {
 
 /** The stable, machine-independent key for a repo, or null if it has no remote. */
 export async function repoKey(projectPath: string): Promise<string | null> {
-  let url: string | undefined
-  try {
-    const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], {
-      cwd: projectPath,
-    })
-    url = stdout.trim() || undefined
-  } catch {
-    return null
-  }
+  const url = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: projectPath })
+    .then(({ stdout }) => stdout.trim() || null)
+    .catch(() => null)
   if (!url) return null
   const { provider, repoSlug } = parseRemote(url)
   if (!provider || !repoSlug) return null

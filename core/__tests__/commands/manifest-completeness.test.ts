@@ -65,8 +65,8 @@ describe('command manifest — completeness', () => {
       handlers.add(m[1]!)
     }
     // Flag aliases handled in the same file
-    for (const m of src.matchAll(/args\[0\]\s*===\s*'(-{1,2}[a-z]+)'/g)) {
-      handlers.add(m[1]!)
+    for (const m2 of src.matchAll(/args\[0\]\s*===\s*'(-{1,2}[a-z]+)'/g)) {
+      handlers.add(m2[1]!)
     }
     const missing = [...handlers].filter(
       (v) => !BIN_COMMANDS_SET.has(v) && !REGISTERED_VERBS_SET.has(v)

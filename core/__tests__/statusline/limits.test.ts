@@ -5,14 +5,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { REPO_ROOT } from '../e2e/_harness'
 
-let home: string
+const fixture: {
+  home: string
+} = {
+  home: '',
+}
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-statusline-test-'))
+  fixture.home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-statusline-test-'))
 })
 
 afterEach(async () => {
-  await fs.rm(home, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.home, { recursive: true, force: true }).catch(() => {})
 })
 
 function stripAnsi(value: string): string {
@@ -24,7 +28,7 @@ function runStatusline(input: unknown): string {
   const result = spawnSync('bash', [script], {
     input: JSON.stringify(input),
     encoding: 'utf-8',
-    env: { ...process.env, HOME: home, NO_COLOR: '1' },
+    env: { ...process.env, HOME: fixture.home, NO_COLOR: '1' },
   })
   expect(result.status).toBe(0)
   return stripAnsi(result.stdout.trim())
@@ -33,7 +37,7 @@ function runStatusline(input: unknown): string {
 function baseInput(rateLimits?: unknown): Record<string, unknown> {
   return {
     model: { display_name: 'Claude Sonnet' },
-    workspace: { current_dir: home },
+    workspace: { current_dir: fixture.home },
     cost: { total_lines_added: 0, total_lines_removed: 0 },
     context_window: {
       context_window_size: 200000,

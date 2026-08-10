@@ -15,18 +15,23 @@ import { judgmentLedgerStorage } from '../../storage/judgment-ledger-storage'
 import { shippedStorage } from '../../storage/shipped-storage'
 import { getTimestamp } from '../../utils/date-helper'
 
-let projectPath: string
-let projectId: string
+const fixture: {
+  projectPath: string
+  projectId: string
+} = {
+  projectPath: '',
+  projectId: '',
+}
 
 async function freshProject(): Promise<void> {
-  projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-artifacts-'))
-  await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-  projectId = `artifacts-${crypto.randomUUID()}`
-  await configManager.writeConfig(projectPath, {
-    projectId,
-    dataPath: path.join(projectPath, '.prjct-data'),
+  fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-artifacts-'))
+  await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+  fixture.projectId = `artifacts-${crypto.randomUUID()}`
+  await configManager.writeConfig(fixture.projectPath, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.projectPath, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
+  await pathManager.ensureProjectStructure(fixture.projectId)
 }
 
 beforeEach(async () => {
@@ -35,15 +40,15 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (projectPath) {
-    await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+  if (fixture.projectPath) {
+    await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   }
   prjctDb.close()
 })
 
 describe('listSafeArtifacts', () => {
   it('returns empty when nothing produced', async () => {
-    const r = await listSafeArtifacts(projectId)
+    const r = await listSafeArtifacts(fixture.projectId)
     expect(r.count).toBe(0)
     expect(r.artifacts).toEqual([])
   })
@@ -54,8 +59,8 @@ describe('listSafeArtifacts', () => {
       intensity: 'standard',
       now: getTimestamp(),
     })
-    judgmentLedgerStorage.set(projectId, ledger)
-    const r = await listSafeArtifacts(projectId)
+    judgmentLedgerStorage.set(fixture.projectId, ledger)
+    const r = await listSafeArtifacts(fixture.projectId)
     expect(r.count).toBeGreaterThanOrEqual(1)
     const j = r.artifacts.find((a) => a.kind === 'judgment_ledger')
     expect(j).toBeDefined()
@@ -67,11 +72,11 @@ describe('listSafeArtifacts', () => {
 
   it('includes ship receipts', async () => {
     await shippedStorage.addShipped(
-      projectId,
+      fixture.projectId,
       { name: 'context-tiers', version: '1.0.0' },
       getTimestamp()
     )
-    const r = await listSafeArtifacts(projectId)
+    const r = await listSafeArtifacts(fixture.projectId)
     const s = r.artifacts.find((a) => a.kind === 'ship_receipt')
     expect(s).toBeDefined()
     expect(s!.summary).toMatch(/context-tiers/)
@@ -79,7 +84,7 @@ describe('listSafeArtifacts', () => {
   })
 
   it('includes context-save checkpoints from disk', async () => {
-    const dir = path.join(pathManager.getGlobalProjectPath(projectId), 'checkpoints')
+    const dir = path.join(pathManager.getGlobalProjectPath(fixture.projectId), 'checkpoints')
     await fs.mkdir(dir, { recursive: true })
     const name = '2026-07-11-12-00-00--resume.json'
     await fs.writeFile(
@@ -93,14 +98,14 @@ describe('listSafeArtifacts', () => {
       }),
       'utf-8'
     )
-    const r = await listSafeArtifacts(projectId, { kinds: ['checkpoint'] })
+    const r = await listSafeArtifacts(fixture.projectId, { kinds: ['checkpoint'] })
     expect(r.artifacts.some((a) => a.kind === 'checkpoint' && a.id === name)).toBe(true)
   })
 })
 
 describe('formatSafeArtifactsMd', () => {
   it('renders table headers', async () => {
-    const r = await listSafeArtifacts(projectId)
+    const r = await listSafeArtifacts(fixture.projectId)
     const md = formatSafeArtifactsMd(r)
     expect(md).toContain('# prjct safe artifacts')
     expect(md).toMatch(/No artifacts|Kind/)

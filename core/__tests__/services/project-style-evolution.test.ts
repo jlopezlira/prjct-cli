@@ -87,15 +87,20 @@ function styleBridgeSnapshot() {
 }
 
 describe('project-style-evolution', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture: {
+    projectPath: string
+    projectId: string
+  } = {
+    projectPath: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    ;({ projectPath, projectId } = await freshProject())
+    ;({ projectPath: fixture.projectPath, projectId: fixture.projectId } = await freshProject())
   })
 
   afterEach(async () => {
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true })
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('persist + getActive + evolution render', () => {
@@ -121,13 +126,13 @@ describe('project-style-evolution', () => {
       packageDeps: { hono: '4', zod: '3' },
       commitHash: 'abc1234',
     })
-    persistProjectStyleSnapshot(projectId, snap)
-    const active = getActiveProjectStyle(projectId)
+    persistProjectStyleSnapshot(fixture.projectId, snap)
+    const active = getActiveProjectStyle(fixture.projectId)
     expect(active?.id).toBe(snap.id)
     expect(active?.payload.stack.frameworks).toContain('Hono')
-    const evo = getProjectEvolution(projectId, 5)
+    const evo = getProjectEvolution(fixture.projectId, 5)
     expect(evo.length).toBe(1)
-    const md = renderProjectEvolution(projectId)
+    const md = renderProjectEvolution(fixture.projectId)
     expect(md).toContain('Project evolution')
   })
 
@@ -136,13 +141,13 @@ describe('project-style-evolution', () => {
       '../../services/sync-analyzer'
     )
     const [stats, stack, commands] = await Promise.all([
-      gatherStats(projectPath),
-      detectStack(projectPath),
-      detectCommands(projectPath),
+      gatherStats(fixture.projectPath),
+      detectStack(fixture.projectPath),
+      detectCommands(fixture.projectPath),
     ])
     const result = await recomputeProjectStyle({
-      projectId,
-      projectPath,
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
       stats,
       stack,
       commands,
@@ -158,13 +163,13 @@ describe('project-style-evolution', () => {
         ['Hono', 'Zod', 'Vitest', 'TypeScript'].includes(l)
       )
     ).toBe(true)
-    const active = getActiveProjectStyle(projectId)
+    const active = getActiveProjectStyle(fixture.projectId)
     expect(active).not.toBeNull()
 
     // Second recompute without changes → no new history spam (still active)
     const again = await recomputeProjectStyle({
-      projectId,
-      projectPath,
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
       stats,
       stack,
       commands,
@@ -173,7 +178,7 @@ describe('project-style-evolution', () => {
     })
     expect(again.isFirst).toBe(false)
     expect(again.delta.hasChanges).toBe(false)
-    expect(getProjectEvolution(projectId).length).toBe(1)
+    expect(getProjectEvolution(fixture.projectId).length).toBe(1)
   })
 
   test('style memory bridge populates once and skips an identical second bridge', async () => {
@@ -181,13 +186,13 @@ describe('project-style-evolution', () => {
     const remember = projectMemory.remember.bind(projectMemory)
     const rememberSpy = spyOn(projectMemory, 'remember').mockImplementation(remember)
     try {
-      expect(await bridgeStyleToMemory(projectPath, projectId, snapshot)).toBe(3)
+      expect(await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)).toBe(3)
       expect(rememberSpy).toHaveBeenCalledTimes(3)
       const active = prjctDb.query<{ type: string; topic_key: string }>(
-        projectId,
+        fixture.projectId,
         `SELECT type, topic_key FROM memory_entries
          WHERE project_id = ? AND deleted_at IS NULL AND topic_key IN (?, ?, ?)`,
-        projectId,
+        fixture.projectId,
         'style:convention:imports',
         'style:pattern:services',
         'style:anti:global-state'
@@ -195,7 +200,7 @@ describe('project-style-evolution', () => {
       expect(active).toHaveLength(3)
 
       rememberSpy.mockClear()
-      expect(await bridgeStyleToMemory(projectPath, projectId, snapshot)).toBe(0)
+      expect(await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)).toBe(0)
       expect(rememberSpy).toHaveBeenCalledTimes(0)
     } finally {
       rememberSpy.mockRestore()
@@ -211,15 +216,15 @@ describe('project-style-evolution', () => {
     })
     snapshot.conventionCount = snapshot.payload.conventions.length
 
-    expect(await bridgeStyleToMemory(projectPath, projectId, snapshot)).toBe(3)
-    expect(await bridgeStyleToMemory(projectPath, projectId, snapshot)).toBe(0)
+    expect(await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)).toBe(3)
+    expect(await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)).toBe(0)
 
     const active = prjctDb.query<{ topic_key: string }>(
-      projectId,
+      fixture.projectId,
       `SELECT topic_key FROM memory_entries
        WHERE project_id = ? AND type = 'decision' AND deleted_at IS NULL
          AND content = ?`,
-      projectId,
+      fixture.projectId,
       'Use explicit module boundaries.'
     )
     expect(active).toEqual([{ topic_key: 'style:convention:imports' }])
@@ -227,20 +232,20 @@ describe('project-style-evolution', () => {
 
   test('style memory bridge reconciles exactly one changed topic', async () => {
     const snapshot = styleBridgeSnapshot()
-    await bridgeStyleToMemory(projectPath, projectId, snapshot)
+    await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)
     const changed = structuredClone(snapshot)
     changed.payload.patterns[0]!.description = 'Use request-scoped service boundaries.'
 
     const remember = projectMemory.remember.bind(projectMemory)
     const rememberSpy = spyOn(projectMemory, 'remember').mockImplementation(remember)
     try {
-      expect(await bridgeStyleToMemory(projectPath, projectId, changed)).toBe(1)
+      expect(await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, changed)).toBe(1)
       expect(rememberSpy).toHaveBeenCalledTimes(1)
       const active = prjctDb.query<{ content: string }>(
-        projectId,
+        fixture.projectId,
         `SELECT content FROM memory_entries
          WHERE project_id = ? AND topic_key = ? AND deleted_at IS NULL`,
-        projectId,
+        fixture.projectId,
         'style:pattern:services'
       )
       expect(active).toHaveLength(1)
@@ -252,26 +257,26 @@ describe('project-style-evolution', () => {
 
   test('style memory bridge self-heals one missing active topic', async () => {
     const snapshot = styleBridgeSnapshot()
-    await bridgeStyleToMemory(projectPath, projectId, snapshot)
+    await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `UPDATE memory_entries SET deleted_at = ?
        WHERE project_id = ? AND topic_key = ? AND deleted_at IS NULL`,
       Date.now(),
-      projectId,
+      fixture.projectId,
       'style:convention:imports'
     )
 
     const remember = projectMemory.remember.bind(projectMemory)
     const rememberSpy = spyOn(projectMemory, 'remember').mockImplementation(remember)
     try {
-      expect(await bridgeStyleToMemory(projectPath, projectId, snapshot)).toBe(1)
+      expect(await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)).toBe(1)
       expect(rememberSpy).toHaveBeenCalledTimes(1)
       const active = prjctDb.query<{ content: string }>(
-        projectId,
+        fixture.projectId,
         `SELECT content FROM memory_entries
          WHERE project_id = ? AND topic_key = ? AND deleted_at IS NULL`,
-        projectId,
+        fixture.projectId,
         'style:convention:imports'
       )
       expect(active).toEqual([{ content: 'Use explicit module boundaries.' }])
@@ -282,25 +287,25 @@ describe('project-style-evolution', () => {
 
   test('style memory bridge repairs a legacy active row without topic_key', async () => {
     const snapshot = styleBridgeSnapshot()
-    await bridgeStyleToMemory(projectPath, projectId, snapshot)
+    await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `UPDATE memory_entries SET topic_key = NULL
        WHERE project_id = ? AND topic_key = ? AND deleted_at IS NULL`,
-      projectId,
+      fixture.projectId,
       'style:anti:global-state'
     )
 
     const remember = projectMemory.remember.bind(projectMemory)
     const rememberSpy = spyOn(projectMemory, 'remember').mockImplementation(remember)
     try {
-      expect(await bridgeStyleToMemory(projectPath, projectId, snapshot)).toBe(1)
+      expect(await bridgeStyleToMemory(fixture.projectPath, fixture.projectId, snapshot)).toBe(1)
       expect(rememberSpy).toHaveBeenCalledTimes(1)
       const repaired = prjctDb.query<{ topic_key: string }>(
-        projectId,
+        fixture.projectId,
         `SELECT topic_key FROM memory_entries
          WHERE project_id = ? AND type = ? AND deleted_at IS NULL`,
-        projectId,
+        fixture.projectId,
         'anti-pattern'
       )
       expect(repaired).toEqual([{ topic_key: 'style:anti:global-state' }])

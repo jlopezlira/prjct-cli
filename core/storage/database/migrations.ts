@@ -839,19 +839,19 @@ export const migrations: Migration[] = [
           .prepare('SELECT id, type, content_hash FROM memories WHERE deleted_at IS NULL')
           .all() as Array<{ id: string; type: string | null; content_hash: string | null }>
         const canonicalMem = new Map<string, number>() // group key -> min numeric id
-        for (const r of memLive) {
-          if (!r.content_hash) continue
-          const k = `${r.type ?? ''}::${r.content_hash}`
-          const n = numOf(r.id)
+        for (const r2 of memLive) {
+          if (!r2.content_hash) continue
+          const k = `${r2.type ?? ''}::${r2.content_hash}`
+          const n = numOf(r2.id)
           const cur = canonicalMem.get(k)
           if (cur === undefined || n < cur) canonicalMem.set(k, n)
         }
         const nowIso = new Date().toISOString()
         const softDelete = db.prepare('UPDATE memories SET deleted_at = ? WHERE id = ?')
-        for (const r of memLive) {
-          if (!r.content_hash) continue
-          const k = `${r.type ?? ''}::${r.content_hash}`
-          if (canonicalMem.get(k) !== numOf(r.id)) softDelete.run(nowIso, r.id)
+        for (const r3 of memLive) {
+          if (!r3.content_hash) continue
+          const k = `${r3.type ?? ''}::${r3.content_hash}`
+          if (canonicalMem.get(k) !== numOf(r3.id)) softDelete.run(nowIso, r3.id)
         }
       } catch {
         // `memories` table retired — skip the legacy mirror dedup.
@@ -871,11 +871,11 @@ export const migrations: Migration[] = [
         .all() as Array<{ id: number; type: string; content: string | null }>
       const seenEv = new Set<string>()
       const delEv = db.prepare('DELETE FROM events WHERE id = ?')
-      for (const r of evRows) {
-        if (r.content == null) continue
-        const k = `${r.type}::${memoryFingerprint(r.content)}`
+      for (const r4 of evRows) {
+        if (r4.content == null) continue
+        const k = `${r4.type}::${memoryFingerprint(r4.content)}`
         if (seenEv.has(k)) {
-          delEv.run(r.id)
+          delEv.run(r4.id)
           continue
         }
         seenEv.add(k)
@@ -941,8 +941,7 @@ export const migrations: Migration[] = [
         // Copy for 4-byte alignment — SQLite BLOBs may arrive unaligned.
         const copy = Uint8Array.from(r.vector)
         const v = new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4))
-        let sum = 0
-        for (let i = 0; i < v.length; i++) sum += v[i] * v[i]
+        const sum = v.reduce((total, value) => total + value * value, 0)
         setNorm.run(Math.sqrt(sum), r.memory_id)
       }
     },
@@ -1148,10 +1147,10 @@ export const migrations: Migration[] = [
           'UPDATE memories SET content = ?, content_hash = ?, updated_at = ? WHERE id = ?'
         )
         const now = new Date().toISOString()
-        for (const row of memoryRows) {
-          const cleaned = stripLiteralFrictionEvidence(row.content)
-          if (cleaned !== row.content)
-            updateMemory.run(cleaned, memoryFingerprint(cleaned), now, row.id)
+        for (const row2 of memoryRows) {
+          const cleaned = stripLiteralFrictionEvidence(row2.content)
+          if (cleaned !== row2.content)
+            updateMemory.run(cleaned, memoryFingerprint(cleaned), now, row2.id)
         }
       } catch {
         // `memories` table retired — events scrub already covers the source.
@@ -1581,22 +1580,28 @@ export const migrations: Migration[] = [
       } catch {}
 
       // 2. Rebuild from events (data.tags is always an object for remember rows).
-      let fallbackPid = 'local'
-      try {
-        const r = db
-          .prepare('SELECT project_id FROM memories WHERE project_id IS NOT NULL LIMIT 1')
-          .get() as { project_id?: string } | undefined
-        if (r?.project_id) fallbackPid = r.project_id
-      } catch {}
+      const fallbackPid = (() => {
+        try {
+          const row = db
+            .prepare('SELECT project_id FROM memories WHERE project_id IS NOT NULL LIMIT 1')
+            .get() as { project_id?: string } | undefined
+          return row?.project_id ?? 'local'
+        } catch {
+          return 'local'
+        }
+      })()
 
-      let rows: Array<{ id: number; type: string; data: string; timestamp: string }> = []
-      try {
-        rows = db
-          .prepare(
-            "SELECT id, type, data, timestamp FROM events WHERE type >= 'memory.remember.' AND type < 'memory.remember/' ORDER BY id ASC"
-          )
-          .all() as typeof rows
-      } catch {}
+      const rows = (() => {
+        try {
+          return db
+            .prepare(
+              "SELECT id, type, data, timestamp FROM events WHERE type >= 'memory.remember.' AND type < 'memory.remember/' ORDER BY id ASC"
+            )
+            .all() as Array<{ id: number; type: string; data: string; timestamp: string }>
+        } catch {
+          return []
+        }
+      })()
 
       const insEntry = db.prepare(
         `INSERT OR IGNORE INTO memory_entries
@@ -1609,19 +1614,21 @@ export const migrations: Migration[] = [
       )
 
       for (const row of rows) {
-        let data: {
-          content?: unknown
-          tags?: unknown
-          provenance?: unknown
-          content_hash?: unknown
-          project_id?: unknown
-          created_at?: unknown
-        }
-        try {
-          data = JSON.parse(row.data)
-        } catch {
-          continue
-        }
+        const data = (() => {
+          try {
+            return JSON.parse(row.data) as {
+              content?: unknown
+              tags?: unknown
+              provenance?: unknown
+              content_hash?: unknown
+              project_id?: unknown
+              created_at?: unknown
+            }
+          } catch {
+            return null
+          }
+        })()
+        if (!data) continue
         const content = data.content
         if (typeof content !== 'string' || !content) continue
         const id = `mem_${row.id}`
@@ -2108,15 +2115,16 @@ export const migrations: Migration[] = [
         | { data?: string }
         | undefined
       if (blob?.data) {
-        let ships: Array<Record<string, unknown>> = []
-        try {
-          const parsed = JSON.parse(blob.data) as { shipped?: unknown }
-          if (Array.isArray(parsed?.shipped))
-            ships = parsed.shipped as Array<Record<string, unknown>>
-        } catch {
-          // Malformed blob must not brick startup — leave it, migrate nothing.
-          ships = []
-        }
+        const ships = (() => {
+          try {
+            const parsed = JSON.parse(blob.data) as { shipped?: unknown }
+            return Array.isArray(parsed?.shipped)
+              ? (parsed.shipped as Array<Record<string, unknown>>)
+              : []
+          } catch {
+            return []
+          }
+        })()
         const insert = db.prepare(
           `INSERT OR IGNORE INTO shipped_features
              (id, name, shipped_at, version, description, type, duration, data)
@@ -2166,40 +2174,39 @@ export const migrations: Migration[] = [
         | { data?: string }
         | undefined
       if (blob?.data) {
-        let parsed: {
-          dailyStats?: Array<Record<string, unknown>>
-          agentUsage?: Array<Record<string, unknown>>
-          totalTokensSaved?: number
-          syncCount?: number
-          totalSyncDuration?: number
-          avgCompressionRate?: number
-          firstSync?: string
-        } = {}
-        try {
-          parsed = JSON.parse(blob.data)
-        } catch {
-          parsed = {} // malformed blob must not brick startup
-        }
+        const parsed = (() => {
+          try {
+            return JSON.parse(blob.data) as {
+              dailyStats?: Array<Record<string, unknown>>
+              agentUsage?: Array<Record<string, unknown>>
+              totalTokensSaved?: number
+              syncCount?: number
+              totalSyncDuration?: number
+              avgCompressionRate?: number
+              firstSync?: string
+            }
+          } catch {
+            return {}
+          }
+        })()
         const daily = Array.isArray(parsed.dailyStats) ? parsed.dailyStats : []
         const insertDay = db.prepare(
           `INSERT OR IGNORE INTO metrics_daily
              (date, tokens_saved, syncs, avg_compression_rate, total_duration)
            VALUES (?, ?, ?, ?, ?)`
         )
-        let dailyTokens = 0
-        let dailySyncs = 0
-        let dailyDuration = 0
-        for (const d of daily) {
-          const date = d.date as string | undefined
-          if (!date) continue
-          const tokens = Number(d.tokensSaved) || 0
-          const syncs = Number(d.syncs) || 0
-          const duration = Number(d.totalDuration) || 0
-          insertDay.run(date, tokens, syncs, Number(d.avgCompressionRate) || 0, duration)
-          dailyTokens += tokens
-          dailySyncs += syncs
-          dailyDuration += duration
-        }
+        const [dailyTokens, dailySyncs, dailyDuration] = daily.reduce<[number, number, number]>(
+          (totals, d) => {
+            const date = d.date as string | undefined
+            if (!date) return totals
+            const tokens = Number(d.tokensSaved) || 0
+            const syncs = Number(d.syncs) || 0
+            const duration = Number(d.totalDuration) || 0
+            insertDay.run(date, tokens, syncs, Number(d.avgCompressionRate) || 0, duration)
+            return [totals[0] + tokens, totals[1] + syncs, totals[2] + duration]
+          },
+          [0, 0, 0]
+        )
         // The blob kept RUNNING totals but trimmed dailyStats to 90 days, so
         // lifetime totals can exceed the daily sum. Preserve the difference in
         // one synthetic "pre-history" row dated at firstSync (or epoch) so SQL
@@ -2255,13 +2262,16 @@ export const migrations: Migration[] = [
         | { data?: string }
         | undefined
       if (blob?.data) {
-        let tasks: Array<Record<string, unknown>> = []
-        try {
-          const parsed = JSON.parse(blob.data) as { tasks?: unknown }
-          if (Array.isArray(parsed?.tasks)) tasks = parsed.tasks as Array<Record<string, unknown>>
-        } catch {
-          tasks = [] // malformed blob must not brick startup
-        }
+        const tasks = (() => {
+          try {
+            const parsed = JSON.parse(blob.data) as { tasks?: unknown }
+            return Array.isArray(parsed?.tasks)
+              ? (parsed.tasks as Array<Record<string, unknown>>)
+              : []
+          } catch {
+            return []
+          }
+        })()
         const insert = db.prepare(
           `INSERT OR IGNORE INTO queue_tasks
              (id, description, type, priority, section, created_at, completed, completed_at,
@@ -2342,13 +2352,16 @@ export const migrations: Migration[] = [
         | { data?: string }
         | undefined
       if (blob?.data) {
-        let ideas: Array<Record<string, unknown>> = []
-        try {
-          const parsed = JSON.parse(blob.data) as { ideas?: unknown }
-          if (Array.isArray(parsed?.ideas)) ideas = parsed.ideas as Array<Record<string, unknown>>
-        } catch {
-          ideas = [] // malformed blob must not brick startup
-        }
+        const ideas = (() => {
+          try {
+            const parsed = JSON.parse(blob.data) as { ideas?: unknown }
+            return Array.isArray(parsed?.ideas)
+              ? (parsed.ideas as Array<Record<string, unknown>>)
+              : []
+          } catch {
+            return []
+          }
+        })()
         const insert = db.prepare(
           `INSERT OR IGNORE INTO ideas
              (id, text, status, priority, tags, added_at, converted_to, details, data)
@@ -2399,12 +2412,14 @@ export const migrations: Migration[] = [
         | { data?: string }
         | undefined
       if (!blob?.data) return
-      let state: Record<string, unknown> = {}
-      try {
-        state = JSON.parse(blob.data)
-      } catch {
-        return // malformed blob must not brick startup
-      }
+      const state = (() => {
+        try {
+          return JSON.parse(blob.data) as Record<string, unknown>
+        } catch {
+          return null
+        }
+      })()
+      if (!state) return
       const history = Array.isArray(state.taskHistory)
         ? (state.taskHistory as Array<Record<string, unknown>>)
         : []

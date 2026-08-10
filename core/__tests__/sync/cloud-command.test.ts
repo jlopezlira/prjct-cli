@@ -22,9 +22,16 @@ import authConfig from '../../sync/auth-config'
 import syncClient from '../../sync/sync-client'
 import syncManager from '../../sync/sync-manager'
 
-let tempDir: string
-let originalProjectsDir: string | undefined
-let cloud: CloudCommands
+const fixture: {
+  tempDir: string
+  originalProjectsDir: string | undefined
+  cloud: CloudCommands
+} = {
+  tempDir: '',
+  originalProjectsDir: undefined as unknown as string | undefined,
+  cloud: undefined as unknown as CloudCommands,
+}
+
 const origSync = syncManager.sync.bind(syncManager)
 const origPull = syncManager.pull.bind(syncManager)
 const origLinkProject = syncClient.linkProject.bind(syncClient)
@@ -32,14 +39,14 @@ const origRead = authConfig.read.bind(authConfig)
 
 describe('prjct cloud command', () => {
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cloud-cmd-'))
-    originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
-    process.env.PRJCT_PROJECTS_DIR = path.join(tempDir, 'projects')
-    await configManager.writeConfig(tempDir, {
+    fixture.tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cloud-cmd-'))
+    fixture.originalProjectsDir = process.env.PRJCT_PROJECTS_DIR
+    process.env.PRJCT_PROJECTS_DIR = path.join(fixture.tempDir, 'projects')
+    await configManager.writeConfig(fixture.tempDir, {
       projectId: `cloudcmd-${Date.now()}`,
-      dataPath: path.join(tempDir, 'projects'),
+      dataPath: path.join(fixture.tempDir, 'projects'),
     })
-    cloud = new CloudCommands()
+    fixture.cloud = new CloudCommands()
     // Pretend we're authenticated — the local-only gate is independent of auth.
     authConfig.read = mock(async () => ({ apiKey: 'pk_live_test', deviceId: 'd1' }) as never)
     // Keep the suite offline: link/sync never touch the network.
@@ -67,24 +74,24 @@ describe('prjct cloud command', () => {
   })
 
   afterEach(async () => {
-    if (originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
-    else process.env.PRJCT_PROJECTS_DIR = originalProjectsDir
+    if (fixture.originalProjectsDir === undefined) delete process.env.PRJCT_PROJECTS_DIR
+    else process.env.PRJCT_PROJECTS_DIR = fixture.originalProjectsDir
     authConfig.read = origRead
     authConfig.clearCache()
     syncManager.sync = origSync
     syncManager.pull = origPull
     syncClient.linkProject = origLinkProject
-    await fs.rm(tempDir, { recursive: true, force: true })
+    await fs.rm(fixture.tempDir, { recursive: true, force: true })
   })
 
   test('sync on an unlinked project is gated off (local-first default)', async () => {
-    const res = await cloud.cloud('sync', tempDir, { md: true })
+    const res = await fixture.cloud.cloud('sync', fixture.tempDir, { md: true })
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/not (linked|connected)/i)
   })
 
   test('pull on an unlinked project is gated off', async () => {
-    const res = await cloud.cloud('pull', tempDir, { md: true })
+    const res = await fixture.cloud.cloud('pull', fixture.tempDir, { md: true })
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/not (linked|connected)/i)
   })
@@ -92,8 +99,8 @@ describe('prjct cloud command', () => {
   test('link flips config.cloud.enabled on and persists it', async () => {
     // link triggers an initial sync; with no pending events + stubbed auth it
     // resolves without network. We only assert the config side-effect.
-    await cloud.cloud('link', tempDir, { md: true }).catch(() => undefined)
-    const config = await configManager.readConfig(tempDir)
+    await fixture.cloud.cloud('link', fixture.tempDir, { md: true }).catch(() => undefined)
+    const config = await configManager.readConfig(fixture.tempDir)
     expect(config?.cloud?.enabled).toBe(true)
     expect(config?.cloud?.linkedAt).toBeTruthy()
   })
@@ -108,8 +115,8 @@ describe('prjct cloud command', () => {
       message: 'Repo linked. Subscribe to activate Cloud sync.',
     })) as never
 
-    const res = await cloud.cloud('link', tempDir, { md: true })
-    const config = await configManager.readConfig(tempDir)
+    const res = await fixture.cloud.cloud('link', fixture.tempDir, { md: true })
+    const config = await configManager.readConfig(fixture.tempDir)
 
     expect(res.success).toBe(false)
     expect(res.paymentRequired).toBe(true)
@@ -118,71 +125,71 @@ describe('prjct cloud command', () => {
   })
 
   test('pause / resume toggle config.cloud.paused once linked', async () => {
-    const config = await configManager.readConfig(tempDir)
+    const config = await configManager.readConfig(fixture.tempDir)
     if (!config) throw new Error('no config')
     config.cloud = { enabled: true }
-    await configManager.writeConfig(tempDir, config)
+    await configManager.writeConfig(fixture.tempDir, config)
 
-    await cloud.cloud('pause', tempDir, { md: true })
-    expect((await configManager.readConfig(tempDir))?.cloud?.paused).toBe(true)
+    await fixture.cloud.cloud('pause', fixture.tempDir, { md: true })
+    expect((await configManager.readConfig(fixture.tempDir))?.cloud?.paused).toBe(true)
 
-    await cloud.cloud('resume', tempDir, { md: true })
-    expect((await configManager.readConfig(tempDir))?.cloud?.paused).toBe(false)
+    await fixture.cloud.cloud('resume', fixture.tempDir, { md: true })
+    expect((await configManager.readConfig(fixture.tempDir))?.cloud?.paused).toBe(false)
   })
 
   test('unlink sets enabled=false, leaving the block in place', async () => {
-    const config = await configManager.readConfig(tempDir)
+    const config = await configManager.readConfig(fixture.tempDir)
     if (!config) throw new Error('no config')
     config.cloud = { enabled: true, linkedAt: '2026-06-19T00:00:00Z' }
-    await configManager.writeConfig(tempDir, config)
+    await configManager.writeConfig(fixture.tempDir, config)
 
-    const res = await cloud.cloud('unlink', tempDir, { md: true })
+    const res = await fixture.cloud.cloud('unlink', fixture.tempDir, { md: true })
     expect(res.success).toBe(true)
-    expect((await configManager.readConfig(tempDir))?.cloud?.enabled).toBe(false)
+    expect((await configManager.readConfig(fixture.tempDir))?.cloud?.enabled).toBe(false)
   })
 
   test('status reports linked + paused state', async () => {
-    const config = await configManager.readConfig(tempDir)
+    const config = await configManager.readConfig(fixture.tempDir)
     if (!config) throw new Error('no config')
     config.cloud = { enabled: true, paused: true }
-    await configManager.writeConfig(tempDir, config)
+    await configManager.writeConfig(fixture.tempDir, config)
 
-    const res = await cloud.cloud('status', tempDir, { md: true })
+    const res = await fixture.cloud.cloud('status', fixture.tempDir, { md: true })
     expect(res.success).toBe(true)
     expect(res.linked).toBe(true)
     expect(res.paused).toBe(true)
   })
 
   test('unknown subcommand fails cleanly', async () => {
-    const res = await cloud.cloud('frobnicate', tempDir, { md: true })
+    const res = await fixture.cloud.cloud('frobnicate', fixture.tempDir, { md: true })
     expect(res.success).toBe(false)
     expect(res.error).toContain('Unknown cloud subcommand')
   })
 
   test('connect alias links cwd (config.cloud.enabled)', async () => {
-    await cloud.connect(null, tempDir, { md: true }).catch(() => undefined)
-    const config = await configManager.readConfig(tempDir)
+    await fixture.cloud.connect(null, fixture.tempDir, { md: true }).catch(() => undefined)
+    const config = await configManager.readConfig(fixture.tempDir)
     expect(config?.cloud?.enabled).toBe(true)
   })
 
   test('disconnect alias unlinks cwd', async () => {
-    const config = await configManager.readConfig(tempDir)
+    const config = await configManager.readConfig(fixture.tempDir)
     if (!config) throw new Error('no config')
     config.cloud = { enabled: true, linkedAt: '2026-06-19T00:00:00Z' }
-    await configManager.writeConfig(tempDir, config)
+    await configManager.writeConfig(fixture.tempDir, config)
 
-    const res = await cloud.disconnect(null, tempDir, { md: true })
+    const res = await fixture.cloud.disconnect(null, fixture.tempDir, { md: true })
     expect(res.success).toBe(true)
-    expect((await configManager.readConfig(tempDir))?.cloud?.enabled).toBe(false)
+    expect((await configManager.readConfig(fixture.tempDir))?.cloud?.enabled).toBe(false)
   })
 
   test('link --all without --yes refuses when non-interactive', async () => {
     // Ensure linked path is discoverable via registry after a connect
-    await cloud.connect(null, tempDir, { md: true }).catch(() => undefined)
+    await fixture.cloud.connect(null, fixture.tempDir, { md: true }).catch(() => undefined)
     // Disconnect so it becomes a connect candidate again
-    await cloud.disconnect(null, tempDir, { md: true })
+    await fixture.cloud.disconnect(null, fixture.tempDir, { md: true })
 
-    const res = await cloud.cloud('link --all', tempDir, { md: true })
+    const res = await fixture.cloud.cloud('link --all', fixture.tempDir, { md: true })
     // Either no candidates (path not in discovery) or needs --yes
     if (res.success) {
       expect(res.connected === 0 || res.connected === undefined).toBe(true)
@@ -192,7 +199,7 @@ describe('prjct cloud command', () => {
   })
 
   test('cloud projects returns success', async () => {
-    const res = await cloud.cloud('projects', tempDir, { md: true })
+    const res = await fixture.cloud.cloud('projects', fixture.tempDir, { md: true })
     expect(res.success).toBe(true)
     expect(Array.isArray(res.projects)).toBe(true)
   })

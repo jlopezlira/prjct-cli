@@ -40,24 +40,25 @@ export async function exportCodeGraphArtifact(
 ): Promise<{ path: string; bytes: number; symbols: number; edges: number } | null> {
   if (!hasSymbolIndex(projectId)) return null
   const symbols = listAllSymbols(projectId)
-  let edges: CodeSymbolEdge[] = []
-  try {
-    edges = prjctDb
-      .query<{
-        src: string
-        dst: string
-        edge_type: string
-        confidence: number
-      }>(projectId, 'SELECT src, dst, edge_type, confidence FROM code_symbol_edges')
-      .map((r) => ({
-        src: r.src,
-        dst: r.dst,
-        edgeType: r.edge_type as CodeSymbolEdge['edgeType'],
-        confidence: r.confidence,
-      }))
-  } catch {
-    edges = []
-  }
+  const edges = (() => {
+    try {
+      return prjctDb
+        .query<{
+          src: string
+          dst: string
+          edge_type: string
+          confidence: number
+        }>(projectId, 'SELECT src, dst, edge_type, confidence FROM code_symbol_edges')
+        .map((r) => ({
+          src: r.src,
+          dst: r.dst,
+          edgeType: r.edge_type as CodeSymbolEdge['edgeType'],
+          confidence: r.confidence,
+        }))
+    } catch {
+      return []
+    }
+  })()
   const meta = loadMeta(projectId) ?? {
     symbolCount: symbols.length,
     edgeCount: edges.length,
@@ -89,24 +90,20 @@ export async function importCodeGraphArtifact(
   projectId: string
 ): Promise<{ imported: boolean; symbols: number; edges: number; reason?: string }> {
   const file = artifactPath(projectId)
-  let buf: Buffer
-  try {
-    buf = await fs.readFile(file)
-  } catch {
-    return { imported: false, symbols: 0, edges: 0, reason: 'no per-project artifact' }
-  }
-  let payload: ArtifactPayload
-  try {
-    const json = gunzipSync(buf).toString('utf-8')
-    payload = JSON.parse(json) as ArtifactPayload
-  } catch (e) {
-    return {
-      imported: false,
-      symbols: 0,
-      edges: 0,
-      reason: `corrupt artifact: ${e instanceof Error ? e.message : String(e)}`,
+  const buf = await fs.readFile(file).catch(() => null)
+  if (!buf) return { imported: false, symbols: 0, edges: 0, reason: 'no per-project artifact' }
+  const parsed = (() => {
+    try {
+      const json = gunzipSync(buf).toString('utf-8')
+      return { payload: JSON.parse(json) as ArtifactPayload }
+    } catch (e) {
+      return { error: `corrupt artifact: ${e instanceof Error ? e.message : String(e)}` }
     }
+  })()
+  if ('error' in parsed) {
+    return { imported: false, symbols: 0, edges: 0, reason: parsed.error }
   }
+  const payload = parsed.payload
   if (payload.version !== 1 || !Array.isArray(payload.symbols)) {
     return { imported: false, symbols: 0, edges: 0, reason: 'unsupported artifact version' }
   }

@@ -95,17 +95,14 @@ class ProjectIndexer {
     const index = await indexStorage.readIndex(this.projectId)
     if (!index) return this.fullScan()
 
-    let filesToUpdate: string[]
-    if (changedPaths && changedPaths.length > 0) {
-      filesToUpdate = changedPaths
-    } else {
+    const filesToUpdate = await (async () => {
+      if (changedPaths && changedPaths.length > 0) return changedPaths
       const changes = await this.detectFileChanges()
-      filesToUpdate = [...changes.added, ...changes.modified]
-
       if (changes.deleted.length > 0) {
         index.relevantFiles = index.relevantFiles.filter((f) => !changes.deleted.includes(f.path))
       }
-    }
+      return [...changes.added, ...changes.modified]
+    })()
 
     if (filesToUpdate.length === 0) {
       return {
@@ -166,16 +163,22 @@ class ProjectIndexer {
       return { files: [], estimatedTokens: 0, originalTokens: 0, compressionRate: 0 }
     }
 
-    let estimatedTokens = 0
-    const selectedFiles: ScoredFile[] = []
+    const selection = index.relevantFiles.reduce(
+      (state, file) => {
+        if (state.full) return state
+        const fileTokens = Math.ceil(file.size / CHARS_PER_TOKEN)
+        if (state.estimatedTokens + fileTokens > maxTokens) {
+          state.full = true
+          return state
+        }
+        state.files.push(file)
+        state.estimatedTokens += fileTokens
+        return state
+      },
+      { files: [] as ScoredFile[], estimatedTokens: 0, full: false }
+    )
 
-    for (const file of index.relevantFiles) {
-      const fileTokens = Math.ceil(file.size / CHARS_PER_TOKEN)
-      if (estimatedTokens + fileTokens > maxTokens) break
-      selectedFiles.push(file)
-      estimatedTokens += fileTokens
-    }
-
+    const { files: selectedFiles, estimatedTokens } = selection
     const originalTokens = Math.ceil(index.totalSize / CHARS_PER_TOKEN)
     const compressionRate =
       originalTokens > 0 ? (originalTokens - estimatedTokens) / originalTokens : 0
@@ -235,20 +238,15 @@ function buildLanguageStats(files: FileStats[]): Record<string, LanguageStats> {
 
 function buildScoringContext(files: Map<string, FileStats>): ScoringContext {
   const configFiles = new Set<string>()
-  let maxRecentCommits = 0
-
   for (const file of files.values()) {
     if (CONFIG_FILES.has(path.basename(file.path))) configFiles.add(file.path)
-    if (file.recentCommits && file.recentCommits > maxRecentCommits) {
-      maxRecentCommits = file.recentCommits
-    }
   }
 
   return {
     allFiles: files,
     configFiles,
     maxFileSize: Math.max(...Array.from(files.values()).map((f) => f.size)),
-    maxRecentCommits,
+    maxRecentCommits: Math.max(0, ...[...files.values()].map((file) => file.recentCommits ?? 0)),
     now: new Date(),
   }
 }

@@ -10,9 +10,15 @@ import {
 } from '../../services/agent-session-recorder'
 import { prjctDb } from '../../storage/database'
 
-let projectPath: string
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  projectPath: string
+  tmpRoot: string
+  projectId: string
+} = {
+  projectPath: '',
+  tmpRoot: '',
+  projectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
@@ -26,35 +32,35 @@ interface SessionRow {
 
 describe('agent session recorder', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-session-root-'))
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-session-project-'))
-    projectId = `agent-session-${Math.random().toString(36).slice(2, 10)}`
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(tmpRoot, 'data'),
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-session-root-'))
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-session-project-'))
+    fixture.projectId = `agent-session-${Math.random().toString(36).slice(2, 10)}`
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.tmpRoot, 'data'),
     })
-    prjctDb.getDb(projectId)
+    prjctDb.getDb(fixture.projectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
-    await fs.rm(projectPath, { recursive: true, force: true })
-    await fs.rm(tmpRoot, { recursive: true, force: true })
+    await fs.rm(fixture.projectPath, { recursive: true, force: true })
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('records start and end metadata without raw transcript content', () => {
     recordAgentSessionStart({
-      projectId,
+      projectId: fixture.projectId,
       sessionId: 'session-1',
-      directory: projectPath,
+      directory: fixture.projectPath,
       goal: 'startup',
     })
     recordAgentSessionEnd({
-      projectId,
+      projectId: fixture.projectId,
       sessionId: 'session-1',
-      directory: projectPath,
+      directory: fixture.projectPath,
       taskId: 'task-1',
       goal: 'Fix attribution',
       tokensIn: 1200,
@@ -64,7 +70,7 @@ describe('agent session recorder', () => {
     })
 
     const row = prjctDb.get<SessionRow>(
-      projectId,
+      fixture.projectId,
       'SELECT id, task_id, ended_at, summary, files_touched FROM agent_sessions WHERE id = ?',
       'session-1'
     )

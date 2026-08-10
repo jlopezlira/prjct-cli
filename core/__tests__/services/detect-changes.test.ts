@@ -14,37 +14,43 @@ import prjctDb from '../../storage/database'
 import { GitInfraError } from '../../utils/exec'
 
 describe('detect-changes', () => {
-  let testDir: string
-  let testProjectId: string
+  const fixture: {
+    testDir: string
+    testProjectId: string
+  } = {
+    testDir: '',
+    testProjectId: '',
+  }
+
   const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
   beforeEach(async () => {
-    testDir = path.join(os.tmpdir(), `prjct-detect-changes-${Date.now()}`)
-    testProjectId = `test-detect-${Date.now()}`
-    await fs.mkdir(testDir, { recursive: true })
-    pathManager.getGlobalProjectPath = () => testDir
+    fixture.testDir = path.join(os.tmpdir(), `prjct-detect-changes-${Date.now()}`)
+    fixture.testProjectId = `test-detect-${Date.now()}`
+    await fs.mkdir(fixture.testDir, { recursive: true })
+    pathManager.getGlobalProjectPath = () => fixture.testDir
   })
 
   afterEach(async () => {
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
     prjctDb.close()
     try {
-      await fs.rm(testDir, { recursive: true, force: true })
+      await fs.rm(fixture.testDir, { recursive: true, force: true })
     } catch {
       /* ignore */
     }
   })
 
   it('classifies explicit changed files with import blast radius', async () => {
-    await fs.writeFile(path.join(testDir, 'core.ts'), `export function core() {}\n`)
+    await fs.writeFile(path.join(fixture.testDir, 'core.ts'), `export function core() {}\n`)
     await fs.writeFile(
-      path.join(testDir, 'app.ts'),
+      path.join(fixture.testDir, 'app.ts'),
       `import { core } from './core'\nexport function app() { return core() }\n`
     )
-    await indexImports(testDir, testProjectId)
-    await indexSymbols(testDir, testProjectId)
+    await indexImports(fixture.testDir, fixture.testProjectId)
+    await indexSymbols(fixture.testDir, fixture.testProjectId)
 
-    const result = await detectChanges(testDir, testProjectId, {
+    const result = await detectChanges(fixture.testDir, fixture.testProjectId, {
       files: ['core.ts'],
     })
 
@@ -57,11 +63,14 @@ describe('detect-changes', () => {
   })
 
   it('flags auth path as elevated risk', async () => {
-    await fs.mkdir(path.join(testDir, 'auth'), { recursive: true })
-    await fs.writeFile(path.join(testDir, 'auth', 'login.ts'), `export function login() {}\n`)
-    await indexSymbols(testDir, testProjectId)
+    await fs.mkdir(path.join(fixture.testDir, 'auth'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.testDir, 'auth', 'login.ts'),
+      `export function login() {}\n`
+    )
+    await indexSymbols(fixture.testDir, fixture.testProjectId)
 
-    const result = await detectChanges(testDir, testProjectId, {
+    const result = await detectChanges(fixture.testDir, fixture.testProjectId, {
       files: ['auth/login.ts'],
     })
     expect(result.changes[0]?.risk).toBe('critical')

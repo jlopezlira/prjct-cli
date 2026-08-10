@@ -13,9 +13,16 @@ import pathManager from '../../infrastructure/path-manager'
 import { projectMemory } from '../../memory/project-memory'
 import { prjctDb } from '../../storage/database'
 
-let tmpRoot: string
-let projectPath: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectPath: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectPath: '',
+  projectId: '',
+}
+
 const origGlobal = pathManager.getGlobalProjectPath.bind(pathManager)
 const origFile = pathManager.getFilePath.bind(pathManager)
 const cmd = new MemoryExportCommands()
@@ -23,69 +30,72 @@ const cmd = new MemoryExportCommands()
 describe('prjct memory export/import', () => {
   beforeEach(async () => {
     prjctDb.close()
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-memexp-'))
-    projectId = `test-memexp-${Date.now()}`
-    projectPath = path.join(tmpRoot, 'repo')
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, 'home', id)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-memexp-'))
+    fixture.projectId = `test-memexp-${Date.now()}`
+    fixture.projectPath = path.join(fixture.tmpRoot, 'repo')
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, 'home', id)
     pathManager.getFilePath = (id: string, layer: string, filename: string) =>
-      path.join(tmpRoot, 'home', id, layer, filename)
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
+      path.join(fixture.tmpRoot, 'home', id, layer, filename)
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
     await fs.writeFile(
-      path.join(projectPath, '.prjct', 'prjct.config.json'),
-      JSON.stringify({ projectId })
+      path.join(fixture.projectPath, '.prjct', 'prjct.config.json'),
+      JSON.stringify({ projectId: fixture.projectId })
     )
-    prjctDb.getDb(projectId)
+    prjctDb.getDb(fixture.projectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = origGlobal
     pathManager.getFilePath = origFile
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
   })
 
   it('round-trips: export → wipe → import restores entries with tags, deduped on re-import', async () => {
     // Let ensureInit settle the project identity first (an unregistered path
     // gets re-initialized with a fresh id), then use the REAL id throughout.
-    await cmd.memory('export', projectPath, { md: true })
+    await cmd.memory('export', fixture.projectPath, { md: true })
     const cfg = JSON.parse(
-      await fs.readFile(path.join(projectPath, '.prjct', 'prjct.config.json'), 'utf-8')
+      await fs.readFile(path.join(fixture.projectPath, '.prjct', 'prjct.config.json'), 'utf-8')
     )
-    projectId = cfg.projectId
+    fixture.projectId = cfg.projectId
 
-    await projectMemory.remember(projectPath, {
+    await projectMemory.remember(fixture.projectPath, {
       type: 'decision',
       content: 'use SQLite WAL',
       tags: { area: 'storage' },
-      projectId,
+      projectId: fixture.projectId,
     })
-    await projectMemory.remember(projectPath, {
+    await projectMemory.remember(fixture.projectPath, {
       type: 'gotcha',
       content: 'daemon caches stale code after upgrade',
-      projectId,
+      projectId: fixture.projectId,
     })
 
-    const exp = await cmd.memory('export', projectPath, { md: true })
+    const exp = await cmd.memory('export', fixture.projectPath, { md: true })
     expect(exp.success).toBe(true)
     const manifest = JSON.parse(
-      await fs.readFile(path.join(projectPath, '.prjct', 'memory-export', 'manifest.json'), 'utf-8')
+      await fs.readFile(
+        path.join(fixture.projectPath, '.prjct', 'memory-export', 'manifest.json'),
+        'utf-8'
+      )
     )
     expect(manifest.entries).toBe(2)
 
     // Fresh machine: same export files, empty DB (new project id).
-    const otherId = `${projectId}-clone`
+    const otherId = `${fixture.projectId}-clone`
     await fs.writeFile(
-      path.join(projectPath, '.prjct', 'prjct.config.json'),
+      path.join(fixture.projectPath, '.prjct', 'prjct.config.json'),
       JSON.stringify({ projectId: otherId })
     )
     prjctDb.getDb(otherId)
 
-    const imp1 = await cmd.memory('import', projectPath, { md: true })
+    const imp1 = await cmd.memory('import', fixture.projectPath, { md: true })
     expect(imp1.success).toBe(true)
     expect(imp1.imported).toBe(2)
     // ensureInit may have re-settled the clone's identity — query the REAL id.
     const cloneId = JSON.parse(
-      await fs.readFile(path.join(projectPath, '.prjct', 'prjct.config.json'), 'utf-8')
+      await fs.readFile(path.join(fixture.projectPath, '.prjct', 'prjct.config.json'), 'utf-8')
     ).projectId
     const rows = prjctDb.query<{ type: string; content: string }>(
       cloneId,
@@ -101,13 +111,13 @@ describe('prjct memory export/import', () => {
     expect(tag?.value).toBe('storage')
 
     // Re-import: full no-op.
-    const imp2 = await cmd.memory('import', projectPath, { md: true })
+    const imp2 = await cmd.memory('import', fixture.projectPath, { md: true })
     expect(imp2.imported).toBe(0)
     expect(imp2.skipped).toBe(2)
   })
 
   it('import without an export is a clear no-op', async () => {
-    const r = await cmd.memory('import', projectPath, { md: true })
+    const r = await cmd.memory('import', fixture.projectPath, { md: true })
     expect(r.success).toBe(false)
   })
 })

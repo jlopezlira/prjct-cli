@@ -14,7 +14,11 @@ import path from 'node:path'
 import pathManager from '../../infrastructure/path-manager'
 import { prjctDb } from '../../storage/database'
 
-let tmpRoot: string | null = null
+const fixture: {
+  tmpRoot: string | null
+} = {
+  tmpRoot: null,
+}
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 const TEST_PROJECT_ID = 'upgrade-test'
@@ -72,8 +76,8 @@ function applyMigrationV15(projectId: string): void {
 }
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-upgrade-'))
-  pathManager.getGlobalProjectPath = (projectId: string) => path.join(tmpRoot!, projectId)
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-upgrade-'))
+  pathManager.getGlobalProjectPath = (projectId: string) => path.join(fixture.tmpRoot!, projectId)
 })
 
 afterEach(async () => {
@@ -83,9 +87,9 @@ afterEach(async () => {
   } catch {
     /* already closed */
   }
-  if (tmpRoot) {
-    await fs.rm(tmpRoot, { recursive: true, force: true })
-    tmpRoot = null
+  if (fixture.tmpRoot) {
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+    fixture.tmpRoot = null
   }
 })
 

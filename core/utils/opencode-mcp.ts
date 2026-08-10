@@ -109,12 +109,10 @@ export async function ensureOpenCodeMcpServer(
   const target = configPath ?? (await resolveWritePath())
   await fs.mkdir(path.dirname(target), { recursive: true })
 
-  let existingRaw = ''
-  try {
-    existingRaw = await fs.readFile(target, 'utf-8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-  }
+  const existingRaw = await fs.readFile(target, 'utf-8').catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+    throw error
+  })
 
   const entry = toOpenCodeLocalMcp(server)
 
@@ -138,28 +136,28 @@ export async function ensureOpenCodeMcpServer(
   }
 
   // Use jsonc modify so comments / trailing commas are preserved when possible.
-  let next = existingRaw
   const formatting = { tabSize: 2, insertSpaces: true } as const
-  if (!parsed.mcp || typeof parsed.mcp !== 'object') {
-    next = jsonc.applyEdits(
-      next,
-      jsonc.modify(next, ['mcp'], {}, { formattingOptions: formatting })
-    )
-  }
-  next = jsonc.applyEdits(
-    next,
-    jsonc.modify(next, ['mcp', 'prjct'], entry, { formattingOptions: formatting })
+  const withMcp =
+    !parsed.mcp || typeof parsed.mcp !== 'object'
+      ? jsonc.applyEdits(
+          existingRaw,
+          jsonc.modify(existingRaw, ['mcp'], {}, { formattingOptions: formatting })
+        )
+      : existingRaw
+  const withPrjct = jsonc.applyEdits(
+    withMcp,
+    jsonc.modify(withMcp, ['mcp', 'prjct'], entry, { formattingOptions: formatting })
   )
   // Ensure schema hint for editors when missing
-  if (!parsed.$schema) {
-    next = jsonc.applyEdits(
-      next,
-      jsonc.modify(next, ['$schema'], 'https://opencode.ai/config.json', {
-        formattingOptions: formatting,
-        isArrayInsertion: false,
-      })
-    )
-  }
+  const next = !parsed.$schema
+    ? jsonc.applyEdits(
+        withPrjct,
+        jsonc.modify(withPrjct, ['$schema'], 'https://opencode.ai/config.json', {
+          formattingOptions: formatting,
+          isArrayInsertion: false,
+        })
+      )
+    : withPrjct
 
   await fs.writeFile(target, next.endsWith('\n') ? next : `${next}\n`, 'utf-8')
   return { path: target, changed: true }

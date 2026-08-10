@@ -39,10 +39,10 @@ async function readAllStdin(timeoutMs: number): Promise<string> {
   if (process.stdin.isTTY) return ''
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
-    let done = false
+    const completions = new Set<string>()
     const finish = () => {
-      if (done) return
-      done = true
+      if (completions.size > 0) return
+      completions.add('finished')
       resolve(Buffer.concat(chunks).toString('utf-8'))
     }
     process.stdin.on('data', (c: Buffer) => chunks.push(Buffer.from(c)))
@@ -94,12 +94,13 @@ async function main(): Promise<void> {
       process.exit(0)
     }
     const stdinPayload = await readAllStdin(1000)
-    let input: unknown = {}
-    try {
-      input = stdinPayload ? JSON.parse(stdinPayload) : {}
-    } catch {
-      input = {}
-    }
+    const input = (() => {
+      try {
+        return stdinPayload ? (JSON.parse(stdinPayload) as unknown) : {}
+      } catch {
+        return {}
+      }
+    })()
     const pending: Array<() => Promise<void>> = []
     await runner(process.cwd(), {
       input,
@@ -124,7 +125,7 @@ async function main(): Promise<void> {
     if (pending.length > 0) {
       const detached = trySpawnAfterEmitWorker(subcommand, stdinPayload)
       if (!detached) {
-        for (const fn of pending) await fn().catch(() => undefined)
+        for (const fn2 of pending) await fn2().catch(() => undefined)
       }
     }
     process.exit(0)

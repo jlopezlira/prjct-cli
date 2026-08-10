@@ -35,74 +35,71 @@ export async function detectIncrementalChanges(
   args: IncrementalDetectInput
 ): Promise<IncrementalDetectResult> {
   const { projectId, projectPath, isFullSync, changedFilesHint } = args
-
-  let shouldRebuildIndexes = true
-  let changedDomains = new Set<string>()
-  let incrementalInfo: IncrementalInfo | undefined
-  let changedSourceFiles: string[] = []
-  let deletedSourceFiles: string[] = []
-
+  const fullResult: IncrementalDetectResult = {
+    shouldRebuildIndexes: true,
+    changedDomains: new Set<string>(),
+    incrementalInfo: undefined,
+    changedSourceFiles: [],
+    deletedSourceFiles: [],
+  }
   if (!isFullSync && hasHashRegistry(projectId)) {
     try {
       const { diff, currentHashes } = await detectChanges(projectPath, projectId, changedFilesHint)
       const totalChanged = diff.added.length + diff.modified.length + diff.deleted.length
-
-      if (totalChanged === 0 && !changedFilesHint?.length) {
-        // Nothing changed — skip expensive rebuilds.
-        shouldRebuildIndexes = false
-        incrementalInfo = {
-          isIncremental: true,
-          filesChanged: 0,
-          filesUnchanged: diff.unchanged.length,
-          indexesRebuilt: false,
-          affectedDomains: [],
+      const result: IncrementalDetectResult = (() => {
+        if (totalChanged === 0 && !changedFilesHint?.length) {
+          // Nothing changed — skip expensive rebuilds.
+          return {
+            shouldRebuildIndexes: false,
+            changedDomains: new Set<string>(),
+            incrementalInfo: {
+              isIncremental: true,
+              filesChanged: 0,
+              filesUnchanged: diff.unchanged.length,
+              indexesRebuilt: false,
+              affectedDomains: [],
+            },
+            changedSourceFiles: [],
+            deletedSourceFiles: [],
+          }
         }
-      } else {
-        // Some files changed — propagate through import graph.
         const propagated = propagateChanges(diff, projectId)
-        changedDomains = affectedDomains(propagated.allAffected)
-
-        changedSourceFiles = [...diff.added, ...diff.modified].filter(isSourceFile)
-        deletedSourceFiles = diff.deleted.filter(isSourceFile)
-
-        // Rebuild ranking indexes when the changed closure touches source files.
-        const hasSourceChanges = propagated.allAffected.some(isSourceFile)
-        shouldRebuildIndexes = hasSourceChanges
-
-        incrementalInfo = {
-          isIncremental: true,
-          filesChanged: totalChanged,
-          filesUnchanged: diff.unchanged.length,
-          indexesRebuilt: shouldRebuildIndexes,
-          affectedDomains: Array.from(changedDomains),
+        const changedDomains = affectedDomains(propagated.allAffected)
+        const shouldRebuildIndexes = propagated.allAffected.some(isSourceFile)
+        return {
+          shouldRebuildIndexes,
+          changedDomains,
+          incrementalInfo: {
+            isIncremental: true,
+            filesChanged: totalChanged,
+            filesUnchanged: diff.unchanged.length,
+            indexesRebuilt: shouldRebuildIndexes,
+            affectedDomains: Array.from(changedDomains),
+          },
+          changedSourceFiles: [...diff.added, ...diff.modified].filter(isSourceFile),
+          deletedSourceFiles: diff.deleted.filter(isSourceFile),
         }
-      }
+      })()
 
       // Commit new hashes AFTER determining diff.
       saveHashes(projectId, currentHashes)
+      return result
     } catch (error) {
       log.debug('Incremental detection failed, falling back to full sync', {
         error: getErrorMessage(error),
       })
       // Fall through to full sync (shouldRebuildIndexes stays true).
     }
-  } else {
-    // First sync or --full flag: compute + save hashes for next time.
-    try {
-      const { currentHashes } = await detectChanges(projectPath, projectId, changedFilesHint)
-      saveHashes(projectId, currentHashes)
-    } catch (error) {
-      log.debug('Hash computation failed (non-critical)', { error: getErrorMessage(error) })
-    }
+    return fullResult
   }
-
-  return {
-    shouldRebuildIndexes,
-    changedDomains,
-    incrementalInfo,
-    changedSourceFiles,
-    deletedSourceFiles,
+  // First sync or --full flag: compute + save hashes for next time.
+  try {
+    const { currentHashes } = await detectChanges(projectPath, projectId, changedFilesHint)
+    saveHashes(projectId, currentHashes)
+  } catch (error) {
+    log.debug('Hash computation failed (non-critical)', { error: getErrorMessage(error) })
   }
+  return fullResult
 }
 
 function isSourceFile(filePath: string): boolean {

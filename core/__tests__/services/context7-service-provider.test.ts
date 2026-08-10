@@ -13,15 +13,19 @@ import path from 'node:path'
 import context7Service from '../../services/context7-service'
 import { codexHasContext7Server, getCodexConfigTomlPath } from '../../utils/codex-mcp'
 
-let home: string
+const fixture: {
+  home: string
+} = {
+  home: '',
+}
 const saved: Record<string, string | undefined> = {}
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-c7-provider-'))
+  fixture.home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-c7-provider-'))
   for (const k of ['HOME', 'PRJCT_TEST_MODE', 'NODE_ENV', 'PRJCT_SKIP_CONTEXT7_SMOKE']) {
     saved[k] = process.env[k]
   }
-  process.env.HOME = home
+  process.env.HOME = fixture.home
   process.env.PRJCT_TEST_MODE = '1' // route Codex config.toml under the temp home
   process.env.NODE_ENV = 'test' // route the verify cache to a temp path
   process.env.PRJCT_SKIP_CONTEXT7_SMOKE = '1' // skip the npx network smoke check
@@ -32,7 +36,7 @@ afterEach(async () => {
     if (v === undefined) delete process.env[k]
     else process.env[k] = v
   }
-  await fs.rm(home, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.home, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('context7Service provider-awareness', () => {

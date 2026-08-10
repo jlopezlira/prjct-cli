@@ -164,19 +164,16 @@ export async function ingestTranscript(
     return result
   }
 
-  let lines: TranscriptJsonlLine[]
-  if (opts.preloadedLines) {
-    lines = opts.preloadedLines
-  } else {
-    let raw: string
+  const lines = await (async (): Promise<TranscriptJsonlLine[] | null> => {
+    if (opts.preloadedLines) return opts.preloadedLines
     try {
-      raw = await fs.readFile(transcriptPath, 'utf-8')
+      return parseTranscriptJsonl(await fs.readFile(transcriptPath, 'utf-8'))
     } catch (err) {
       result.errors.push(`transcript read failed: ${(err as Error).message}`)
-      return result
+      return null
     }
-    lines = parseTranscriptJsonl(raw)
-  }
+  })()
+  if (lines === null) return result
 
   const messages = projectMessages(lines)
   const userMessages = projectUserMessages(lines)
@@ -345,10 +342,10 @@ function normalizeRole(r: string): TranscriptMessage['role'] | null {
  */
 function extractText(msg: Record<string, unknown>): string {
   // Some shapes nest under message.content
-  let content: unknown = msg.content
-  if (content === undefined && msg.message && typeof msg.message === 'object') {
-    content = (msg.message as Record<string, unknown>).content
-  }
+  const content =
+    msg.content === undefined && msg.message && typeof msg.message === 'object'
+      ? (msg.message as Record<string, unknown>).content
+      : msg.content
   if (typeof content === 'string') return content.trim()
   if (Array.isArray(content)) {
     const parts: string[] = []
@@ -467,12 +464,13 @@ function collectExistingAutoHashes(projectId: string): Set<string> {
       ...REMEMBER_EVENT_RANGE
     )
     for (const row of rows) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(row.data)
-      } catch {
-        continue
-      }
+      const parsed = (() => {
+        try {
+          return JSON.parse(row.data) as unknown
+        } catch {
+          return null
+        }
+      })()
       if (!parsed || typeof parsed !== 'object') continue
       const tags = (parsed as { tags?: Record<string, unknown> }).tags
       if (!tags || tags.source !== SOURCE_TAG) continue

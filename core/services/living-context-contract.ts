@@ -91,7 +91,7 @@ export function parseLivingContextFields(content: string): LivingContextFields {
   const fieldPattern =
     /(Context synthesis|Key data|What happened|Why it mattered|Who\/author|Model|Token usage|Sentiment|Related files|Feature\/domain|Pattern|Anti-pattern|Decision\/trap|Outcome|Next implication)\s*:\s*/gi
   const matches = [...content.matchAll(fieldPattern)]
-  for (let i = 0; i < matches.length; i++) {
+  for (const i of matches.keys()) {
     const match = matches[i]
     const key = FIELD_KEY_MAP[match[1].toLowerCase()]
     if (!key || match.index === undefined) continue

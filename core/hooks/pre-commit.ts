@@ -81,15 +81,17 @@ async function buildPreCommitContext(projectPath: string): Promise<string | null
   const fragments = pathFragments(files)
   if (fragments.length === 0) return null
 
-  let candidates: MemoryEntry[]
-  try {
-    candidates = projectMemory.recall(config.projectId, {
-      types: ['anti-pattern', 'gotcha'],
-      limit: 50,
-    })
-  } catch {
-    return null
-  }
+  const candidates = (() => {
+    try {
+      return projectMemory.recall(config.projectId, {
+        types: ['anti-pattern', 'gotcha'],
+        limit: 50,
+      })
+    } catch {
+      return null
+    }
+  })()
+  if (!candidates) return null
 
   const relevant = candidates.filter((e) => mentionsFragment(e, fragments)).slice(0, MAX_ENTRIES)
   if (relevant.length === 0) return null

@@ -25,50 +25,46 @@ export function buildTokenEconomics(
   } = {}
 ): TokenEconomics {
   const since = Date.now() - 24 * 60 * 60 * 1000
-  let tokens24h = 0
-  try {
-    // tasks.tokens_in/out may be null; sum best-effort for recently updated rows
-    const rows = prjctDb.query<{ tin: number | null; tout: number | null }>(
-      projectId,
-      `SELECT tokens_in AS tin, tokens_out AS tout FROM tasks
-       WHERE updated_at IS NOT NULL AND updated_at >= ?
-       LIMIT 200`,
-      new Date(since).toISOString()
-    )
-    for (const r of rows) {
-      tokens24h += (r.tin ?? 0) + (r.tout ?? 0)
-    }
-  } catch {
-    // fallback: sum all non-null (legacy DBs without updated_at filter)
+  const tokens24h = (() => {
     try {
-      const row = prjctDb.get<{ s: number }>(
-        projectId,
-        `SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0) AS s FROM tasks`
-      )
-      tokens24h = row?.s ?? 0
+      return prjctDb
+        .query<{ tin: number | null; tout: number | null }>(
+          projectId,
+          `SELECT tokens_in AS tin, tokens_out AS tout FROM tasks
+           WHERE updated_at IS NOT NULL AND updated_at >= ?
+           LIMIT 200`,
+          new Date(since).toISOString()
+        )
+        .reduce((total, row) => total + (row.tin ?? 0) + (row.tout ?? 0), 0)
     } catch {
-      tokens24h = 0
+      return (
+        prjctDb.get<{ s: number }>(
+          projectId,
+          `SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0) AS s FROM tasks`
+        )?.s ?? 0
+      )
     }
-  }
+  })()
 
   const cycleTokens = (opts.cycleTokensIn ?? 0) + (opts.cycleTokensOut ?? 0)
   const cycleBudget = opts.maxTokensPerCycle ?? null
 
   // Score: reward measured low thrash; penalize over-budget cycles.
-  let score = 70
-  if (tokens24h === 0 && cycleTokens === 0) {
-    score = 80 // unknown/unmeasured — not a failure
-  } else if (cycleBudget && cycleBudget > 0) {
-    const ratio = cycleTokens / cycleBudget
-    if (ratio <= 0.5) score = 100
-    else if (ratio <= 0.8) score = 85
-    else if (ratio <= 1.0) score = 70
-    else if (ratio <= 1.2) score = 45
-    else score = 25
-  } else if (tokens24h < 50_000) score = 90
-  else if (tokens24h < 200_000) score = 75
-  else if (tokens24h < 500_000) score = 55
-  else score = 35
+  const score = (() => {
+    if (tokens24h === 0 && cycleTokens === 0) return 80
+    if (cycleBudget && cycleBudget > 0) {
+      const ratio = cycleTokens / cycleBudget
+      if (ratio <= 0.5) return 100
+      if (ratio <= 0.8) return 85
+      if (ratio <= 1.0) return 70
+      if (ratio <= 1.2) return 45
+      return 25
+    }
+    if (tokens24h < 50_000) return 90
+    if (tokens24h < 200_000) return 75
+    if (tokens24h < 500_000) return 55
+    return 35
+  })()
 
   const budgetBit =
     cycleBudget != null && cycleBudget > 0

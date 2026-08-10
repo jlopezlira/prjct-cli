@@ -36,38 +36,36 @@ async function parseGitLog(projectPath: string, maxCommits = 100): Promise<Set<s
       { cwd: projectPath, maxBuffer: 10 * 1024 * 1024 }
     )
 
-    const commits: Set<string>[] = []
-    let currentFiles: Set<string> | null = null
-
-    for (const line of stdout.split('\n')) {
-      const trimmed = line.trim()
-      if (trimmed === '---COMMIT---') {
-        if (
-          currentFiles &&
-          currentFiles.size > 0 &&
-          currentFiles.size <= COCHANGE_MAX_FILES_PER_COMMIT
-        ) {
-          commits.push(currentFiles)
+    const parsed = stdout.split('\n').reduce(
+      (state, line) => {
+        const trimmed = line.trim()
+        if (trimmed === '---COMMIT---') {
+          if (
+            state.currentFiles &&
+            state.currentFiles.size > 0 &&
+            state.currentFiles.size <= COCHANGE_MAX_FILES_PER_COMMIT
+          ) {
+            state.commits.push(state.currentFiles)
+          }
+          state.currentFiles = new Set()
+        } else if (trimmed && state.currentFiles && isSourceFile(trimmed)) {
+          state.currentFiles.add(trimmed)
         }
-        currentFiles = new Set()
-      } else if (trimmed && currentFiles) {
-        // Only include source files (skip binaries, lockfiles, etc.)
-        if (isSourceFile(trimmed)) {
-          currentFiles.add(trimmed)
-        }
-      }
-    }
+        return state
+      },
+      { commits: [] as Set<string>[], currentFiles: null as Set<string> | null }
+    )
 
     // Don't forget the last commit
     if (
-      currentFiles &&
-      currentFiles.size > 0 &&
-      currentFiles.size <= COCHANGE_MAX_FILES_PER_COMMIT
+      parsed.currentFiles &&
+      parsed.currentFiles.size > 0 &&
+      parsed.currentFiles.size <= COCHANGE_MAX_FILES_PER_COMMIT
     ) {
-      commits.push(currentFiles)
+      parsed.commits.push(parsed.currentFiles)
     }
 
-    return commits
+    return parsed.commits
   } catch {
     return []
   }
@@ -102,14 +100,14 @@ export async function buildMatrix(projectPath: string, maxCommits = 100): Promis
   for (const files of commitSets) {
     const fileArray = Array.from(files)
 
-    for (const file of fileArray) {
-      fileCommitCount.set(file, (fileCommitCount.get(file) || 0) + 1)
+    for (const file2 of fileArray) {
+      fileCommitCount.set(file2, (fileCommitCount.get(file2) || 0) + 1)
     }
 
     // Count co-occurrences for each pair
-    for (let i = 0; i < fileArray.length; i++) {
-      for (let j = i + 1; j < fileArray.length; j++) {
-        const key = pairKey(fileArray[i], fileArray[j])
+    for (const [index, file] of fileArray.entries()) {
+      for (const otherFile of fileArray.slice(index + 1)) {
+        const key = pairKey(file, otherFile)
         pairCount.set(key, (pairCount.get(key) || 0) + 1)
       }
     }

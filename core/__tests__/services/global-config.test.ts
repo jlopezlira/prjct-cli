@@ -15,25 +15,30 @@ import os from 'node:os'
 import path from 'node:path'
 import * as m from '../../services/global-config'
 
-let tempHome = ''
-let originalCliHome: string | undefined
+const fixture: {
+  tempHome: string
+  originalCliHome: string | undefined
+} = {
+  tempHome: '',
+  originalCliHome: undefined as unknown as string | undefined,
+}
 
 beforeEach(async () => {
-  tempHome = path.join(
+  fixture.tempHome = path.join(
     os.tmpdir(),
     `prjct-config-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
   )
-  await fs.mkdir(tempHome, { recursive: true })
-  originalCliHome = process.env.PRJCT_CLI_HOME
-  process.env.PRJCT_CLI_HOME = tempHome
+  await fs.mkdir(fixture.tempHome, { recursive: true })
+  fixture.originalCliHome = process.env.PRJCT_CLI_HOME
+  process.env.PRJCT_CLI_HOME = fixture.tempHome
 })
 
 afterEach(async () => {
-  if (originalCliHome === undefined) delete process.env.PRJCT_CLI_HOME
-  else process.env.PRJCT_CLI_HOME = originalCliHome
-  if (tempHome) {
-    await fs.rm(tempHome, { recursive: true, force: true }).catch(() => undefined)
-    tempHome = ''
+  if (fixture.originalCliHome === undefined) delete process.env.PRJCT_CLI_HOME
+  else process.env.PRJCT_CLI_HOME = fixture.originalCliHome
+  if (fixture.tempHome) {
+    await fs.rm(fixture.tempHome, { recursive: true, force: true }).catch(() => undefined)
+    fixture.tempHome = ''
   }
 })
 

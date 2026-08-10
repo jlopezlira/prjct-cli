@@ -15,12 +15,18 @@ import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
 import prjctDb from '../../storage/database'
 
-let dir: string
-let projectId: string
+const fixture: {
+  dir: string
+  projectId: string
+} = {
+  dir: '',
+  projectId: '',
+}
+
 const cmd = new SkillAdherenceCommands()
 
 function logMiss(relates: string): void {
-  prjctDb.appendEvent(projectId, 'memory.remember.improvement-signal', {
+  prjctDb.appendEvent(fixture.projectId, 'memory.remember.improvement-signal', {
     content: `[skill-miss] Unused project knowledge (decision, ${relates}): "x"`,
     tags: { source: 'skill-miss-detector', category: 'skill-miss', relates, key: `k-${relates}` },
     provenance: 'extracted',
@@ -28,7 +34,7 @@ function logMiss(relates: string): void {
 }
 
 function logResolution(relates: string): void {
-  prjctDb.appendEvent(projectId, 'memory.remember.decision', {
+  prjctDb.appendEvent(fixture.projectId, 'memory.remember.decision', {
     content: 'addressed it',
     tags: { resolves: 'skill-miss', relates },
     provenance: 'declared',
@@ -37,30 +43,30 @@ function logResolution(relates: string): void {
 
 beforeEach(async () => {
   prjctDb.close()
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-skilladh-test-'))
-  await fs.mkdir(path.join(dir, '.prjct'), { recursive: true })
-  projectId = `skilladh-${crypto.randomUUID()}`
-  await configManager.writeConfig(dir, {
-    projectId,
-    dataPath: path.join(dir, '.prjct-data'),
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-skilladh-test-'))
+  await fs.mkdir(path.join(fixture.dir, '.prjct'), { recursive: true })
+  fixture.projectId = `skilladh-${crypto.randomUUID()}`
+  await configManager.writeConfig(fixture.dir, {
+    projectId: fixture.projectId,
+    dataPath: path.join(fixture.dir, '.prjct-data'),
   } as Parameters<typeof configManager.writeConfig>[1])
-  await pathManager.ensureProjectStructure(projectId)
+  await pathManager.ensureProjectStructure(fixture.projectId)
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
   prjctDb.close()
 })
 
 describe('prjct skill-adherence', () => {
   it('rejects an invalid window', async () => {
-    const r = await cmd.skillAdherence('not-a-window', dir, { md: true })
+    const r = await cmd.skillAdherence('not-a-window', fixture.dir, { md: true })
     expect(r.success).toBe(false)
     expect(r.error).toMatch(/Invalid window/)
   })
 
   it('is a clean success when no skill-misses exist', async () => {
-    const r = await cmd.skillAdherence('7d', dir, { md: true })
+    const r = await cmd.skillAdherence('7d', fixture.dir, { md: true })
     expect(r.success).toBe(true)
     expect(r.misses).toBe(0)
     expect(r.adherence).toBe(1)
@@ -70,7 +76,7 @@ describe('prjct skill-adherence', () => {
     logMiss('mem_1')
     logMiss('mem_2')
     logResolution('mem_1')
-    const r = await cmd.skillAdherence('7d', dir, { md: true })
+    const r = await cmd.skillAdherence('7d', fixture.dir, { md: true })
     expect(r.success).toBe(true)
     expect(r.misses).toBe(2)
     expect(r.resolved).toBe(1)
@@ -85,7 +91,7 @@ describe('prjct skill-adherence', () => {
       out.push(String(m))
     }
     try {
-      await cmd.skillAdherence('30d', dir, { md: true })
+      await cmd.skillAdherence('30d', fixture.dir, { md: true })
     } finally {
       console.log = orig
     }

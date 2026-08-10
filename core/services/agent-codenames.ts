@@ -49,12 +49,11 @@ export interface AgentCastMember {
 
 /** Stable non-crypto hash for seed → pool index. */
 export function hashSeed(seed: string): number {
-  let h = 2166136261
-  for (let i = 0; i < seed.length; i++) {
-    h ^= seed.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return h >>> 0
+  return (
+    seed
+      .split('')
+      .reduce((hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16777619), 2166136261) >>> 0
+  )
 }
 
 /**
@@ -75,22 +74,11 @@ export function pickCodename(seed: string, exclude: Iterable<string> = []): stri
  */
 export function assignAgentCast(roles: string[], seed: string): AgentCastMember[] {
   const used = new Set<string>()
-  const out: AgentCastMember[] = []
-  let salt = 0
-  for (const role of roles) {
-    let name = pickCodename(`${seed}::${role}::${salt}`, used)
-    // Collision should be rare with salt; bump until unique within cast.
-    let guard = 0
-    while (used.has(name.toLowerCase()) && guard < AGENT_CODENAME_POOL.length) {
-      salt++
-      name = pickCodename(`${seed}::${role}::${salt}`, used)
-      guard++
-    }
+  return roles.map((role, index) => {
+    const name = pickCodename(`${seed}::${role}::${index}`, used)
     used.add(name.toLowerCase())
-    out.push({ role, name })
-    salt++
-  }
-  return out
+    return { role, name }
+  })
 }
 
 /** Roles for parallel geometry (explore → implement → review). */

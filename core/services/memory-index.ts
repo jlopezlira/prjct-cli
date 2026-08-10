@@ -142,9 +142,9 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
       .slice(0, PER_TYPE)
     if (pool.length === 0) continue
     lines.push(`**${sec.title}:**`)
-    for (const e of pool) {
-      lines.push(`- ${indexLine(e)}`)
-      if (sec.suppressMiss) suppressMissIds.add(e.id)
+    for (const e2 of pool) {
+      lines.push(`- ${indexLine(e2)}`)
+      if (sec.suppressMiss) suppressMissIds.add(e2.id)
     }
     lines.push('')
   }
@@ -163,7 +163,7 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
   const inboxN = byType.inbox ?? 0
   if (inboxN > 0) {
     lines.push(`**Inbox (${inboxN}):**`)
-    for (const e of inbox) lines.push(`- ${indexLine(e)}`)
+    for (const e3 of inbox) lines.push(`- ${indexLine(e3)}`)
     if (inboxN > inbox.length) lines.push(`- … +${inboxN - inbox.length} more`)
     lines.push(
       '',
@@ -190,10 +190,11 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
     '> Resolve any `mem_id` with `prjct search <id>`. Full developer model: MCP `prjct_developer`. Consolidate: `prjct dream`. Never stuff L2 into L0.'
   )
 
-  let markdown = lines.join('\n')
-  if (markdown.length > L0_INDEX_MAX_CHARS) {
-    markdown = `${markdown.slice(0, L0_INDEX_MAX_CHARS - 20).trimEnd()}\n…(truncated)`
-  }
+  const fullMarkdown = lines.join('\n')
+  const markdown =
+    fullMarkdown.length > L0_INDEX_MAX_CHARS
+      ? `${fullMarkdown.slice(0, L0_INDEX_MAX_CHARS - 20).trimEnd()}\n…(truncated)`
+      : fullMarkdown
 
   return {
     version: 1,
@@ -235,10 +236,11 @@ export function memoryL0IndexForSession(
   opts: { rebuildIfStale?: boolean } = {}
 ): string | null {
   try {
-    let stamp = loadMemoryL0Index(projectId)
-    if ((!stamp || !isMemoryL0IndexFresh(stamp)) && opts.rebuildIfStale !== false) {
-      stamp = buildAndStoreMemoryL0Index({ projectId, source: 'session-start' })
-    }
+    const loaded = loadMemoryL0Index(projectId)
+    const stamp =
+      (!loaded || !isMemoryL0IndexFresh(loaded)) && opts.rebuildIfStale !== false
+        ? buildAndStoreMemoryL0Index({ projectId, source: 'session-start' })
+        : loaded
     if (!stamp?.markdown?.trim()) return null
     return stamp.markdown.trim()
   } catch {
@@ -279,15 +281,9 @@ function findRepeatMissedEntry(
       if (!memId) continue
       counts.set(memId, (counts.get(memId) ?? 0) + 1)
     }
-    let topId: string | null = null
-    let topCount = 0
-    for (const [id, count] of counts) {
-      if (count > topCount) {
-        topId = id
-        topCount = count
-      }
-    }
-    if (!topId || topCount < REPEAT_MISS_THRESHOLD || alreadyShown.has(topId)) return null
+    const top = [...counts].sort((a, b) => b[1] - a[1])[0]
+    if (!top || top[1] < REPEAT_MISS_THRESHOLD || alreadyShown.has(top[0])) return null
+    const [topId, topCount] = top
     const entry = projectMemory.getById(projectId, topId)
     return entry ? { entry, count: topCount } : null
   } catch {

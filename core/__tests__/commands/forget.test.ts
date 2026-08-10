@@ -30,32 +30,37 @@ describe('forget verb', () => {
     expect(REGISTERED_VERBS_SET.has('forget')).toBe(true)
   })
 
-  let projectPath: string
-  let cmd: PrimitiveCommands
+  const fixture: {
+    projectPath: string
+    cmd: PrimitiveCommands
+  } = {
+    projectPath: '',
+    cmd: undefined as unknown as PrimitiveCommands,
+  }
 
   beforeEach(async () => {
-    projectPath = await freshProject()
-    cmd = new PrimitiveCommands()
+    fixture.projectPath = await freshProject()
+    fixture.cmd = new PrimitiveCommands()
   })
 
   afterEach(async () => {
-    await fs.rm(projectPath, { recursive: true, force: true })
+    await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   test('rejects an empty id', async () => {
-    const result = await cmd.forget('', projectPath, { md: true })
+    const result = await fixture.cmd.forget('', fixture.projectPath, { md: true })
     expect(result.success).toBe(false)
   })
 
   test('fails cleanly (no entry created) on an unknown id', async () => {
-    const result = await cmd.forget('mem_999999', projectPath, { md: true })
+    const result = await fixture.cmd.forget('mem_999999', fixture.projectPath, { md: true })
     expect(result.success).toBe(false)
   })
 
   test('deletes an entry so it stops surfacing', async () => {
-    const projectId = await configManager.getProjectId(projectPath)
+    const projectId = await configManager.getProjectId(fixture.projectPath)
     if (!projectId) throw new Error('no project id')
-    await projectMemory.remember(projectPath, {
+    await projectMemory.remember(fixture.projectPath, {
       type: 'decision',
       content: 'we chose Bun over Node for faster cold-start',
     })
@@ -63,7 +68,7 @@ describe('forget verb', () => {
     const target = before.find((e) => /Bun over Node/.test(e.content ?? ''))
     expect(target).toBeTruthy()
 
-    const result = await cmd.forget(target?.id ?? '', projectPath, { md: true })
+    const result = await fixture.cmd.forget(target?.id ?? '', fixture.projectPath, { md: true })
     expect(result.success).toBe(true)
 
     const after = projectMemory.allEntriesForIndex(projectId)
@@ -71,9 +76,9 @@ describe('forget verb', () => {
   })
 
   test('accepts a bare numeric id (no mem_ prefix)', async () => {
-    const projectId = await configManager.getProjectId(projectPath)
+    const projectId = await configManager.getProjectId(fixture.projectPath)
     if (!projectId) throw new Error('no project id')
-    await projectMemory.remember(projectPath, {
+    await projectMemory.remember(fixture.projectPath, {
       type: 'gotcha',
       content: 'stale daemon caches old code; stop it before testing',
     })
@@ -81,7 +86,7 @@ describe('forget verb', () => {
       .allEntriesForIndex(projectId)
       .find((e) => /stale daemon/.test(e.content ?? ''))
     const bareId = (entry?.id ?? '').replace(/^mem_/, '')
-    const result = await cmd.forget(bareId, projectPath, { md: true })
+    const result = await fixture.cmd.forget(bareId, fixture.projectPath, { md: true })
     expect(result.success).toBe(true)
   })
 })

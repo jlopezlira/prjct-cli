@@ -64,13 +64,25 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 /** Cap absorbed crash handlers so a tight loop cannot pin the process forever. */
 const MAX_ABSORBED_ERRORS = 50
 
-let ipcServer: Server | null = null
-let commands: PrjctCommands | null = null
-let state: DaemonState | null = null
-let ownVersion: string | null = null
-let lastDriftCheckMs = 0
-let updateTimer: ReturnType<typeof setInterval> | null = null
-let shuttingDown = false
+interface DaemonRuntime {
+  ipcServer: Server | null
+  commands: PrjctCommands | null
+  state: DaemonState | null
+  ownVersion: string | null
+  lastDriftCheckMs: number
+  updateTimer: ReturnType<typeof setInterval> | null
+  shuttingDown: boolean
+}
+
+const runtime: DaemonRuntime = {
+  ipcServer: null,
+  commands: null,
+  state: null,
+  ownVersion: null,
+  lastDriftCheckMs: 0,
+  updateTimer: null,
+  shuttingDown: false,
+}
 
 export async function startDaemon(options: { foreground?: boolean }): Promise<void> {
   // Flag child services can check to know they're running under the
@@ -120,18 +132,18 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
   rotateLog()
 
   const entryPath = resolveEntryPath()
-  let entryMtime: number | null = null
-  if (entryPath) {
+  const entryMtime = (() => {
+    if (!entryPath) return null
     try {
-      entryMtime = fs.statSync(entryPath).mtimeMs
+      return fs.statSync(entryPath).mtimeMs
     } catch {
-      // Can't stat — skip stale detection
+      return null
     }
-  }
+  })()
 
-  ownVersion = readOwnPackageVersion()
+  runtime.ownVersion = readOwnPackageVersion()
 
-  state = {
+  runtime.state = {
     startedAt: Date.now(),
     commandsServed: 0,
     lastActivity: Date.now(),
@@ -149,10 +161,10 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
 
   // Self-heal hooks + global CLAUDE.md when the binary moved past the
   // last sync. Best-effort: failures must never block daemon startup.
-  if (ownVersion) {
+  if (runtime.ownVersion) {
     try {
       const { isSyncCurrent, runSelfHeal } = await import('../infrastructure/self-heal')
-      if (!isSyncCurrent(ownVersion)) await runSelfHeal(ownVersion)
+      if (!isSyncCurrent(runtime.ownVersion)) await runSelfHeal(runtime.ownVersion)
     } catch {
       // never block daemon startup
     }
@@ -164,21 +176,21 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
   // READS that flag — it no longer does any version comparison itself.
   // Best-effort + non-blocking: a slow/offline registry must never delay
   // startup or serving.
-  if (ownVersion) {
-    const version = ownVersion
+  if (runtime.ownVersion) {
+    const version = runtime.ownVersion
     void refreshUpdateStatus(version).catch(() => undefined)
-    updateTimer = setInterval(() => {
+    runtime.updateTimer = setInterval(() => {
       void refreshUpdateStatus(version).catch(() => undefined)
     }, UPDATE_CHECK_INTERVAL_MS)
-    updateTimer.unref?.()
+    runtime.updateTimer.unref?.()
   }
 
   // Pre-load modules (this is the whole point — do it once)
-  commands = new PrjctCommands()
+  runtime.commands = new PrjctCommands()
 
-  ipcServer = createNetServer((socket) => handleConnection(socket))
+  runtime.ipcServer = createNetServer((socket) => handleConnection(socket))
 
-  ipcServer.listen(socketPath, () => {
+  runtime.ipcServer.listen(socketPath, () => {
     if (!namedPipe) {
       try {
         if (fs.existsSync(socketPath)) fs.chmodSync(socketPath, 0o600)
@@ -203,7 +215,7 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
     void realtimeManager.startAll().catch(() => undefined)
   })
 
-  ipcServer.on('error', (err) => {
+  runtime.ipcServer.on('error', (err) => {
     const code = (err as NodeJS.ErrnoException).code
     void (async () => {
       const peerHealthy = await peerDaemonHealthy(socketPath, pidPath)
@@ -232,7 +244,7 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
     // Refresh BOTH dispatch paths: the explicit-case instance below AND the
     // registry's lazy group memos (schema-covered commands kept pre-reload
     // instances otherwise — the review's stale-SIGHUP finding).
-    commands = new PrjctCommands()
+    runtime.commands = new PrjctCommands()
     resetGroupLoaders()
     commandRegistry.resetLazyResolutions()
     console.log('Daemon reloaded (SIGHUP)')
@@ -265,10 +277,10 @@ async function peerDaemonHealthy(socketPath: string, pidPath: string): Promise<b
   // Light connect + ping without importing the full client (avoids cycles).
   return await new Promise<boolean>((resolve) => {
     const sock = netConnect(socketPath)
-    let done = false
+    const completion = new AbortController()
     const finish = (ok: boolean) => {
-      if (done) return
-      done = true
+      if (completion.signal.aborted) return
+      completion.abort()
       try {
         sock.destroy()
       } catch {
@@ -308,6 +320,7 @@ async function peerDaemonHealthy(socketPath: string, pidPath: string): Promise<b
 
 function installCrashHandlers(): void {
   process.on('unhandledRejection', (reason) => {
+    const state = runtime.state
     if (!state) return
     state.absorbedErrors++
     console.error(
@@ -321,6 +334,7 @@ function installCrashHandlers(): void {
   })
 
   process.on('uncaughtException', (err) => {
+    const state = runtime.state
     if (!state) {
       console.error('Daemon uncaughtException before init:', err.message)
       process.exit(1)
@@ -335,10 +349,11 @@ function installCrashHandlers(): void {
 }
 
 function handleConnection(socket: Socket): void {
-  let buffer = ''
+  const chunks: string[] = []
 
   socket.on('data', async (chunk) => {
-    buffer += chunk.toString()
+    chunks.push(chunk.toString())
+    const buffer = chunks.join('')
 
     // Guard against unbounded buffer growth from malformed clients
     if (buffer.length > MAX_BUFFER_SIZE) {
@@ -350,16 +365,15 @@ function handleConnection(socket: Socket): void {
       }
       socket.write(encodeMessage(errorResponse))
       socket.destroy()
-      buffer = ''
+      chunks.length = 0
       return
     }
 
     // Process complete messages (newline-delimited)
-    let newlineIdx: number
-    while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, newlineIdx)
-      buffer = buffer.slice(newlineIdx + 1)
-
+    const messages = buffer.split('\n')
+    const remainder = messages.pop() ?? ''
+    chunks.splice(0, chunks.length, remainder)
+    for (const line of messages) {
       if (!line.trim()) continue
 
       try {
@@ -391,6 +405,7 @@ function handleConnection(socket: Socket): void {
  * that first observed the new code was still served stale).
  */
 function markStaleIfNeeded(command: string): void {
+  const state = runtime.state
   if (!state || state.restartPending) return
 
   // Cheap (one stat): catches local rebuilds. The drift probe (readlink +
@@ -399,13 +414,13 @@ function markStaleIfNeeded(command: string): void {
   const decision = decideRestart({
     codeStale,
     command,
-    ownVersion,
+    ownVersion: runtime.ownVersion,
     now: Date.now(),
-    lastDriftCheckMs,
+    lastDriftCheckMs: runtime.lastDriftCheckMs,
     driftMinIntervalMs: VERSION_DRIFT_CHECK_MIN_MS,
     checkDrift: isGlobalVersionDrifted,
   })
-  lastDriftCheckMs = decision.lastDriftCheckMs
+  runtime.lastDriftCheckMs = decision.lastDriftCheckMs
 
   if (decision.restart) {
     state.restartPending = true
@@ -416,13 +431,14 @@ function markStaleIfNeeded(command: string): void {
     console.log(
       codeStale
         ? 'Build change detected — daemon will restart; request runs on fresh code.'
-        : `Version drift detected — daemon v${ownVersion} is stale; request runs on fresh code.`
+        : `Version drift detected — daemon v${runtime.ownVersion} is stale; request runs on fresh code.`
     )
   }
 }
 
 async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
-  if (!state || !commands) {
+  const state = runtime.state
+  if (!state || !runtime.commands) {
     return {
       id: request.id,
       success: false,
@@ -431,7 +447,7 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
     }
   }
 
-  if (shuttingDown && request.command !== 'daemon' && request.command !== '__ping') {
+  if (runtime.shuttingDown && request.command !== 'daemon' && request.command !== '__ping') {
     return {
       id: request.id,
       success: false,
@@ -454,7 +470,7 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
     if (state.activeRequests === 0) {
       console.log('Daemon shutting down for code reload...')
       setImmediate(() => {
-        void shutdown(0, { respawn: state?.restartReason === 'code' })
+        void shutdown(0, { respawn: runtime.state?.restartReason === 'code' })
       })
     }
     return {
@@ -467,7 +483,7 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
   }
 
   return daemonRequestJournal.run(request, async () => {
-    state!.activeRequests++
+    state.activeRequests++
     try {
       // Hooks use a separate lane so a long CLI command cannot head-of-line
       // block Claude Code's Prompt/Stop path. Commands stay exclusive because
@@ -475,12 +491,12 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
       const lane = request.command === 'hook' ? 'hook' : 'command'
       return await daemonRequestLanes.run(lane, () => handleRequestInner(request))
     } finally {
-      state!.activeRequests--
-      if (state!.restartPending && state!.activeRequests === 0) {
+      state.activeRequests--
+      if (state.restartPending && state.activeRequests === 0) {
         console.log('Daemon shutting down for code reload...')
         // Defer to next tick so the response finishes flushing to the client.
         setImmediate(() => {
-          void shutdown(0, { respawn: state?.restartReason === 'code' })
+          void shutdown(0, { respawn: runtime.state?.restartReason === 'code' })
         })
       }
     }
@@ -488,6 +504,8 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
 }
 
 async function handleRequestInner(request: DaemonRequest): Promise<DaemonResponse> {
+  const state = runtime.state
+  const commands = runtime.commands
   if (!state || !commands) {
     return {
       id: request.id,
@@ -574,20 +592,20 @@ async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse
     return { id: request.id, success: true, exitCode: 0, stdout: '{}\n' }
   }
 
-  let input: unknown = {}
-  if (request.stdin) {
+  const input: unknown = (() => {
+    if (!request.stdin) return {}
     try {
-      input = JSON.parse(request.stdin)
+      return JSON.parse(request.stdin)
     } catch {
-      input = {}
+      return {}
     }
-  }
+  })()
 
-  let captured = ''
+  const captured: string[] = []
   const io: HookIo = {
     input,
     sink: (chunk) => {
-      captured += chunk
+      captured.push(chunk)
     },
     detachAfterEmit: (fn) => {
       setImmediate(() => {
@@ -604,19 +622,20 @@ async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse
     /* runner is fail-soft; guard anyway so the daemon never crashes */
   }
 
-  return { id: request.id, success: true, exitCode: 0, stdout: captured || '{}\n' }
+  return { id: request.id, success: true, exitCode: 0, stdout: captured.join('') || '{}\n' }
 }
 
 function handleDaemonCommand(request: DaemonRequest): DaemonResponse {
   const subcommand = request.args[0]
 
   if (subcommand === 'status') {
-    let memoryRss: number | undefined
-    try {
-      memoryRss = process.memoryUsage().rss
-    } catch {
-      memoryRss = undefined
-    }
+    const memoryRss = (() => {
+      try {
+        return process.memoryUsage().rss
+      } catch {
+        return undefined
+      }
+    })()
     return {
       id: request.id,
       success: true,
@@ -625,17 +644,19 @@ function handleDaemonCommand(request: DaemonRequest): DaemonResponse {
         running: true,
         pid: process.pid,
         socketPath: DAEMON_PATHS.socket(),
-        uptime: state ? Date.now() - state.startedAt : 0,
-        commandsServed: state?.commandsServed ?? 0,
-        lastActivity: state ? new Date(state.lastActivity).toISOString() : null,
+        uptime: runtime.state ? Date.now() - runtime.state.startedAt : 0,
+        commandsServed: runtime.state?.commandsServed ?? 0,
+        lastActivity: runtime.state ? new Date(runtime.state.lastActivity).toISOString() : null,
         registeredCommands: commandRegistry.list().length,
-        stale: state ? detectStaleCode(state.entryPath, state.entryMtime) : false,
-        version: ownVersion,
+        stale: runtime.state
+          ? detectStaleCode(runtime.state.entryPath, runtime.state.entryMtime)
+          : false,
+        version: runtime.ownVersion,
         memoryRss,
-        activeRequests: state?.activeRequests ?? 0,
-        restartPending: state?.restartPending ?? false,
-        restartReason: state?.restartReason ?? null,
-        absorbedErrors: state?.absorbedErrors ?? 0,
+        activeRequests: runtime.state?.activeRequests ?? 0,
+        restartPending: runtime.state?.restartPending ?? false,
+        restartReason: runtime.state?.restartReason ?? null,
+        absorbedErrors: runtime.state?.absorbedErrors ?? 0,
       },
     }
   }
@@ -662,7 +683,8 @@ function handleDaemonCommand(request: DaemonRequest): DaemonResponse {
 }
 
 function resetIdleTimer(): void {
-  if (!state || shuttingDown) return
+  const state = runtime.state
+  if (!state || runtime.shuttingDown) return
 
   if (state.idleTimer) clearTimeout(state.idleTimer)
 
@@ -681,22 +703,23 @@ function resetIdleTimer(): void {
  * for local rebuild reloads — never for version drift).
  */
 async function shutdown(exitCode: number, opts: { respawn?: boolean } = {}): Promise<void> {
-  if (shuttingDown) return
-  shuttingDown = true
+  if (runtime.shuttingDown) return
+  runtime.shuttingDown = true
   console.log('Daemon shutting down...')
 
   // Stop accepting new connections immediately.
-  if (ipcServer) {
+  if (runtime.ipcServer) {
     try {
-      ipcServer.close()
+      runtime.ipcServer.close()
     } catch {
       /* ignore */
     }
-    ipcServer = null
+    runtime.ipcServer = null
   }
 
   // Drain in-flight work so a mid-command exit doesn't leave partial state
   // without a response. Cap the wait so a stuck request cannot pin us forever.
+  const state = runtime.state
   if (state && state.activeRequests > 0) {
     const deadline = Date.now() + SHUTDOWN_DRAIN_MS
     while (state.activeRequests > 0 && Date.now() < deadline) {
@@ -717,9 +740,9 @@ async function shutdown(exitCode: number, opts: { respawn?: boolean } = {}): Pro
   }
 
   if (state?.idleTimer) clearTimeout(state.idleTimer)
-  if (updateTimer) {
-    clearInterval(updateTimer)
-    updateTimer = null
+  if (runtime.updateTimer) {
+    clearInterval(runtime.updateTimer)
+    runtime.updateTimer = null
   }
 
   try {
@@ -765,12 +788,13 @@ function scheduleSelfRespawn(): void {
     const entry = process.argv[1]
     if (!entry || !fs.existsSync(entry)) return
     const logPath = DAEMON_PATHS.log()
-    let logFd: number | undefined
-    try {
-      logFd = fs.openSync(logPath, 'a')
-    } catch {
-      logFd = undefined
-    }
+    const logFd = (() => {
+      try {
+        return fs.openSync(logPath, 'a')
+      } catch {
+        return undefined
+      }
+    })()
     const stdio: ['ignore', number | 'ignore', number | 'ignore'] = logFd
       ? ['ignore', logFd, logFd]
       : ['ignore', 'ignore', 'ignore']

@@ -38,29 +38,34 @@ async function freshProject(): Promise<{ projectPath: string; projectId: string 
 }
 
 describe('workflow step types (alpha.10)', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture: {
+    projectPath: string
+    projectId: string
+  } = {
+    projectPath: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    ;({ projectPath, projectId } = await freshProject())
+    ;({ projectPath: fixture.projectPath, projectId: fixture.projectId } = await freshProject())
   })
 
   afterEach(async () => {
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true })
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   describe('script: action', () => {
     test('executes a script under .prjct/workflows/', async () => {
-      const scriptDir = path.join(projectPath, '.prjct/workflows')
+      const scriptDir = path.join(fixture.projectPath, '.prjct/workflows')
       await fs.mkdir(scriptDir, { recursive: true })
-      const outFile = path.join(projectPath, 'script-ran.txt')
+      const outFile = path.join(fixture.projectPath, 'script-ran.txt')
       await fs.writeFile(
         path.join(scriptDir, 'greet.sh'),
         `#!/usr/bin/env bash\necho "hello" > ${JSON.stringify(outFile)}\n`,
         { mode: 0o755 }
       )
 
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'step',
         command: 'test-wf',
         position: 'before',
@@ -72,7 +77,9 @@ describe('workflow step types (alpha.10)', () => {
         sortOrder: 0,
       })
 
-      const result = await executeWorkflowRules(projectId, 'test-wf', 'before', { projectPath })
+      const result = await executeWorkflowRules(fixture.projectId, 'test-wf', 'before', {
+        projectPath: fixture.projectPath,
+      })
       expect(result.success).toBe(true)
       expect(result.stepsRun).toContain('greet')
 
@@ -82,7 +89,7 @@ describe('workflow step types (alpha.10)', () => {
 
     test('refuses script paths that escape the workflows dir', async () => {
       // No file needed — the path resolver should block before exec.
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'step',
         command: 'test-wf',
         position: 'before',
@@ -94,17 +101,19 @@ describe('workflow step types (alpha.10)', () => {
         sortOrder: 0,
       })
 
-      const result = await executeWorkflowRules(projectId, 'test-wf', 'before', { projectPath })
+      const result = await executeWorkflowRules(fixture.projectId, 'test-wf', 'before', {
+        projectPath: fixture.projectPath,
+      })
       expect(result.success).toBe(false)
       expect(result.output).toMatch(/escapes workflows dir|not found/i)
     })
 
     test('refuses imported (untrusted) script rules', async () => {
-      const scriptDir = path.join(projectPath, '.prjct/workflows')
+      const scriptDir = path.join(fixture.projectPath, '.prjct/workflows')
       await fs.mkdir(scriptDir, { recursive: true })
       await fs.writeFile(path.join(scriptDir, 'x.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
 
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'step',
         command: 'test-wf',
         position: 'before',
@@ -117,7 +126,9 @@ describe('workflow step types (alpha.10)', () => {
         sortOrder: 0,
       })
 
-      const result = await executeWorkflowRules(projectId, 'test-wf', 'before', { projectPath })
+      const result = await executeWorkflowRules(fixture.projectId, 'test-wf', 'before', {
+        projectPath: fixture.projectPath,
+      })
       expect(result.success).toBe(false)
       expect(result.output).toMatch(/imported/i)
     })
@@ -125,7 +136,7 @@ describe('workflow step types (alpha.10)', () => {
 
   describe('mcp: action', () => {
     test('emits a structured instruction instead of trying to call MCP', async () => {
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'instruction',
         command: 'test-wf',
         position: 'before',
@@ -139,7 +150,7 @@ describe('workflow step types (alpha.10)', () => {
       // Instructions fire as-is from their rule, but the mcp router
       // only kicks in for other rule types. Test with a hook so we
       // go through runRuleAction.
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'hook',
         command: 'test-wf',
         position: 'after',
@@ -151,7 +162,9 @@ describe('workflow step types (alpha.10)', () => {
         sortOrder: 0,
       })
 
-      const result = await executeWorkflowRules(projectId, 'test-wf', 'after', { projectPath })
+      const result = await executeWorkflowRules(fixture.projectId, 'test-wf', 'after', {
+        projectPath: fixture.projectPath,
+      })
       expect(result.success).toBe(true)
       const hookInstruction = result.instructions.find((i) => i.includes('posthog.track'))
       expect(hookInstruction).toBeDefined()
@@ -159,7 +172,7 @@ describe('workflow step types (alpha.10)', () => {
     })
 
     test('parses server + tool + json args', async () => {
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'hook',
         command: 'test-wf',
         position: 'before',
@@ -170,7 +183,9 @@ describe('workflow step types (alpha.10)', () => {
         createdAt: new Date().toISOString(),
         sortOrder: 0,
       })
-      const result = await executeWorkflowRules(projectId, 'test-wf', 'before', { projectPath })
+      const result = await executeWorkflowRules(fixture.projectId, 'test-wf', 'before', {
+        projectPath: fixture.projectPath,
+      })
       const instruction = result.instructions.find((i) => i.includes('linear.update_issue'))
       expect(instruction).toBeDefined()
       expect(instruction).toContain('{"id":"LIN-1","state":"done"}')
@@ -180,8 +195,8 @@ describe('workflow step types (alpha.10)', () => {
 
   describe('persona:context action', () => {
     test('emits persona summary when config declares one', async () => {
-      const config = await configManager.readConfig(projectPath)
-      await configManager.writeConfig(projectPath, {
+      const config = await configManager.readConfig(fixture.projectPath)
+      await configManager.writeConfig(fixture.projectPath, {
         ...config!,
         persona: {
           role: 'Founder',
@@ -191,7 +206,7 @@ describe('workflow step types (alpha.10)', () => {
         },
       })
 
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'hook',
         command: 'test-wf',
         position: 'before',
@@ -203,7 +218,9 @@ describe('workflow step types (alpha.10)', () => {
         sortOrder: 0,
       })
 
-      const result = await executeWorkflowRules(projectId, 'test-wf', 'before', { projectPath })
+      const result = await executeWorkflowRules(fixture.projectId, 'test-wf', 'before', {
+        projectPath: fixture.projectPath,
+      })
       expect(result.instructions.length).toBeGreaterThan(0)
       const personaNote = result.instructions[0]
       expect(personaNote).toContain('Founder')
@@ -212,7 +229,7 @@ describe('workflow step types (alpha.10)', () => {
     })
 
     test('falls back gracefully when no persona configured', async () => {
-      workflowRuleStorage.addRule(projectId, {
+      workflowRuleStorage.addRule(fixture.projectId, {
         type: 'hook',
         command: 'test-wf',
         position: 'before',
@@ -224,7 +241,9 @@ describe('workflow step types (alpha.10)', () => {
         sortOrder: 0,
       })
 
-      const result = await executeWorkflowRules(projectId, 'test-wf', 'before', { projectPath })
+      const result = await executeWorkflowRules(fixture.projectId, 'test-wf', 'before', {
+        projectPath: fixture.projectPath,
+      })
       expect(result.instructions.length).toBeGreaterThan(0)
       expect(result.instructions[0]).toMatch(/no persona/i)
     })

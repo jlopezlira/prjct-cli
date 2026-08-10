@@ -23,17 +23,19 @@ export async function flushIfLinked(
   preloadedConfig?: LocalConfig | null
 ): Promise<FlushResult> {
   try {
-    let config = preloadedConfig ?? null
-    if (!config) {
-      const { default: configManager } = await import('../infrastructure/config-manager')
-      config = await configManager.readConfig(projectPath).catch(() => null)
-    }
+    const config =
+      preloadedConfig ??
+      (await import('../infrastructure/config-manager').then(({ default: configManager }) =>
+        configManager.readConfig(projectPath).catch(() => null)
+      ))
     if (!config?.projectId || !config.cloud?.enabled || config.cloud.paused) {
       return { ran: false }
     }
     if (!(await syncManager.hasAuth())) return { ran: false }
 
-    const res = await syncManager.sync(config.projectId, { include: config.cloud.include ?? {} })
+    const res = await syncManager.sync(config.projectId, {
+      include: config.cloud.include ?? {},
+    })
     return {
       ran: true,
       pushed: res.pushed?.count ?? 0,

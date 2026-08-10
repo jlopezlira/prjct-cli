@@ -140,30 +140,31 @@ export class WorkflowCommands extends PrjctCommandsBase {
       const { buildAlignmentBrief } = await import('../services/project-alignment')
       const patternHits = related.filter((h) => h.type === 'pattern' || h.pattern)
       const antiHits = related.filter((h) => h.type === 'anti-pattern' || h.antiPattern)
-      let stylePatterns: Array<{ title?: string; content?: string }> = []
-      let styleAntis: Array<{ title?: string; content?: string }> = []
-      try {
-        const { getActiveProjectStyle } = await import('../services/project-style-evolution')
-        const style = getActiveProjectStyle(projectId)
-        if (style) {
-          stylePatterns = [
-            ...style.payload.patterns.map((p) => ({
-              title: p.name,
-              content: p.description,
+      const { stylePatterns, styleAntis } = await (async () => {
+        try {
+          const { getActiveProjectStyle } = await import('../services/project-style-evolution')
+          const style = getActiveProjectStyle(projectId)
+          if (!style) return { stylePatterns: [], styleAntis: [] }
+          return {
+            stylePatterns: [
+              ...style.payload.patterns.map((p) => ({
+                title: p.name,
+                content: p.description,
+              })),
+              ...style.payload.conventions.map((c) => ({
+                title: c.category ?? 'convention',
+                content: c.rule,
+              })),
+            ],
+            styleAntis: style.payload.antiPatterns.map((a) => ({
+              title: a.issue,
+              content: a.suggestion,
             })),
-            ...style.payload.conventions.map((c) => ({
-              title: c.category ?? 'convention',
-              content: c.rule,
-            })),
-          ]
-          styleAntis = style.payload.antiPatterns.map((a) => ({
-            title: a.issue,
-            content: a.suggestion,
-          }))
+          }
+        } catch {
+          return { stylePatterns: [], styleAntis: [] }
         }
-      } catch {
-        /* style optional */
-      }
+      })()
       const alignment = buildAlignmentBrief({
         patterns: [
           ...stylePatterns,
@@ -314,11 +315,11 @@ export class WorkflowCommands extends PrjctCommandsBase {
           out.info(
             'Living knowledge — surface as terminal tips to the user (SoT binding · SUGGEST live mods)'
           )
-          for (const line of relatedLines) out.info(`  ${line}`)
+          for (const line2 of relatedLines) out.info(`  ${line2}`)
         }
         if (likelyFileLines.length > 0) {
           out.info('Work scope — prjct (MUST before Grep/Glob)')
-          for (const line of likelyFileLines) out.info(`  ${line}`)
+          for (const line3 of likelyFileLines) out.info(`  ${line3}`)
         } else {
           out.info(
             'Work scope empty — run prjct context memory / search (or prjct sync) before Grep/Glob'
@@ -354,23 +355,24 @@ export class WorkflowCommands extends PrjctCommandsBase {
     // Gemini, Cursor, ...) poll `prjct work`/`status` — count the working
     // tree's touched files via git (no hook events needed) and surface the
     // same trigger the Claude hook fires. Best-effort: no git → no trigger.
-    let delegationTrigger: string | null = null
-    try {
-      const { execFileAsync } = await import('../utils/exec')
-      // status --porcelain covers modified AND untracked (diff HEAD misses
-      // brand-new files — often the bulk of a multi-file change). This counts
-      // current working-tree surface, an honest proxy for "this cycle" on
-      // rigs without edit hooks; committed-as-you-go work under-counts.
-      const r = await execFileAsync('git', ['status', '--porcelain'], {
-        cwd: projectPath,
-        timeout: 2000,
-      })
-      const touched = r.stdout.split('\n').filter(Boolean).length
-      const { renderDelegationTrigger } = await import('../services/task-orchestration')
-      delegationTrigger = renderDelegationTrigger(touched)
-    } catch {
-      /* no git / detached env — trigger is advisory only */
-    }
+    const delegationTrigger = await (async (): Promise<string | null> => {
+      try {
+        const { execFileAsync } = await import('../utils/exec')
+        // status --porcelain covers modified AND untracked (diff HEAD misses
+        // brand-new files — often the bulk of a multi-file change). This counts
+        // current working-tree surface, an honest proxy for "this cycle" on
+        // rigs without edit hooks; committed-as-you-go work under-counts.
+        const r = await execFileAsync('git', ['status', '--porcelain'], {
+          cwd: projectPath,
+          timeout: 2000,
+        })
+        const touched = r.stdout.split('\n').filter(Boolean).length
+        const { renderDelegationTrigger } = await import('../services/task-orchestration')
+        return renderDelegationTrigger(touched)
+      } catch {
+        return null
+      }
+    })()
 
     if (!active) {
       // Nothing in THIS worktree — but sibling worktrees may be busy.

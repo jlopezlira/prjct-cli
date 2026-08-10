@@ -447,13 +447,13 @@ export function formatHarnessSurfacesMarkdown(opts?: {
   )
   if (opts?.detail) {
     lines.push('### Integration notes', '')
-    for (const s of rows) {
-      lines.push(`#### ${s.displayName}`, '', s.legibility, '')
-      if (s.hooks.notes) lines.push(`- Hooks: ${s.hooks.notes}`)
-      if (s.mcp.notes) lines.push(`- MCP: ${s.mcp.notes}`)
-      if (s.skills.notes) lines.push(`- Skills: ${s.skills.notes}`)
-      lines.push(`- Hook events: ${s.hooks.events.slice(0, 8).join(', ') || '(none)'}`)
-      lines.push(`- MCP paths: ${s.mcp.configPaths.join('; ')}`)
+    for (const s2 of rows) {
+      lines.push(`#### ${s2.displayName}`, '', s2.legibility, '')
+      if (s2.hooks.notes) lines.push(`- Hooks: ${s2.hooks.notes}`)
+      if (s2.mcp.notes) lines.push(`- MCP: ${s2.mcp.notes}`)
+      if (s2.skills.notes) lines.push(`- Skills: ${s2.skills.notes}`)
+      lines.push(`- Hook events: ${s2.hooks.events.slice(0, 8).join(', ') || '(none)'}`)
+      lines.push(`- MCP paths: ${s2.mcp.configPaths.join('; ')}`)
       lines.push('')
     }
   }

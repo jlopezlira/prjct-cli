@@ -251,22 +251,17 @@ export interface ActivatedPackSummary {
 export async function listActivePacks(projectPath: string): Promise<ActivatedPackSummary[]> {
   const config = await configManager.readConfig(projectPath)
   const active = config?.persona?.packs ?? []
-  let integrityByName: Record<string, { version: string; integrity: string; status: string }> = {}
-  try {
-    const { buildPackCatalog } = await import('./pack-integrity')
-    const catalog = await buildPackCatalog(projectPath)
-    for (const e of catalog) {
-      if (e.active) {
-        integrityByName[e.name] = {
-          version: e.version,
-          integrity: e.integrity,
-          status: e.status,
-        }
-      }
-    }
-  } catch {
-    integrityByName = {}
-  }
+  const catalog = await import('./pack-integrity')
+    .then(({ buildPackCatalog }) => buildPackCatalog(projectPath))
+    .catch(() => [])
+  const integrityByName = Object.fromEntries(
+    catalog
+      .filter((entry) => entry.active)
+      .map((entry) => [
+        entry.name,
+        { version: entry.version, integrity: entry.integrity, status: entry.status },
+      ])
+  )
   const summaries: ActivatedPackSummary[] = []
   for (const name of active) {
     const m = PACK_MANIFESTS[name]

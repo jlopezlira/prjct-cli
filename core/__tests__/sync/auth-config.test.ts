@@ -9,9 +9,16 @@ import {
   setAuthToken,
 } from '../../sync/secure-auth-token'
 
-let tmpDir: string
-let tmpPath: string
-let storedToken: string | null
+const fixture: {
+  tmpDir: string
+  tmpPath: string
+  storedToken: string | null
+} = {
+  tmpDir: '',
+  tmpPath: '',
+  storedToken: null,
+}
+
 const originalConfigPath = (authConfig as unknown as { configPath: string }).configPath
 
 async function setConfigPath(p: string) {
@@ -20,33 +27,33 @@ async function setConfigPath(p: string) {
 }
 
 function installTokenStore() {
-  storedToken = null
+  fixture.storedToken = null
   _setAuthTokenStoreForTests({
-    get: async () => storedToken,
+    get: async () => fixture.storedToken,
     set: async (value: string): Promise<AuthTokenLocation> => {
-      storedToken = value
+      fixture.storedToken = value
       return 'keychain'
     },
     clear: async () => {
-      storedToken = null
+      fixture.storedToken = null
     },
-    location: async () => (storedToken ? 'keychain' : 'none'),
+    location: async () => (fixture.storedToken ? 'keychain' : 'none'),
   })
 }
 
 describe('AuthConfig', () => {
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-auth-test-'))
-    tmpPath = path.join(tmpDir, 'auth.json')
+    fixture.tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-auth-test-'))
+    fixture.tmpPath = path.join(fixture.tmpDir, 'auth.json')
     installTokenStore()
-    await setConfigPath(tmpPath)
+    await setConfigPath(fixture.tmpPath)
   })
 
   afterEach(async () => {
     _setAuthTokenStoreForTests(null)
     await setConfigPath(originalConfigPath)
     try {
-      await fs.rm(tmpDir, { recursive: true, force: true })
+      await fs.rm(fixture.tmpDir, { recursive: true, force: true })
     } catch {
       // ignore
     }
@@ -66,16 +73,16 @@ describe('AuthConfig', () => {
       await authConfig.write({ apiKey: 'cached-key' })
       const a = await authConfig.read()
       // Manually corrupt the underlying file; cached read should not see it.
-      await fs.writeFile(tmpPath, '{"apiKey":"disk-only"}')
+      await fs.writeFile(fixture.tmpPath, '{"apiKey":"disk-only"}')
       const b = await authConfig.read()
       expect(b.apiKey).toBe(a.apiKey)
       expect(b.apiKey).toBe('cached-key')
     })
 
     it('migrates legacy plaintext api keys out of auth.json', async () => {
-      await fs.mkdir(path.dirname(tmpPath), { recursive: true })
+      await fs.mkdir(path.dirname(fixture.tmpPath), { recursive: true })
       await fs.writeFile(
-        tmpPath,
+        fixture.tmpPath,
         JSON.stringify({
           apiKey: 'legacy-key',
           apiUrl: 'https://cli-api.prjct.app',
@@ -86,13 +93,13 @@ describe('AuthConfig', () => {
       )
 
       const cfg = await authConfig.read()
-      const raw = JSON.parse(await fs.readFile(tmpPath, 'utf-8')) as {
+      const raw = JSON.parse(await fs.readFile(fixture.tmpPath, 'utf-8')) as {
         apiKey: string | null
         apiUrl: string
       }
 
       expect(cfg.apiKey).toBe('legacy-key')
-      expect(storedToken).toBe('legacy-key')
+      expect(fixture.storedToken).toBe('legacy-key')
       expect(raw.apiKey).toBeNull()
       // Legacy API host rewritten + persisted on read.
       expect(cfg.apiUrl).toBe('https://api.prjct.app')
@@ -103,7 +110,7 @@ describe('AuthConfig', () => {
       const before = await authConfig.read()
       expect(before.apiKey).toBeNull()
 
-      storedToken = 'external-login-key'
+      fixture.storedToken = 'external-login-key'
 
       expect(await authConfig.hasAuth()).toBe(true)
       expect((await authConfig.read()).apiKey).toBe('external-login-key')
@@ -113,7 +120,7 @@ describe('AuthConfig', () => {
       await authConfig.saveAuth('sk_test_123', 'u', 'e@x')
       expect(await authConfig.hasAuth()).toBe(true)
 
-      storedToken = null
+      fixture.storedToken = null
 
       expect(await authConfig.hasAuth()).toBe(false)
       expect((await authConfig.read()).apiKey).toBeNull()
@@ -124,10 +131,12 @@ describe('AuthConfig', () => {
     it('saves api key, user id, and email', async () => {
       await authConfig.saveAuth('sk_test_123', 'user-1', 'user@example.com')
       const cfg = await authConfig.read()
-      const raw = JSON.parse(await fs.readFile(tmpPath, 'utf-8')) as { apiKey: string | null }
+      const raw = JSON.parse(await fs.readFile(fixture.tmpPath, 'utf-8')) as {
+        apiKey: string | null
+      }
 
       expect(cfg.apiKey).toBe('sk_test_123')
-      expect(storedToken).toBe('sk_test_123')
+      expect(fixture.storedToken).toBe('sk_test_123')
       expect(raw.apiKey).toBeNull()
       expect(cfg.userId).toBe('user-1')
       expect(cfg.email).toBe('user@example.com')
@@ -136,7 +145,7 @@ describe('AuthConfig', () => {
 
     it('writes file with 0600 permissions', async () => {
       await authConfig.saveAuth('sk_test_123', 'u', 'e@x')
-      const stat = await fs.stat(tmpPath)
+      const stat = await fs.stat(fixture.tmpPath)
       // Mask off the file type bits, keep permission bits.
       expect(stat.mode & 0o777).toBe(0o600)
     })
@@ -145,7 +154,9 @@ describe('AuthConfig', () => {
       await authConfig.saveAuth('k1', 'u1', 'e1@x')
       await authConfig.write({ apiUrl: 'https://staging.prjct.app' })
       const cfg = await authConfig.read()
-      const raw = JSON.parse(await fs.readFile(tmpPath, 'utf-8')) as { apiKey: string | null }
+      const raw = JSON.parse(await fs.readFile(fixture.tmpPath, 'utf-8')) as {
+        apiKey: string | null
+      }
 
       expect(cfg.apiKey).toBe('k1')
       expect(raw.apiKey).toBeNull()
@@ -186,9 +197,9 @@ describe('AuthConfig', () => {
     })
 
     it('rewrites legacy cli-api.prjct.app to api.prjct.app', async () => {
-      await fs.mkdir(path.dirname(tmpPath), { recursive: true })
+      await fs.mkdir(path.dirname(fixture.tmpPath), { recursive: true })
       await fs.writeFile(
-        tmpPath,
+        fixture.tmpPath,
         JSON.stringify({
           apiKey: null,
           apiUrl: 'https://cli-api.prjct.app',
@@ -225,7 +236,7 @@ describe('AuthConfig', () => {
       await authConfig.clearAuth()
       const cfg = await authConfig.read()
       expect(cfg.apiKey).toBeNull()
-      expect(storedToken).toBeNull()
+      expect(fixture.storedToken).toBeNull()
       expect(cfg.userId).toBeNull()
     })
 
@@ -240,24 +251,24 @@ describe('AuthConfig', () => {
 
   describe('keychain-only invariants', () => {
     it('setAuthToken refuses empty / whitespace tokens before touching the store', async () => {
-      let setCalled = false
+      const setCalls: string[] = []
       _setAuthTokenStoreForTests({
-        get: async () => storedToken,
+        get: async () => fixture.storedToken,
         set: async (value) => {
-          setCalled = true
-          storedToken = value
+          setCalls.push(value)
+          fixture.storedToken = value
           return 'keychain'
         },
         clear: async () => {
-          storedToken = null
+          fixture.storedToken = null
         },
-        location: async () => (storedToken ? 'keychain' : 'none'),
+        location: async () => (fixture.storedToken ? 'keychain' : 'none'),
       })
 
       await expect(setAuthToken('')).rejects.toThrow(/empty/i)
       await expect(setAuthToken('   ')).rejects.toThrow(/empty/i)
-      expect(setCalled).toBe(false)
-      expect(storedToken).toBeNull()
+      expect(setCalls).toHaveLength(0)
+      expect(fixture.storedToken).toBeNull()
     })
 
     it('propagates store set failures — never falls back to writing the token into auth.json', async () => {
@@ -276,7 +287,9 @@ describe('AuthConfig', () => {
 
       // No auth.json, or if partially created, must not contain the token.
       try {
-        const raw = JSON.parse(await fs.readFile(tmpPath, 'utf-8')) as { apiKey: string | null }
+        const raw = JSON.parse(await fs.readFile(fixture.tmpPath, 'utf-8')) as {
+          apiKey: string | null
+        }
         expect(raw.apiKey).toBeNull()
         expect(JSON.stringify(raw)).not.toContain('sk_must_not_persist')
       } catch (e) {
@@ -288,10 +301,12 @@ describe('AuthConfig', () => {
     it('every successful write leaves apiKey null on disk', async () => {
       await authConfig.saveAuth('sk_disk_never', 'u', 'e@x')
       await authConfig.write({ email: 'other@x' })
-      const raw = JSON.parse(await fs.readFile(tmpPath, 'utf-8')) as { apiKey: string | null }
+      const raw = JSON.parse(await fs.readFile(fixture.tmpPath, 'utf-8')) as {
+        apiKey: string | null
+      }
       expect(raw.apiKey).toBeNull()
       expect(JSON.stringify(raw)).not.toContain('sk_disk_never')
-      expect(storedToken).toBe('sk_disk_never')
+      expect(fixture.storedToken).toBe('sk_disk_never')
     })
   })
 })

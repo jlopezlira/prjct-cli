@@ -119,15 +119,12 @@ async function measureLeanMarkers(projectPath: string): Promise<number> {
     if (exitCodeMeans(res, 1)) return 0
     throwProc(res)
   }
-  let total = 0
-  for (const line of res.stdout.split('\n')) {
-    // `git grep -c` emits "<file>:<count>" per file.
-    const idx = line.lastIndexOf(':')
-    if (idx <= 0) continue
-    const num = Number.parseInt(line.slice(idx + 1), 10)
-    if (Number.isFinite(num)) total += num
-  }
-  return total
+  return res.stdout.split('\n').reduce((total, line) => {
+    const separator = line.lastIndexOf(':')
+    if (separator <= 0) return total
+    const count = Number.parseInt(line.slice(separator + 1), 10)
+    return Number.isFinite(count) ? total + count : total
+  }, 0)
 }
 
 interface DebtMemoryRow {
@@ -144,12 +141,13 @@ function collectPreviousSnapshot(projectId: string): number {
       "SELECT data FROM events WHERE type = 'memory.remember.lean-debt' ORDER BY id DESC LIMIT 50"
     )
     for (const row of rows) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(row.data)
-      } catch {
-        continue
-      }
+      const parsed = (() => {
+        try {
+          return JSON.parse(row.data) as unknown
+        } catch {
+          return null
+        }
+      })()
       if (!parsed || typeof parsed !== 'object') continue
       const tags = (parsed as { tags?: Record<string, unknown> }).tags
       if (!tags || tags.source !== LEAN_DEBT_SOURCE_TAG) continue

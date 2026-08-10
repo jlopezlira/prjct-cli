@@ -85,13 +85,9 @@ export class InstallCommands extends PrjctCommandsBase {
         piSkill?.success ? 'pi' : null,
         'claude',
       ].filter((x): x is string => Boolean(x))
-      let deltaLine: string | null = null
-      try {
-        const { computeHarnessDelta } = await import('../services/weak-frontier-demo')
-        deltaLine = computeHarnessDelta().line
-      } catch {
-        deltaLine = null
-      }
+      const deltaLine = await import('../services/weak-frontier-demo')
+        .then(({ computeHarnessDelta }) => computeHarnessDelta().line)
+        .catch(() => null)
       const { buildOneBreathReport } = await import('../services/one-breath-install')
       const ritual = buildOneBreathReport({
         claudeHooksNew: result.hooksWritten,

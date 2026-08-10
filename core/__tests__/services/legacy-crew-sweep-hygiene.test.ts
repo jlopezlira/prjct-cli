@@ -43,24 +43,30 @@ Never write reports to disk. Use prjct CLI verbs only.
 `
 
 describe('legacyCrewSweep — worktree hygiene', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture: {
+    projectPath: string
+    projectId: string
+  } = {
+    projectPath: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-hygiene-'))
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-    projectId = `hygiene-${Math.random().toString(36).slice(2, 10)}`
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(projectPath, '.prjct-data'),
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-hygiene-'))
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+    fixture.projectId = `hygiene-${Math.random().toString(36).slice(2, 10)}`
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
     })
-    patchPathManager(projectPath)
-    prjctDb.get(projectId, 'SELECT 1')
+    patchPathManager(fixture.projectPath)
+    prjctDb.get(fixture.projectId, 'SELECT 1')
   })
 
   afterEach(async () => {
     restorePathManager()
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+    if (fixture.projectPath)
+      await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   })
 
   test('exports the hard-law ghost dir + needle lists', () => {
@@ -97,55 +103,61 @@ describe('legacyCrewSweep — worktree hygiene', () => {
   })
 
   test('purges .prjct/sessions and ingests content into SQLite (no disk re-home)', async () => {
-    const sessionsDir = path.join(projectPath, '.prjct', 'sessions', 'some-task')
+    const sessionsDir = path.join(fixture.projectPath, '.prjct', 'sessions', 'some-task')
     await fs.mkdir(sessionsDir, { recursive: true })
     await fs.writeFile(path.join(sessionsDir, 'plan.md'), '# plan body for SQL ingest\n', 'utf-8')
 
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
 
     expect(result.ghostDirsPurged).toContain('sessions')
     expect(result.ghostFilesIngested).toBeGreaterThanOrEqual(1)
 
     // Gone from customer worktree — never re-homed onto another disk path
-    await expect(fs.access(path.join(projectPath, '.prjct', 'sessions'))).rejects.toBeDefined()
+    await expect(
+      fs.access(path.join(fixture.projectPath, '.prjct', 'sessions'))
+    ).rejects.toBeDefined()
 
     // Traceable in SQLite via remember/events
     const { projectMemory } = await import('../../memory/project-memory')
-    const hits = projectMemory.recall(projectId, { types: ['context'], limit: 25 })
+    const hits = projectMemory.recall(fixture.projectId, { types: ['context'], limit: 25 })
     expect(hits.some((h) => h.content.includes('plan body for SQL ingest'))).toBe(true)
 
     // Idempotent: second run is a quiet no-op
-    const again = await legacyCrewSweep(projectPath, projectId)
+    const again = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
     expect(again.ghostDirsPurged).toEqual([])
     expect(again.ghostFilesIngested).toBe(0)
   })
 
   test('purges .prjct/audits and .prjct/deploy without rescue', async () => {
-    await fs.mkdir(path.join(projectPath, '.prjct', 'audits'), { recursive: true })
-    await fs.writeFile(path.join(projectPath, '.prjct', 'audits', 'x.md'), 'x', 'utf-8')
-    await fs.mkdir(path.join(projectPath, '.prjct', 'deploy'), { recursive: true })
-    await fs.writeFile(path.join(projectPath, '.prjct', 'deploy', 'check.md'), 'y', 'utf-8')
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct', 'audits'), { recursive: true })
+    await fs.writeFile(path.join(fixture.projectPath, '.prjct', 'audits', 'x.md'), 'x', 'utf-8')
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct', 'deploy'), { recursive: true })
+    await fs.writeFile(path.join(fixture.projectPath, '.prjct', 'deploy', 'check.md'), 'y', 'utf-8')
 
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
 
     expect(result.ghostDirsPurged.sort()).toEqual(['audits', 'deploy'])
-    await expect(fs.access(path.join(projectPath, '.prjct', 'audits'))).rejects.toBeDefined()
-    await expect(fs.access(path.join(projectPath, '.prjct', 'deploy'))).rejects.toBeDefined()
+    await expect(
+      fs.access(path.join(fixture.projectPath, '.prjct', 'audits'))
+    ).rejects.toBeDefined()
+    await expect(
+      fs.access(path.join(fixture.projectPath, '.prjct', 'deploy'))
+    ).rejects.toBeDefined()
     // config still there
-    const configStat = await fs.stat(path.join(projectPath, '.prjct', 'prjct.config.json'))
+    const configStat = await fs.stat(path.join(fixture.projectPath, '.prjct', 'prjct.config.json'))
     expect(configStat.isFile()).toBe(true)
   })
 
   test('repairs stale crew agent files that instruct .prjct/sessions/ writes', async () => {
-    const leaderPath = path.join(projectPath, '.claude', 'agents', 'leader.md')
+    const leaderPath = path.join(fixture.projectPath, '.claude', 'agents', 'leader.md')
     await fs.mkdir(path.dirname(leaderPath), { recursive: true })
     await fs.writeFile(leaderPath, STALE_LEADER, 'utf-8')
 
     // Clean sibling must be left alone
-    const implPath = path.join(projectPath, '.claude', 'agents', 'implementer.md')
+    const implPath = path.join(fixture.projectPath, '.claude', 'agents', 'implementer.md')
     await fs.writeFile(implPath, CLEAN_LEADER, 'utf-8')
 
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
 
     expect(result.agentFilesRepaired).toContain('.claude/agents/leader.md')
     expect(result.agentFilesRepaired).not.toContain('.claude/agents/implementer.md')
@@ -168,12 +180,12 @@ describe('legacyCrewSweep — worktree hygiene', () => {
       '<!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->',
       '',
     ].join('\n')
-    await fs.writeFile(path.join(projectPath, 'CLAUDE.md'), claude, 'utf-8')
+    await fs.writeFile(path.join(fixture.projectPath, 'CLAUDE.md'), claude, 'utf-8')
 
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
 
     expect(result.agentFilesRepaired).toContain('CLAUDE.md')
-    const next = await fs.readFile(path.join(projectPath, 'CLAUDE.md'), 'utf-8')
+    const next = await fs.readFile(path.join(fixture.projectPath, 'CLAUDE.md'), 'utf-8')
     expect(next).toContain('# My project')
     expect(next).toContain('<!-- prjct:crew:start')
     expect(next).not.toContain('.prjct/sessions/')
@@ -181,7 +193,7 @@ describe('legacyCrewSweep — worktree hygiene', () => {
   })
 
   test('does not touch a clean tree', async () => {
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
     expect(result.ghostDirsPurged).toEqual([])
     expect(result.agentFilesRepaired).toEqual([])
     expect(result.errors).toEqual([])
@@ -200,12 +212,12 @@ describe('legacyCrewSweep — worktree hygiene', () => {
       '<!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->',
       '',
     ].join('\n')
-    await fs.writeFile(path.join(projectPath, 'CLAUDE.md'), claude, 'utf-8')
+    await fs.writeFile(path.join(fixture.projectPath, 'CLAUDE.md'), claude, 'utf-8')
 
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
     expect(result.agentFilesRepaired).toContain('CLAUDE.md')
 
-    const next = await fs.readFile(path.join(projectPath, 'CLAUDE.md'), 'utf-8')
+    const next = await fs.readFile(path.join(fixture.projectPath, 'CLAUDE.md'), 'utf-8')
     expect(next).toContain('# My project')
     expect((next.match(/prjct:crew:start/g) ?? []).length).toBe(1)
     expect((next.match(/prjct:crew:end/g) ?? []).length).toBe(1)
@@ -215,42 +227,48 @@ describe('legacyCrewSweep — worktree hygiene', () => {
 })
 
 describe('legacyCrewSweep — client .prjct config-only', () => {
-  let projectPath: string
-  let projectId: string
+  const fixture: {
+    projectPath: string
+    projectId: string
+  } = {
+    projectPath: '',
+    projectId: '',
+  }
 
   beforeEach(async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cfgonly-'))
-    await fs.mkdir(path.join(projectPath, '.prjct'), { recursive: true })
-    projectId = `cfg-${Math.random().toString(36).slice(2, 10)}`
-    await configManager.writeConfig(projectPath, {
-      projectId,
-      dataPath: path.join(projectPath, '.prjct-data'),
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-cfgonly-'))
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+    fixture.projectId = `cfg-${Math.random().toString(36).slice(2, 10)}`
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
     })
-    patchPathManager(projectPath)
-    prjctDb.get(projectId, 'SELECT 1')
+    patchPathManager(fixture.projectPath)
+    prjctDb.get(fixture.projectId, 'SELECT 1')
   })
 
   afterEach(async () => {
     restorePathManager()
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true }).catch(() => {})
+    if (fixture.projectPath)
+      await fs.rm(fixture.projectPath, { recursive: true, force: true }).catch(() => {})
   })
 
   test('migrates CHECKPOINTS.md to SQLite then deletes it from client tree', async () => {
-    const cp = path.join(projectPath, '.prjct', 'CHECKPOINTS.md')
+    const cp = path.join(fixture.projectPath, '.prjct', 'CHECKPOINTS.md')
     await fs.writeFile(cp, '# CHECKPOINTS\n- [ ] custom gate\n', 'utf-8')
 
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
     expect(result.checkpointsMigrated).toBe(true)
     expect(result.clientPrjctJunkPurged).toContain('CHECKPOINTS.md')
     await expect(fs.access(cp)).rejects.toBeDefined()
 
     // still only config
-    const entries = await fs.readdir(path.join(projectPath, '.prjct'))
+    const entries = await fs.readdir(path.join(fixture.projectPath, '.prjct'))
     expect(entries).toEqual(['prjct.config.json'])
   })
 
   test('migrates team.json then deletes — no disk mirror left', async () => {
-    const tj = path.join(projectPath, '.prjct', 'team.json')
+    const tj = path.join(fixture.projectPath, '.prjct', 'team.json')
     await fs.writeFile(
       tj,
       JSON.stringify({
@@ -262,17 +280,17 @@ describe('legacyCrewSweep — client .prjct config-only', () => {
       'utf-8'
     )
 
-    const result = await legacyCrewSweep(projectPath, projectId)
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
     expect(result.teamMigrated).toBe(true)
     expect(result.clientPrjctJunkPurged).toContain('team.json')
     await expect(fs.access(tj)).rejects.toBeDefined()
-    const entries = await fs.readdir(path.join(projectPath, '.prjct'))
+    const entries = await fs.readdir(path.join(fixture.projectPath, '.prjct'))
     expect(entries).toEqual(['prjct.config.json'])
   })
 
   test('second sync is quiet no-op when only config remains', async () => {
-    await legacyCrewSweep(projectPath, projectId)
-    const again = await legacyCrewSweep(projectPath, projectId)
+    await legacyCrewSweep(fixture.projectPath, fixture.projectId)
+    const again = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
     expect(again.clientPrjctJunkPurged).toEqual([])
     expect(again.ghostDirsPurged).toEqual([])
     expect(again.errors).toEqual([])

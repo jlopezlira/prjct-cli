@@ -69,13 +69,14 @@ function persist(profiles: LlmProfile[], active: string | null): void {
 export function listLlmProfiles(): LlmProfilesState {
   const profiles = parseProfiles(getConfig(K_PROFILES))
   const activeRaw = getConfig(K_ACTIVE)
-  let active: string | null =
+  const configuredActive: string | null =
     typeof activeRaw === 'string' && activeRaw.trim()
       ? slugifyProfileName(activeRaw)
       : (profiles[0]?.name ?? null)
-  if (active && !profiles.some((p) => p.name === active)) {
-    active = profiles[0]?.name ?? null
-  }
+  const active =
+    configuredActive && profiles.some((profile) => profile.name === configuredActive)
+      ? configuredActive
+      : (profiles[0]?.name ?? null)
   return { active, profiles }
 }
 
@@ -191,15 +192,14 @@ export function upsertLlmProfile(
 
   const isNew = !existing
   // activate: true → always; false → keep prior; undefined → activate if new or none active
-  let active = state.active
-  if (opts.activate === true) {
-    active = name
-  } else if (opts.activate === false) {
-    // keep state.active
-  } else if (isNew || !state.active) {
-    active = name
-  }
-  if (active && !next.some((p) => p.name === active)) active = next[0]?.name ?? null
+  const desiredActive =
+    opts.activate === true || (opts.activate !== false && (isNew || !state.active))
+      ? name
+      : state.active
+  const active =
+    desiredActive && next.some((profile) => profile.name === desiredActive)
+      ? desiredActive
+      : (next[0]?.name ?? null)
 
   persist(next, active)
   return profile

@@ -64,28 +64,26 @@ function runCli(
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    let stdout = ''
-    let stderr = ''
-    let done = false
+    const capture = { stdout: '', stderr: '', done: false }
     const finish = (code: number) => {
-      if (done) return
-      done = true
+      if (capture.done) return
+      capture.done = true
       clearTimeout(timer)
-      resolve({ code, stdout, stderr })
+      resolve({ code, stdout: capture.stdout, stderr: capture.stderr })
     }
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
-      stderr += `\n[harness] timeout after ${timeoutMs}ms`
+      capture.stderr += `\n[harness] timeout after ${timeoutMs}ms`
       finish(124)
     }, timeoutMs)
     child.stdout.on('data', (d) => {
-      stdout += d.toString()
+      capture.stdout += d.toString()
     })
     child.stderr.on('data', (d) => {
-      stderr += d.toString()
+      capture.stderr += d.toString()
     })
     child.on('error', (e) => {
-      stderr += `\n[harness] spawn error: ${e.message}`
+      capture.stderr += `\n[harness] spawn error: ${e.message}`
       finish(127)
     })
     child.on('exit', (c) => finish(c ?? 0))

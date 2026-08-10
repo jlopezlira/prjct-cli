@@ -16,8 +16,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { resolveCliHome } from '../../infrastructure/cli-home'
 import { execFileAsync } from '../../utils/exec'
-
-/** Env override — also re-exported from the embeddings index for back-compat. */
 export const EMBEDDINGS_API_KEY_ENV = 'PRJCT_EMBEDDINGS_API_KEY'
 
 const KEYCHAIN_SERVICE = 'prjct-embeddings'
@@ -29,7 +27,7 @@ function keyFilePath(): string {
 }
 
 // undefined = not yet resolved; null = resolved-and-absent.
-let cached: string | null | undefined
+const keyCache: { value: string | null | undefined } = { value: undefined }
 
 function isDarwin(): boolean {
   return process.platform === 'darwin'
@@ -63,14 +61,15 @@ function readFileKey(): string | null {
 
 /** Resolve the key (env → Keychain → file), cached for the process. */
 export async function getEmbeddingsKey(): Promise<string | null> {
-  if (cached !== undefined) return cached
+  if (keyCache.value !== undefined) return keyCache.value
   const env = process.env[EMBEDDINGS_API_KEY_ENV]?.trim()
   if (env) {
-    cached = env
-    return cached
+    keyCache.value = env
+    return env
   }
-  cached = (isDarwin() ? await readKeychain() : null) ?? readFileKey()
-  return cached
+  const resolved = (isDarwin() ? await readKeychain() : null) ?? readFileKey()
+  keyCache.value = resolved
+  return resolved
 }
 
 /** Where the key lives, for status output (never prints the value). */
@@ -86,7 +85,7 @@ export async function getKeyLocation(): Promise<KeyLocation> {
 /** Persist the key to the most secure store available. Returns where it went. */
 export async function setEmbeddingsKey(value: string): Promise<'keychain' | 'file'> {
   const key = value.trim()
-  cached = key
+  keyCache.value = key
   if (isDarwin()) {
     try {
       // -U updates an existing item instead of erroring on duplicate.
@@ -117,7 +116,7 @@ export async function setEmbeddingsKey(value: string): Promise<'keychain' | 'fil
 
 /** Remove the key from every store. */
 export async function clearEmbeddingsKey(): Promise<void> {
-  cached = null
+  keyCache.value = null
   if (isDarwin()) {
     try {
       await execFileAsync('security', [
@@ -140,5 +139,5 @@ export async function clearEmbeddingsKey(): Promise<void> {
 
 /** Test seam — reset the process cache. */
 export function _resetKeyCache(): void {
-  cached = undefined
+  keyCache.value = undefined
 }

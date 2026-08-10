@@ -46,21 +46,29 @@ function parseFrontmatter(raw: string): { name?: string; description?: string } 
   if (!m) return {}
   const out: { name?: string; description?: string } = {}
   const lines = m[1].split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const kv = lines[i].match(/^(name|description):\s*(.*)$/)
-    if (!kv) continue
-    const field = kv[1] as 'name' | 'description'
-    let value = kv[2].trim()
-    if (/^[>|][+-]?$/.test(value)) {
-      // Folded/literal block: collect the following indented lines.
-      const parts: string[] = []
-      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
-        parts.push(lines[++i].trim())
-      }
-      value = parts.join(' ')
+  const parseLine = (index: number): void => {
+    if (index >= lines.length) return
+    const kv = lines[index].match(/^(name|description):\s*(.*)$/)
+    if (!kv) {
+      parseLine(index + 1)
+      return
     }
+    const field = kv[1] as 'name' | 'description'
+    const initialValue = kv[2].trim()
+    const continuation = /^[>|][+-]?$/.test(initialValue)
+      ? lines.slice(index + 1).findIndex((line) => !/^\s+\S/.test(line))
+      : 0
+    const continuationLength = continuation === -1 ? lines.length - index - 1 : continuation
+    const value = /^[>|][+-]?$/.test(initialValue)
+      ? lines
+          .slice(index + 1, index + 1 + continuationLength)
+          .map((line) => line.trim())
+          .join(' ')
+      : initialValue
     if (value) out[field] = value.replace(/^["']|["']$/g, '')
+    parseLine(index + 1 + continuationLength)
   }
+  parseLine(0)
   return out
 }
 
@@ -74,20 +82,12 @@ export async function refreshSkillIndex(
 ): Promise<IndexedSkill[]> {
   const found = new Map<string, IndexedSkill>()
   for (const { dir, scope } of skillRoots(projectPath)) {
-    let entries: string[] = []
-    try {
-      entries = await fs.readdir(dir)
-    } catch {
-      continue // root doesn't exist — fine
-    }
+    const entries = await fs.readdir(dir).catch(() => null)
+    if (!entries) continue // root doesn't exist — fine
     for (const entry of entries) {
       const skillPath = path.join(dir, entry, 'SKILL.md')
-      let raw: string
-      try {
-        raw = await fs.readFile(skillPath, 'utf-8')
-      } catch {
-        continue
-      }
+      const raw = await fs.readFile(skillPath, 'utf-8').catch(() => null)
+      if (raw === null) continue
       const fm = parseFrontmatter(raw)
       const name = fm.name || entry
       if (found.has(name)) continue // project scanned first → project wins

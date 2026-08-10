@@ -10,49 +10,62 @@ import { ContextCheckpointCommands } from '../../commands/context-checkpoint'
 import pathManager from '../../infrastructure/path-manager'
 import { execFileAsync } from '../../utils/exec'
 
-let dir: string
-let globalDir: string
-let projectId: string
+const fixture: {
+  dir: string
+  globalDir: string
+  projectId: string
+} = {
+  dir: '',
+  globalDir: '',
+  projectId: '',
+}
+
 const cmd = new ContextCheckpointCommands()
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ctx-test-'))
-  globalDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ctx-global-'))
-  projectId = `ctx-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ctx-test-'))
+  fixture.globalDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ctx-global-'))
+  fixture.projectId = `ctx-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-  pathManager.getGlobalProjectPath = (id: string) => path.join(globalDir, id)
+  pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.globalDir, id)
 
-  await fs.mkdir(path.join(dir, '.prjct'), { recursive: true })
+  await fs.mkdir(path.join(fixture.dir, '.prjct'), { recursive: true })
   // configManager.validateConfig() requires both projectId AND dataPath
   // — without dataPath, ensureProjectInit() reruns the full init flow
   // and overwrites our test projectId.
   await fs.writeFile(
-    path.join(dir, '.prjct/prjct.config.json'),
-    JSON.stringify({ projectId, dataPath: path.join(globalDir, projectId) })
+    path.join(fixture.dir, '.prjct/prjct.config.json'),
+    JSON.stringify({
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.globalDir, fixture.projectId),
+    })
   )
 
-  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: dir })
-  await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir })
-  await execFileAsync('git', ['config', 'user.name', 'Tester'], { cwd: dir })
-  await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir })
+  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.dir })
+  await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: fixture.dir })
+  await execFileAsync('git', ['config', 'user.name', 'Tester'], { cwd: fixture.dir })
+  await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: fixture.dir })
 })
 
 afterEach(async () => {
   pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
-  await fs.rm(globalDir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.globalDir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('prjct context-save / restore', () => {
   it('save writes a JSON checkpoint and reports the filename', async () => {
-    const result = await cmd.save('refactor auth flow', dir, { md: true, notes: 'pause point' })
+    const result = await cmd.save('refactor auth flow', fixture.dir, {
+      md: true,
+      notes: 'pause point',
+    })
     expect(result.success).toBe(true)
     expect(typeof result.file).toBe('string')
     expect(result.file).toMatch(/refactor-auth-flow\.json$/)
 
-    const ckptDir = path.join(globalDir, projectId, 'checkpoints')
+    const ckptDir = path.join(fixture.globalDir, fixture.projectId, 'checkpoints')
     const files = await fs.readdir(ckptDir)
     expect(files.length).toBe(1)
     const raw = await fs.readFile(path.join(ckptDir, files[0]!), 'utf-8')
@@ -63,35 +76,35 @@ describe('prjct context-save / restore', () => {
   })
 
   it('reports "no checkpoints" when restore runs against an empty store', async () => {
-    const r = await cmd.restore(null, dir, { md: false })
+    const r = await cmd.restore(null, fixture.dir, { md: false })
     expect(r.success).toBe(true)
     expect(r.checkpoint).toBeNull()
   })
 
   it('round-trips: save twice, restore returns the newer one by default', async () => {
-    await cmd.save('first', dir, {})
+    await cmd.save('first', fixture.dir, {})
     await new Promise((r) => setTimeout(r, 1100)) // filenames carry seconds; bump past
-    await cmd.save('second', dir, {})
+    await cmd.save('second', fixture.dir, {})
 
-    const r = await cmd.restore(null, dir, { md: false })
+    const r = await cmd.restore(null, fixture.dir, { md: false })
     expect(r.success).toBe(true)
     expect((r.checkpoint as { title: string }).title).toBe('second')
   })
 
   it('--list mode emits all checkpoint filenames', async () => {
-    await cmd.save('one', dir, {})
+    await cmd.save('one', fixture.dir, {})
     await new Promise((r) => setTimeout(r, 1100))
-    await cmd.save('two', dir, {})
-    const r = await cmd.restore(null, dir, { md: false, list: true })
+    await cmd.save('two', fixture.dir, {})
+    const r = await cmd.restore(null, fixture.dir, { md: false, list: true })
     expect(r.success).toBe(true)
     expect(r.files).toBe(2)
   })
 
   it('captures git status with uncommitted changes', async () => {
-    await fs.writeFile(path.join(dir, 'foo.txt'), 'hi')
-    const r = await cmd.save('with-uncommitted', dir, {})
+    await fs.writeFile(path.join(fixture.dir, 'foo.txt'), 'hi')
+    const r = await cmd.save('with-uncommitted', fixture.dir, {})
     expect(r.success).toBe(true)
-    const r2 = await cmd.restore(null, dir, { md: false })
+    const r2 = await cmd.restore(null, fixture.dir, { md: false })
     const ckpt = r2.checkpoint as { git: { statusShort: string[] } }
     expect(ckpt.git.statusShort.some((l) => l.includes('foo.txt'))).toBe(true)
   })

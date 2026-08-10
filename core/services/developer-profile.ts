@@ -155,7 +155,7 @@ export function buildDeveloperProfile(declared: MemoryEntry[]): string | null {
 
   if (principles.length > 0) {
     lines.push('## Working principles — from their pushback (do this instead)', '')
-    for (const p of principles) lines.push(`- ${p}`)
+    for (const p2 of principles) lines.push(`- ${p2}`)
     lines.push('')
   }
 

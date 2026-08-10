@@ -383,12 +383,9 @@ export function shouldMirrorSpecToMemory(title: string, goal: string): boolean {
  */
 export function stripPipelineLabelsForHuman(content: string): string {
   if (!content) return content
-  let s = content
-  // Leading label
-  s = s.replace(/^Context synthesis:\s*/i, '')
-  // Mid-string separators used by living-v2 (" · Context synthesis: …")
-  s = s.replace(/(\s*[·|]\s*)Context synthesis:\s*/gi, '$1')
-  // Orphaned leading separator after strip
-  s = s.replace(/^\s*[·|]\s*/, '')
-  return s.trim()
+  return content
+    .replace(/^Context synthesis:\s*/i, '')
+    .replace(/(\s*[·|]\s*)Context synthesis:\s*/gi, '$1')
+    .replace(/^\s*[·|]\s*/, '')
+    .trim()
 }

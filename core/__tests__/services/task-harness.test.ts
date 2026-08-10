@@ -6,10 +6,14 @@ import type { CurrentTask } from '../../schemas/state'
 import { buildTaskHarness, evaluateHarnessCompletion } from '../../services/task-harness'
 import { execFileAsync } from '../../utils/exec'
 
-let dir: string
+const fixture: {
+  dir: string
+} = {
+  dir: '',
+}
 
 async function git(args: string[]): Promise<void> {
-  await execFileAsync('git', args, { cwd: dir })
+  await execFileAsync('git', args, { cwd: fixture.dir })
 }
 
 async function currentTask(description: string): Promise<CurrentTask> {
@@ -23,19 +27,19 @@ async function currentTask(description: string): Promise<CurrentTask> {
 }
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-task-harness-'))
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-task-harness-'))
   await git(['init', '-q', '-b', 'main'])
   await git(['config', 'user.email', 'test@example.com'])
   await git(['config', 'user.name', 'Test'])
   await git(['config', 'commit.gpgsign', 'false'])
-  await fs.mkdir(path.join(dir, 'src'), { recursive: true })
-  await fs.writeFile(path.join(dir, 'src', 'index.ts'), 'export const value = 1\n')
+  await fs.mkdir(path.join(fixture.dir, 'src'), { recursive: true })
+  await fs.writeFile(path.join(fixture.dir, 'src', 'index.ts'), 'export const value = 1\n')
   await git(['add', '.'])
   await git(['commit', '-q', '-m', 'init'])
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('buildTaskHarness', () => {
@@ -71,10 +75,10 @@ describe('buildTaskHarness', () => {
 
 describe('evaluateHarnessCompletion', () => {
   test('warns when a bug task changes product code without a regression test', async () => {
-    await fs.writeFile(path.join(dir, 'src', 'index.ts'), 'export const value = 2\n')
+    await fs.writeFile(path.join(fixture.dir, 'src', 'index.ts'), 'export const value = 2\n')
 
     const evaluation = await evaluateHarnessCompletion(
-      dir,
+      fixture.dir,
       await currentTask('fix settings regression')
     )
 
@@ -83,11 +87,14 @@ describe('evaluateHarnessCompletion', () => {
   })
 
   test('does not warn about regression evidence when a test file changed', async () => {
-    await fs.mkdir(path.join(dir, 'src', '__tests__'), { recursive: true })
-    await fs.writeFile(path.join(dir, 'src', '__tests__', 'index.test.ts'), 'test("x", () => {})\n')
+    await fs.mkdir(path.join(fixture.dir, 'src', '__tests__'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.dir, 'src', '__tests__', 'index.test.ts'),
+      'test("x", () => {})\n'
+    )
 
     const evaluation = await evaluateHarnessCompletion(
-      dir,
+      fixture.dir,
       await currentTask('fix settings regression')
     )
 
@@ -142,7 +149,7 @@ describe('evaluateHarnessCompletion — typed git failures (WS1)', () => {
     if (process.platform === 'win32') return
     const task = await currentTask('bug en codex no se instala el statusbar eso es un must')
     await withBrokenGit(async () => {
-      const result = await evaluateHarnessCompletion(dir, task)
+      const result = await evaluateHarnessCompletion(fixture.dir, task)
       expect(result.warnings.some((w) => w.includes('evidence unavailable'))).toBe(true)
       expect(result.warnings.some((w) => w.includes('no test file changed'))).toBe(false)
     })

@@ -99,8 +99,8 @@ class VelocityStorage extends StorageManager<VelocityStoreData> {
       cur.tasks++
       byWeek.set(w, cur)
     }
-    for (const r of shipRows) {
-      const w = epochWeek(r.shipped_at)
+    for (const r2 of shipRows) {
+      const w = epochWeek(r2.shipped_at)
       if (w === null) continue
       const cur = byWeek.get(w) ?? { tasks: 0, ships: 0 }
       cur.ships++
@@ -164,59 +164,64 @@ class VelocityStorage extends StorageManager<VelocityStoreData> {
 
     const last3 = rows.slice(0, 3).reduce((s, r) => s + r.points_completed, 0)
     const prev3 = rows.slice(3, 6).reduce((s, r) => s + r.points_completed, 0)
-    let velocityTrend: VelocityTrend = 'stable'
-    // Balanced windows only: with 4-5 sprints, last-3 vs prev-1/2 compared a
-    // 3-week sum against a smaller one and reported flat delivery "improving".
-    if (rows.length >= 6) {
-      if (last3 > prev3 * 1.15) velocityTrend = 'improving'
-      else if (last3 < prev3 * 0.85) velocityTrend = 'declining'
-    }
+    const velocityTrend: VelocityTrend =
+      rows.length < 6
+        ? 'stable'
+        : last3 > prev3 * 1.15
+          ? 'improving'
+          : last3 < prev3 * 0.85
+            ? 'declining'
+            : 'stable'
 
     // Estimation loop (read side): completed tasks carry expected vs actual
     // points in their cold data (written at start/close by the task service).
     // Accuracy = % of estimated tasks whose actual landed within ±1 step of
     // the estimate on the 1/2/5/8 scale; over/under patterns are grouped by
     // task type so the dev sees WHERE their estimates drift.
-    let estimationAccuracy = 0
     const overEstimated: VelocityMetrics['overEstimated'] = []
     const underEstimated: VelocityMetrics['underEstimated'] = []
-    try {
-      const est = prjctDb.query<{ type: string | null; expected: number; actual: number }>(
-        projectId,
-        `SELECT type,
+    const estimationAccuracy = (() => {
+      try {
+        const est = prjctDb.query<{ type: string | null; expected: number; actual: number }>(
+          projectId,
+          `SELECT type,
                 CAST(json_extract(data, '$.expectedPoints') AS REAL) AS expected,
                 CAST(json_extract(data, '$.actualPoints') AS REAL) AS actual
          FROM tasks
          WHERE status = 'completed'
            AND json_extract(data, '$.expectedPoints') IS NOT NULL
            AND json_extract(data, '$.actualPoints') IS NOT NULL`
-      )
-      if (est.length > 0) {
-        const SCALE = [1, 2, 5, 8]
-        const step = (p: number) => SCALE.findIndex((v) => v >= p)
-        let accurate = 0
-        const byType = new Map<string, { sum: number; n: number }>()
-        for (const r of est) {
-          const drift = step(r.actual) - step(r.expected)
-          if (Math.abs(drift) <= 1) accurate++
-          const key = r.type ?? 'unknown'
-          const cur = byType.get(key) ?? { sum: 0, n: 0 }
-          // Positive variance = under-estimated (actual bigger than expected).
-          cur.sum += ((r.actual - r.expected) / r.expected) * 100
-          cur.n++
-          byType.set(key, cur)
+        )
+        if (est.length > 0) {
+          const SCALE = [1, 2, 5, 8]
+          const step = (p: number) => SCALE.findIndex((v) => v >= p)
+          const accuracy = est.reduce(
+            (summary, r) => {
+              const drift = step(r.actual) - step(r.expected)
+              if (Math.abs(drift) <= 1) summary.accurate++
+              const key = r.type ?? 'unknown'
+              const cur = summary.byType.get(key) ?? { sum: 0, n: 0 }
+              // Positive variance = under-estimated (actual bigger than expected).
+              cur.sum += ((r.actual - r.expected) / r.expected) * 100
+              cur.n++
+              summary.byType.set(key, cur)
+              return summary
+            },
+            { accurate: 0, byType: new Map<string, { sum: number; n: number }>() }
+          )
+          for (const [category, v] of accuracy.byType) {
+            const avgVariance = Math.round(v.sum / v.n)
+            const pattern = { category, avgVariance, taskCount: v.n }
+            if (avgVariance <= -20) overEstimated.push(pattern)
+            else if (avgVariance >= 20) underEstimated.push(pattern)
+          }
+          return Math.round((accuracy.accurate / est.length) * 100)
         }
-        estimationAccuracy = Math.round((accurate / est.length) * 100)
-        for (const [category, v] of byType) {
-          const avgVariance = Math.round(v.sum / v.n)
-          const pattern = { category, avgVariance, taskCount: v.n }
-          if (avgVariance <= -20) overEstimated.push(pattern)
-          else if (avgVariance >= 20) underEstimated.push(pattern)
-        }
+        return 0
+      } catch {
+        return 0
       }
-    } catch {
-      /* estimation telemetry absent → honest zeros */
-    }
+    })()
 
     return {
       sprints,

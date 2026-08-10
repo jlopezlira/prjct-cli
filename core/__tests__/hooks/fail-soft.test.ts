@@ -37,7 +37,7 @@ async function captureStdout(fn: () => Promise<void>): Promise<string> {
 
 describe('hook fail-soft contract (safeRun)', () => {
   test('a throwing build never rejects and still emits the empty no-op {}', async () => {
-    let rejected = false
+    const rejections: unknown[] = []
     const out = await captureStdout(async () => {
       try {
         await runHook({
@@ -47,16 +47,16 @@ describe('hook fail-soft contract (safeRun)', () => {
             throw new Error('boom in build')
           },
         })
-      } catch {
-        rejected = true
+      } catch (error) {
+        rejections.push(error)
       }
     })
-    expect(rejected).toBe(false)
+    expect(rejections).toHaveLength(0)
     expect(out).toContain('{}')
   })
 
   test('a throwing afterEmit is swallowed; the built context was already emitted', async () => {
-    let rejected = false
+    const rejections: unknown[] = []
     const out = await captureStdout(async () => {
       try {
         await runHook({
@@ -67,11 +67,11 @@ describe('hook fail-soft contract (safeRun)', () => {
             throw new Error('boom in afterEmit')
           },
         })
-      } catch {
-        rejected = true
+      } catch (error) {
+        rejections.push(error)
       }
     })
-    expect(rejected).toBe(false)
+    expect(rejections).toHaveLength(0)
     // emit() ran before afterEmit threw, so the real context reached stdout.
     expect(out).toContain('CTX_BLOCK_SENTINEL')
   })
@@ -117,7 +117,7 @@ describe('hooks stay non-blocking (passive inject only)', () => {
   }
 
   test('decide throw fails open — no deny, no crash', async () => {
-    let rejected = false
+    const rejections: unknown[] = []
     const out = await captureStdout(async () => {
       try {
         await runHook({
@@ -128,11 +128,11 @@ describe('hooks stay non-blocking (passive inject only)', () => {
           },
           build: async () => 'SHOULD_NOT_MATTER',
         })
-      } catch {
-        rejected = true
+      } catch (error) {
+        rejections.push(error)
       }
     })
-    expect(rejected).toBe(false)
+    expect(rejections).toHaveLength(0)
     expect(out).not.toContain('permissionDecision')
     expect(out).toContain('{}')
   })
@@ -154,8 +154,13 @@ describe('hooks stay non-blocking (passive inject only)', () => {
 
   test('daemon mode detaches afterEmit so it never blocks the response', async () => {
     const chunks: string[] = []
-    let detachedFn: (() => Promise<void>) | null = null
-    let afterEmitRan = false
+    const fixture: {
+      detachedFn: (() => Promise<void>) | null
+      afterEmitRan: boolean
+    } = {
+      detachedFn: null,
+      afterEmitRan: false,
+    }
 
     await runHook(
       {
@@ -163,7 +168,7 @@ describe('hooks stay non-blocking (passive inject only)', () => {
         projectPath: process.cwd(),
         build: async () => 'DAEMON_CTX',
         afterEmit: async () => {
-          afterEmitRan = true
+          fixture.afterEmitRan = true
         },
       },
       {
@@ -172,7 +177,7 @@ describe('hooks stay non-blocking (passive inject only)', () => {
           chunks.push(c)
         },
         detachAfterEmit: (fn) => {
-          detachedFn = fn
+          fixture.detachedFn = fn
         },
       }
     )
@@ -180,9 +185,9 @@ describe('hooks stay non-blocking (passive inject only)', () => {
     // Response already contains context; afterEmit not yet run.
     expect(chunks.join('')).toContain('DAEMON_CTX')
     expect(chunks.join('')).not.toContain('permissionDecision')
-    expect(afterEmitRan).toBe(false)
-    expect(detachedFn).not.toBeNull()
-    await detachedFn!()
-    expect(afterEmitRan).toBe(true)
+    expect(fixture.afterEmitRan).toBe(false)
+    expect(fixture.detachedFn).not.toBeNull()
+    await fixture.detachedFn!()
+    expect(fixture.afterEmitRan).toBe(true)
   })
 })

@@ -10,8 +10,14 @@ import path from 'node:path'
 import pathManager from '../../infrastructure/path-manager'
 import { prjctDb } from '../../storage/database'
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
+
 const original = pathManager.getGlobalProjectPath.bind(pathManager)
 
 // Only the WIRED v2 tables remain (migration 44 dropped the dead forward schema).
@@ -59,21 +65,21 @@ const DROPPED_TABLES = [
 
 describe('Schema v2 tables (migration 37)', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-schema-v2-'))
-    projectId = `schemav2-${Math.random().toString(36).slice(2, 10)}`
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
-    prjctDb.getDb(projectId)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-schema-v2-'))
+    fixture.projectId = `schemav2-${Math.random().toString(36).slice(2, 10)}`
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
+    prjctDb.getDb(fixture.projectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
     pathManager.getGlobalProjectPath = original
-    await fs.rm(tmpRoot, { recursive: true, force: true })
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('creates every v2 table', () => {
     const rows = prjctDb.query<{ name: string }>(
-      projectId,
+      fixture.projectId,
       "SELECT name FROM sqlite_master WHERE type='table'"
     )
     const names = new Set(rows.map((r) => r.name))
@@ -81,39 +87,39 @@ describe('Schema v2 tables (migration 37)', () => {
       expect(names.has(t)).toBe(true)
     }
     // Dead forward-schema tables were dropped (migration 44).
-    for (const t of DROPPED_TABLES) {
-      expect(names.has(t)).toBe(false)
+    for (const t2 of DROPPED_TABLES) {
+      expect(names.has(t2)).toBe(false)
     }
   })
 
   it('passes integrity_check and foreign_key_check', () => {
     const integrity = prjctDb.query<{ integrity_check: string }>(
-      projectId,
+      fixture.projectId,
       'PRAGMA integrity_check'
     )
     expect(integrity[0]?.integrity_check ?? integrity[0]).toBeDefined()
     const integrityVal = Object.values(integrity[0] ?? {})[0]
     expect(integrityVal).toBe('ok')
-    const fkViolations = prjctDb.query(projectId, 'PRAGMA foreign_key_check')
+    const fkViolations = prjctDb.query(fixture.projectId, 'PRAGMA foreign_key_check')
     expect(fkViolations.length).toBe(0)
   })
 
   it('token_usage rejects out-of-range and enforces event_key uniqueness', () => {
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       "INSERT INTO token_usage (id, work_cycle_id, event_key, source, input_tokens, output_tokens) VALUES ('t1','c1','k1','mcp',100,50)"
     )
     // duplicate event_key must fail
     expect(() =>
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         "INSERT INTO token_usage (id, work_cycle_id, event_key, source, input_tokens, output_tokens) VALUES ('t2','c1','k1','mcp',1,1)"
       )
     ).toThrow()
     // CHECK upper bound must fail
     expect(() =>
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         "INSERT INTO token_usage (id, work_cycle_id, event_key, source, input_tokens, output_tokens) VALUES ('t3','c1','k2','mcp',999999999,1)"
       )
     ).toThrow()

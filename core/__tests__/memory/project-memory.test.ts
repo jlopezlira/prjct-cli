@@ -30,36 +30,41 @@ async function writeMemoryEntry(args: {
   content: string
   tags?: Record<string, string>
 }): Promise<void> {
-  prjctDb.appendEvent(projectId, `memory.remember.${args.type}`, {
+  prjctDb.appendEvent(fixture.projectId, `memory.remember.${args.type}`, {
     content: args.content,
     tags: args.tags ?? {},
     provenance: 'declared',
   })
 }
 
-let tmpRoot: string
-let projectId: string
+const fixture: {
+  tmpRoot: string
+  projectId: string
+} = {
+  tmpRoot: '',
+  projectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 const originalGetStoragePath = pathManager.getStoragePath.bind(pathManager)
 const originalGetFilePath = pathManager.getFilePath.bind(pathManager)
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-memory-test-'))
-  projectId = `test-mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-memory-test-'))
+  fixture.projectId = `test-mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-  pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+  pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
   pathManager.getStoragePath = (id: string, filename: string) =>
-    path.join(tmpRoot, id, 'storage', filename)
+    path.join(fixture.tmpRoot, id, 'storage', filename)
   pathManager.getFilePath = (id: string, layer: string, filename: string) =>
-    path.join(tmpRoot, id, layer, filename)
+    path.join(fixture.tmpRoot, id, layer, filename)
 })
 
 afterEach(async () => {
   pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
   pathManager.getStoragePath = originalGetStoragePath
   pathManager.getFilePath = originalGetFilePath
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('projectMemory.recall — dedupeByKey', () => {
@@ -75,7 +80,7 @@ describe('projectMemory.recall — dedupeByKey', () => {
       tags: {},
     })
 
-    const entries = projectMemory.recall(projectId, { types: ['decision'] })
+    const entries = projectMemory.recall(fixture.projectId, { types: ['decision'] })
     expect(entries.length).toBe(2)
   })
 
@@ -93,7 +98,7 @@ describe('projectMemory.recall — dedupeByKey', () => {
       tags: { key: 'package-manager' },
     })
 
-    const entries = projectMemory.recall(projectId, { types: ['decision'] })
+    const entries = projectMemory.recall(fixture.projectId, { types: ['decision'] })
     expect(entries.length).toBe(1)
     expect(entries[0].content).toBe('updated: use bun')
   })
@@ -110,7 +115,7 @@ describe('projectMemory.recall — dedupeByKey', () => {
       tags: { key: 'retry-strategy' },
     })
 
-    const entries = projectMemory.recall(projectId, { types: ['decision', 'gotcha'] })
+    const entries = projectMemory.recall(fixture.projectId, { types: ['decision', 'gotcha'] })
     expect(entries.length).toBe(2)
   })
 
@@ -137,7 +142,7 @@ describe('projectMemory.recall — dedupeByKey', () => {
       tags: {},
     })
 
-    const entries = projectMemory.recall(projectId, { types: ['learning'] })
+    const entries = projectMemory.recall(fixture.projectId, { types: ['learning'] })
     expect(entries.length).toBe(3)
     const contents = entries.map((e) => e.content).sort()
     expect(contents).toContain('no-key learning A')
@@ -159,7 +164,7 @@ describe('projectMemory.recall — dedupeByKey', () => {
       tags: { key: 'router' },
     })
 
-    const entries = projectMemory.recall(projectId, {
+    const entries = projectMemory.recall(fixture.projectId, {
       types: ['decision'],
       dedupeByKey: false,
     })
@@ -176,25 +181,25 @@ describe('projectMemory.getById — resolve an opaque mem_N reference', () => {
       content: 'pick Bun over Node',
       tags: { topic: 'rt' },
     })
-    const [e] = projectMemory.recall(projectId, { types: ['decision'] })
+    const [e] = projectMemory.recall(fixture.projectId, { types: ['decision'] })
     expect(e.id).toMatch(/^mem_\d+$/)
 
-    const byMem = projectMemory.getById(projectId, e.id)
+    const byMem = projectMemory.getById(fixture.projectId, e.id)
     expect(byMem).not.toBeNull()
     expect(byMem?.content).toBe('pick Bun over Node')
     expect(byMem?.type).toBe('decision')
     expect(byMem?.tags).toEqual({ topic: 'rt' })
 
     // Bare numeric and mem- variants resolve the same row.
-    const bare = projectMemory.getById(projectId, e.id.replace('mem_', ''))
+    const bare = projectMemory.getById(fixture.projectId, e.id.replace('mem_', ''))
     expect(bare?.id).toBe(e.id)
-    expect(projectMemory.getById(projectId, e.id.replace('_', '-'))?.id).toBe(e.id)
+    expect(projectMemory.getById(fixture.projectId, e.id.replace('_', '-'))?.id).toBe(e.id)
   })
 
   it('returns null for a non-existent / malformed id (no throw)', () => {
-    expect(projectMemory.getById(projectId, 'mem_999999')).toBeNull()
-    expect(projectMemory.getById(projectId, 'not-an-id')).toBeNull()
-    expect(projectMemory.getById(projectId, '')).toBeNull()
+    expect(projectMemory.getById(fixture.projectId, 'mem_999999')).toBeNull()
+    expect(projectMemory.getById(fixture.projectId, 'not-an-id')).toBeNull()
+    expect(projectMemory.getById(fixture.projectId, '')).toBeNull()
   })
 })
 
@@ -423,13 +428,13 @@ describe('projectMemory.searchFts — BM25 relevance over recency', () => {
     // The FTS trigger (migration 42) indexes it; tags go to the child table.
     const createdMs = Date.parse(now) || Date.now()
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT OR REPLACE INTO memory_entries
          (id, project_id, type, title, content, file, subject, provenance,
           content_hash, user_triggered, revision_count, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'declared', ?, 0, 0, ?, ?)`,
       args.id,
-      projectId,
+      fixture.projectId,
       args.type,
       args.content.slice(0, 80),
       args.content,
@@ -439,10 +444,10 @@ describe('projectMemory.searchFts — BM25 relevance over recency', () => {
       createdMs,
       createdMs
     )
-    prjctDb.run(projectId, 'DELETE FROM memory_entry_tags WHERE entry_id = ?', args.id)
+    prjctDb.run(fixture.projectId, 'DELETE FROM memory_entry_tags WHERE entry_id = ?', args.id)
     for (const [k, v] of Object.entries(tags)) {
       prjctDb.run(
-        projectId,
+        fixture.projectId,
         'INSERT OR IGNORE INTO memory_entry_tags (entry_id, key, value, is_machine) VALUES (?, ?, ?, 0)',
         args.id,
         k,
@@ -454,7 +459,7 @@ describe('projectMemory.searchFts — BM25 relevance over recency', () => {
   it('returns the topically-relevant entry even when it is older than recency-window misses', () => {
     // 20 unrelated newer entries, then the relevant one. Without FTS,
     // the recency window of 16 would never see the OAuth memory.
-    for (let i = 0; i < 20; i++) {
+    for (const i of Array.from({ length: 20 }, (_, index) => index)) {
       writeMemoryRow({
         id: `mem_noise_${i}`,
         type: 'fact',
@@ -470,7 +475,7 @@ describe('projectMemory.searchFts — BM25 relevance over recency', () => {
       createdAt: '2025-12-15T00:00:00Z', // older than the noise
     })
 
-    const hits = projectMemory.searchFts(projectId, ['oauth'], 4)
+    const hits = projectMemory.searchFts(fixture.projectId, ['oauth'], 4)
     expect(hits.length).toBeGreaterThan(0)
     expect(hits.some((e) => e.id === 'mem_oauth')).toBe(true)
   })
@@ -481,12 +486,12 @@ describe('projectMemory.searchFts — BM25 relevance over recency', () => {
       type: 'fact',
       content: 'totally unrelated topic',
     })
-    const hits = projectMemory.searchFts(projectId, ['nonexistentkeyword'], 4)
+    const hits = projectMemory.searchFts(fixture.projectId, ['nonexistentkeyword'], 4)
     expect(hits).toEqual([])
   })
 
   it('returns an empty array when keywords is empty (no MATCH built)', () => {
-    expect(projectMemory.searchFts(projectId, [], 4)).toEqual([])
+    expect(projectMemory.searchFts(fixture.projectId, [], 4)).toEqual([])
   })
 
   it('sanitizes FTS5 reserved tokens so a literal OR in the prompt does not blow up', () => {
@@ -496,23 +501,23 @@ describe('projectMemory.searchFts — BM25 relevance over recency', () => {
       content: 'we chose Stripe for billing',
     })
     // 'OR' is an FTS5 reserved operator; sanitization should strip it.
-    const hits = projectMemory.searchFts(projectId, ['stripe', 'OR', 'billing'], 4)
+    const hits = projectMemory.searchFts(fixture.projectId, ['stripe', 'OR', 'billing'], 4)
     expect(hits.some((e) => e.id === 'mem_stripe')).toBe(true)
   })
 })
 
 describe('projectMemory.countByType / recallByType — hot-path exact-type queries', () => {
   it('countByType returns the true count, uncapped', async () => {
-    for (let i = 0; i < 7; i++) {
+    for (const i of Array.from({ length: 7 }, (_, index) => index)) {
       await writeMemoryEntry({ type: 'inbox', content: `inbox item ${i}` })
     }
     await writeMemoryEntry({ type: 'decision', content: 'not an inbox item' })
-    expect(projectMemory.countByType(projectId, 'inbox')).toBe(7)
-    expect(projectMemory.countByType(projectId, 'decision')).toBe(1)
+    expect(projectMemory.countByType(fixture.projectId, 'inbox')).toBe(7)
+    expect(projectMemory.countByType(fixture.projectId, 'decision')).toBe(1)
   })
 
   it('countByType returns 0 for a type with no entries', () => {
-    expect(projectMemory.countByType(projectId, 'nonexistent-type')).toBe(0)
+    expect(projectMemory.countByType(fixture.projectId, 'nonexistent-type')).toBe(0)
   })
 
   it('recallByType returns only the exact type, newest-first, within limit', async () => {
@@ -521,7 +526,7 @@ describe('projectMemory.countByType / recallByType — hot-path exact-type queri
     await writeMemoryEntry({ type: 'improvement-signal', content: 'signal two' })
     await writeMemoryEntry({ type: 'improvement-signal', content: 'signal three' })
 
-    const got = projectMemory.recallByType(projectId, 'improvement-signal', 2)
+    const got = projectMemory.recallByType(fixture.projectId, 'improvement-signal', 2)
     expect(got.length).toBe(2)
     expect(got.every((e) => e.type === 'improvement-signal')).toBe(true)
     // Newest-first (id DESC): signal three before signal two.
@@ -530,7 +535,7 @@ describe('projectMemory.countByType / recallByType — hot-path exact-type queri
   })
 
   it('recallByType returns [] for limit 0', () => {
-    expect(projectMemory.recallByType(projectId, 'improvement-signal', 0)).toEqual([])
+    expect(projectMemory.recallByType(fixture.projectId, 'improvement-signal', 0)).toEqual([])
   })
 })
 
@@ -539,13 +544,13 @@ describe('projectMemory.forget', () => {
     // Single-source: seed memory_entries (the table searchFts/recall read).
     const createdMs = Date.now()
     prjctDb.run(
-      projectId,
+      fixture.projectId,
       `INSERT OR REPLACE INTO memory_entries
          (id, project_id, type, title, content, provenance, content_hash,
           user_triggered, revision_count, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 'declared', ?, 0, 0, ?, ?)`,
       args.id,
-      projectId,
+      fixture.projectId,
       args.type,
       args.content.slice(0, 80),
       args.content,
@@ -557,32 +562,32 @@ describe('projectMemory.forget', () => {
 
   it('removes a remembered entry from recall', async () => {
     await writeMemoryEntry({ type: 'decision', content: 'forget me please' })
-    const before = projectMemory.recall(projectId, { types: ['decision'] })
+    const before = projectMemory.recall(fixture.projectId, { types: ['decision'] })
     const target = before.find((e) => e.content === 'forget me please')
     expect(target).toBeDefined()
 
-    const ok = projectMemory.forget(projectId, target!.id)
+    const ok = projectMemory.forget(fixture.projectId, target!.id)
     expect(ok).toBe(true)
 
-    const after = projectMemory.recall(projectId, { types: ['decision'] })
+    const after = projectMemory.recall(fixture.projectId, { types: ['decision'] })
     expect(after.some((e) => e.id === target!.id)).toBe(false)
   })
 
   it('soft-deletes the FTS mirror so searchFts stops returning it', () => {
     writeMemoryRow({ id: 'mem_4242', type: 'fact', content: 'forgettable unique token zorptak' })
-    expect(projectMemory.searchFts(projectId, ['zorptak'], 4).length).toBe(1)
+    expect(projectMemory.searchFts(fixture.projectId, ['zorptak'], 4).length).toBe(1)
     // No event row backs this mirror-only row, but forget still cleans the
     // mirror and reports success (it removed the entry from a read surface).
-    expect(projectMemory.forget(projectId, 'mem_4242')).toBe(true)
-    expect(projectMemory.searchFts(projectId, ['zorptak'], 4).length).toBe(0)
+    expect(projectMemory.forget(fixture.projectId, 'mem_4242')).toBe(true)
+    expect(projectMemory.searchFts(fixture.projectId, ['zorptak'], 4).length).toBe(0)
   })
 
   it('returns false for a non-existent id', () => {
-    expect(projectMemory.forget(projectId, 'mem_999999')).toBe(false)
+    expect(projectMemory.forget(fixture.projectId, 'mem_999999')).toBe(false)
   })
 
   it('returns false for a malformed id', () => {
-    expect(projectMemory.forget(projectId, 'not-an-id')).toBe(false)
+    expect(projectMemory.forget(fixture.projectId, 'not-an-id')).toBe(false)
   })
 })
 
@@ -593,7 +598,7 @@ describe('projectMemory.recallForFile — anticipation (pre-edit)', () => {
       content: 'stale daemon caches old hook code; stop it before testing',
       tags: { file: 'core/daemon/daemon.ts' },
     })
-    const hits = projectMemory.recallForFile(projectId, 'core/daemon/daemon.ts')
+    const hits = projectMemory.recallForFile(fixture.projectId, 'core/daemon/daemon.ts')
     expect(hits.length).toBe(1)
     expect(hits[0]?.type).toBe('gotcha')
   })
@@ -605,7 +610,7 @@ describe('projectMemory.recallForFile — anticipation (pre-edit)', () => {
       tags: { file: 'core/commands/embeddings.ts' },
     })
     const hits = projectMemory.recallForFile(
-      projectId,
+      fixture.projectId,
       '/Users/JJ/Apps/prjct-cli/core/commands/embeddings.ts'
     )
     expect(hits.length).toBe(1)
@@ -617,7 +622,10 @@ describe('projectMemory.recallForFile — anticipation (pre-edit)', () => {
       content: 'friction-detector compared 64-char hash vs 12-char key — never matched',
       tags: { file: 'core/services/friction-detector.ts', pattern: 'recurring-bug' },
     })
-    const hits = projectMemory.recallForFile(projectId, 'core/services/friction-detector.ts')
+    const hits = projectMemory.recallForFile(
+      fixture.projectId,
+      'core/services/friction-detector.ts'
+    )
     expect(hits.length).toBe(1)
     expect(hits[0]?.tags?.pattern).toBe('recurring-bug')
   })
@@ -628,27 +636,29 @@ describe('projectMemory.recallForFile — anticipation (pre-edit)', () => {
       content: 'we keep the dispatcher registry as the single source of truth',
       tags: { file: 'core/hooks/registry.ts' },
     })
-    const hits = projectMemory.recallForFile(projectId, 'core/hooks/registry.ts')
+    const hits = projectMemory.recallForFile(fixture.projectId, 'core/hooks/registry.ts')
     expect(hits).toEqual([])
   })
 
   it('returns an empty array when no memory targets the file', () => {
-    expect(projectMemory.recallForFile(projectId, 'core/some/untouched-file.ts')).toEqual([])
+    expect(projectMemory.recallForFile(fixture.projectId, 'core/some/untouched-file.ts')).toEqual(
+      []
+    )
   })
 
   it('returns an empty array for an empty file path', () => {
-    expect(projectMemory.recallForFile(projectId, '')).toEqual([])
+    expect(projectMemory.recallForFile(fixture.projectId, '')).toEqual([])
   })
 
   it('caps results at the requested limit', async () => {
-    for (let i = 0; i < 5; i++) {
+    for (const i of Array.from({ length: 5 }, (_, index) => index)) {
       await writeMemoryEntry({
         type: 'gotcha',
         content: `trap number ${i} on the hot file`,
         tags: { file: 'core/hot.ts' },
       })
     }
-    expect(projectMemory.recallForFile(projectId, 'core/hot.ts', 2).length).toBe(2)
+    expect(projectMemory.recallForFile(fixture.projectId, 'core/hot.ts', 2).length).toBe(2)
   })
 
   it('includes file-history context by default but excludes it with preventiveOnly', async () => {
@@ -658,10 +668,10 @@ describe('projectMemory.recallForFile — anticipation (pre-edit)', () => {
       tags: { files: 'core/authz.ts' },
     })
     // Default (pull `prjct guard`): history surfaces.
-    const withHistory = projectMemory.recallForFile(projectId, 'core/authz.ts')
+    const withHistory = projectMemory.recallForFile(fixture.projectId, 'core/authz.ts')
     expect(withHistory.some((e) => e.type === 'context')).toBe(true)
     // preventiveOnly (pre-edit push): traps only, no history.
-    const trapsOnly = projectMemory.recallForFile(projectId, 'core/authz.ts', 3, {
+    const trapsOnly = projectMemory.recallForFile(fixture.projectId, 'core/authz.ts', 3, {
       preventiveOnly: true,
     })
     expect(trapsOnly).toEqual([])
@@ -687,7 +697,7 @@ describe('predictive risk briefing — recallRisksForFiles (planning-time)', () 
       tags: { file: 'core/auth.ts' },
     })
     const { recallRisksForFiles } = await import('../../services/task-service')
-    const risks = recallRisksForFiles(projectId, [
+    const risks = recallRisksForFiles(fixture.projectId, [
       { path: 'core/auth.ts', signals: [], reason: '' },
       { path: 'core/auth.ts', signals: [], reason: '' }, // duplicate file → no dup hits
     ])
@@ -703,29 +713,31 @@ describe('predictive risk briefing — recallRisksForFiles (planning-time)', () 
     // path: no traps recorded against an unrelated file → empty briefing.
     const { recallRisksForFiles } = require('../../services/task-service')
     expect(
-      recallRisksForFiles(projectId, [{ path: 'core/untouched.ts', signals: [], reason: '' }])
+      recallRisksForFiles(fixture.projectId, [
+        { path: 'core/untouched.ts', signals: [], reason: '' },
+      ])
     ).toEqual([])
   })
 })
 
 describe('projectMemory.remember — auto-infer tags.file for anticipation', () => {
   beforeEach(async () => {
-    await fs.mkdir(path.join(tmpRoot, '.prjct'), { recursive: true })
+    await fs.mkdir(path.join(fixture.tmpRoot, '.prjct'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpRoot, '.prjct', 'prjct.config.json'),
-      JSON.stringify({ projectId })
+      path.join(fixture.tmpRoot, '.prjct', 'prjct.config.json'),
+      JSON.stringify({ projectId: fixture.projectId })
     )
   })
 
   it('infers file from content path so recallForFile / risks work without explicit tags', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'gotcha',
       content:
         'MutationCache onError always fires with mutation onError — set meta.skipGlobalError in src/lib/api.ts',
-      projectId,
+      projectId: fixture.projectId,
       requireWrite: true,
     })
-    const hits = projectMemory.recallForFile(projectId, 'src/lib/api.ts', 3, {
+    const hits = projectMemory.recallForFile(fixture.projectId, 'src/lib/api.ts', 3, {
       preventiveOnly: true,
     })
     expect(hits.length).toBeGreaterThan(0)
@@ -735,14 +747,14 @@ describe('projectMemory.remember — auto-infer tags.file for anticipation', () 
   })
 
   it('does not override an explicit file tag', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'gotcha',
       content: 'mentions src/other.ts but explicit wins',
       tags: { file: 'src/explicit.ts' },
-      projectId,
+      projectId: fixture.projectId,
       requireWrite: true,
     })
-    const hits = projectMemory.recallForFile(projectId, 'src/explicit.ts', 3, {
+    const hits = projectMemory.recallForFile(fixture.projectId, 'src/explicit.ts', 3, {
       preventiveOnly: true,
     })
     expect(hits.some((h) => h.tags?.file === 'src/explicit.ts')).toBe(true)
@@ -753,31 +765,31 @@ describe('projectMemory.remember — auto-infer tags.file for anticipation', () 
 describe('projectMemory.remember — topic-key UPSERT (write-side supersession)', () => {
   // remember() resolves the project from the path's config — give tmpRoot one.
   beforeEach(async () => {
-    await fs.mkdir(path.join(tmpRoot, '.prjct'), { recursive: true })
+    await fs.mkdir(path.join(fixture.tmpRoot, '.prjct'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpRoot, '.prjct', 'prjct.config.json'),
-      JSON.stringify({ projectId })
+      path.join(fixture.tmpRoot, '.prjct', 'prjct.config.json'),
+      JSON.stringify({ projectId: fixture.projectId })
     )
   })
 
   it('a re-capture with the same topic tag supersedes the old entry at the STORE level', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'auth model v1: sessions in cookies',
       tags: { topic: 'architecture/auth-model' },
-      projectId,
+      projectId: fixture.projectId,
     })
     await new Promise((r) => setTimeout(r, 5))
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'auth model v2: JWT + refresh rotation',
       tags: { topic: 'architecture/auth-model' },
-      projectId,
+      projectId: fixture.projectId,
     })
 
     // Old version is soft-deleted in the store (not just hidden at read time).
     const active = prjctDb.query<{ content: string; topic_key: string; revision_count: number }>(
-      projectId,
+      fixture.projectId,
       "SELECT content, topic_key, revision_count FROM memory_entries WHERE type = 'decision' AND deleted_at IS NULL"
     )
     expect(active).toHaveLength(1)
@@ -785,38 +797,38 @@ describe('projectMemory.remember — topic-key UPSERT (write-side supersession)'
     expect(active[0].topic_key).toBe('architecture/auth-model')
     expect(active[0].revision_count).toBe(1) // lineage: one prior version
     const superseded = prjctDb.get<{ c: number }>(
-      projectId,
+      fixture.projectId,
       "SELECT COUNT(*) AS c FROM memory_entries WHERE type = 'decision' AND deleted_at IS NOT NULL"
     )
     expect(superseded?.c).toBe(1)
   })
 
   it('different topics never supersede each other; untagged captures still accumulate', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'topic A decision',
       tags: { topic: 'a' },
-      projectId,
+      projectId: fixture.projectId,
     })
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'topic B decision',
       tags: { topic: 'b' },
-      projectId,
+      projectId: fixture.projectId,
     })
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'untagged decision one',
-      projectId,
+      projectId: fixture.projectId,
     })
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'untagged decision two',
-      projectId,
+      projectId: fixture.projectId,
     })
 
     const active = prjctDb.get<{ c: number }>(
-      projectId,
+      fixture.projectId,
       "SELECT COUNT(*) AS c FROM memory_entries WHERE type = 'decision' AND deleted_at IS NULL"
     )
     expect(active?.c).toBe(4) // nothing superseded
@@ -824,22 +836,22 @@ describe('projectMemory.remember — topic-key UPSERT (write-side supersession)'
 
   it('legacy `key`-tagged entries are superseded by a new capture with the same key', async () => {
     // Legacy entry captured before topic_key existed (tag row only).
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'gotcha',
       content: 'old trap description',
       tags: { key: 'daemon-restart' },
-      projectId,
+      projectId: fixture.projectId,
     })
     await new Promise((r) => setTimeout(r, 5))
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'gotcha',
       content: 'updated trap description',
       tags: { key: 'daemon-restart' },
-      projectId,
+      projectId: fixture.projectId,
     })
 
     const active = prjctDb.query<{ content: string }>(
-      projectId,
+      fixture.projectId,
       "SELECT content FROM memory_entries WHERE type = 'gotcha' AND deleted_at IS NULL"
     )
     expect(active).toHaveLength(1)
@@ -849,39 +861,39 @@ describe('projectMemory.remember — topic-key UPSERT (write-side supersession)'
 
 describe('topic supersession — edge-case hardening (cleanup sweep)', () => {
   beforeEach(async () => {
-    await fs.mkdir(path.join(tmpRoot, '.prjct'), { recursive: true })
+    await fs.mkdir(path.join(fixture.tmpRoot, '.prjct'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpRoot, '.prjct', 'prjct.config.json'),
-      JSON.stringify({ projectId })
+      path.join(fixture.tmpRoot, '.prjct', 'prjct.config.json'),
+      JSON.stringify({ projectId: fixture.projectId })
     )
   })
 
   it('dedup-hit with a topic tag FOLDS the topic into the existing entry and supersedes others', async () => {
     // Older revision of the topic.
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'runtime: node',
       tags: { topic: 'runtime' },
-      projectId,
+      projectId: fixture.projectId,
     })
     // Untagged capture (no topic identity yet).
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'runtime: bun',
-      projectId,
+      projectId: fixture.projectId,
     })
     await new Promise((r) => setTimeout(r, 5))
     // Re-capture of the SAME content, now claiming the topic → dedup hits,
     // but the fold-in must stamp topic_key and supersede the 'node' revision.
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'runtime: bun',
       tags: { topic: 'runtime' },
-      projectId,
+      projectId: fixture.projectId,
     })
 
     const active = prjctDb.query<{ content: string; topic_key: string | null }>(
-      projectId,
+      fixture.projectId,
       "SELECT content, topic_key FROM memory_entries WHERE type = 'decision' AND deleted_at IS NULL"
     )
     expect(active).toHaveLength(1)
@@ -890,11 +902,11 @@ describe('topic supersession — edge-case hardening (cleanup sweep)', () => {
   })
 
   it('a failed event write must NOT tombstone the topic (supersession gated on eventId)', async () => {
-    await projectMemory.remember(tmpRoot, {
+    await projectMemory.remember(fixture.tmpRoot, {
       type: 'decision',
       content: 'the only active revision',
       tags: { topic: 'fragile' },
-      projectId,
+      projectId: fixture.projectId,
     })
     // Simulate the log failure path: call supersession the way remember()
     // GATES it — with no successful event, applyTopicSupersession is never
@@ -904,10 +916,10 @@ describe('topic supersession — edge-case hardening (cleanup sweep)', () => {
       type: 'decision',
       content: 'new revision that never lands',
       tags: { topic: 'fragile' },
-      projectId,
+      projectId: fixture.projectId,
     })
     const active = prjctDb.get<{ c: number }>(
-      projectId,
+      fixture.projectId,
       "SELECT COUNT(*) AS c FROM memory_entries WHERE topic_key = 'fragile' AND deleted_at IS NULL"
     )
     expect(active?.c).toBe(1) // the old revision was NOT tombstoned
@@ -919,10 +931,10 @@ describe('topic supersession — edge-case hardening (cleanup sweep)', () => {
     })
     try {
       await expect(
-        projectMemory.remember(tmpRoot, {
+        projectMemory.remember(fixture.tmpRoot, {
           type: 'decision',
           content: 'required memory must not report success',
-          projectId,
+          projectId: fixture.projectId,
           requireWrite: true,
         })
       ).rejects.toThrow('attempt to write a readonly database')

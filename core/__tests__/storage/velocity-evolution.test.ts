@@ -19,7 +19,11 @@ import { prjctDb } from '../../storage/database'
 import { shippedStorage } from '../../storage/shipped-storage'
 import { epochWeek, velocityStorage } from '../../storage/velocity-storage'
 
-let tmpRoot: string
+const fixture: {
+  tmpRoot: string
+} = {
+  tmpRoot: '',
+}
 const pid = 'test-velocity-evo'
 const origGlobal = pathManager.getGlobalProjectPath.bind(pathManager)
 const origFile = pathManager.getFilePath.bind(pathManager)
@@ -28,12 +32,12 @@ const iso = (daysAgo: number) => new Date(Date.now() - daysAgo * 86400000).toISO
 describe('velocity — computed weekly sprints from typed delivery data', () => {
   beforeEach(async () => {
     prjctDb.close()
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-velo-'))
-    pathManager.getGlobalProjectPath = (id: string) => path.join(tmpRoot, id)
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-velo-'))
+    pathManager.getGlobalProjectPath = (id: string) => path.join(fixture.tmpRoot, id)
     pathManager.getFilePath = (id: string, layer: string, filename: string) =>
-      path.join(tmpRoot, id, layer, filename)
-    await fs.mkdir(path.join(tmpRoot, pid, 'sync'), { recursive: true })
-    await fs.writeFile(path.join(tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
+      path.join(fixture.tmpRoot, id, layer, filename)
+    await fs.mkdir(path.join(fixture.tmpRoot, pid, 'sync'), { recursive: true })
+    await fs.writeFile(path.join(fixture.tmpRoot, pid, 'sync', 'pending.json'), '[]', 'utf-8')
     prjctDb.getDb(pid)
   })
 
@@ -41,7 +45,7 @@ describe('velocity — computed weekly sprints from typed delivery data', () => 
     prjctDb.close()
     pathManager.getGlobalProjectPath = origGlobal
     pathManager.getFilePath = origFile
-    if (tmpRoot) await fs.rm(tmpRoot, { recursive: true, force: true })
+    if (fixture.tmpRoot) await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
   })
 
   it('recompute derives sprints from ships + completed tasks and persists typed rows', async () => {

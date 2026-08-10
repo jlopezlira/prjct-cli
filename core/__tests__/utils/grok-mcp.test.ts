@@ -8,23 +8,28 @@ import os from 'node:os'
 import path from 'node:path'
 import { ensureGrokMcpServer, grokHasPrjctMcpServer } from '../../utils/grok-mcp'
 
-let dir: string
-let configPath: string
+const fixture: {
+  dir: string
+  configPath: string
+} = {
+  dir: '',
+  configPath: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-grok-mcp-test-'))
-  configPath = path.join(dir, 'config.toml')
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-grok-mcp-test-'))
+  fixture.configPath = path.join(fixture.dir, 'config.toml')
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('ensureGrokMcpServer', () => {
   it('creates config.toml with the prjct server when missing', async () => {
-    const r = await ensureGrokMcpServer(configPath)
+    const r = await ensureGrokMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('[mcp_servers.prjct]')
     expect(body).toContain('# prjct:mcp:start')
     expect(body).toContain('# prjct:mcp:end')
@@ -33,51 +38,51 @@ describe('ensureGrokMcpServer', () => {
 
   it('appends to an existing config without touching user content', async () => {
     const user = '[models]\ndefault = "grok-build"\n'
-    await fs.writeFile(configPath, user, 'utf-8')
+    await fs.writeFile(fixture.configPath, user, 'utf-8')
 
-    const r = await ensureGrokMcpServer(configPath)
+    const r = await ensureGrokMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('default = "grok-build"')
     expect(body.indexOf('[models]')).toBeLessThan(body.indexOf('[mcp_servers.prjct]'))
   })
 
   it('replaces a stale managed block in place', async () => {
-    await ensureGrokMcpServer(configPath)
-    const before = await fs.readFile(configPath, 'utf-8')
+    await ensureGrokMcpServer(fixture.configPath)
+    const before = await fs.readFile(fixture.configPath, 'utf-8')
     const stale = before.replace(/command = "[^"]*"/, 'command = "old-binary"')
-    await fs.writeFile(configPath, stale, 'utf-8')
+    await fs.writeFile(fixture.configPath, stale, 'utf-8')
 
-    const r = await ensureGrokMcpServer(configPath)
+    const r = await ensureGrokMcpServer(fixture.configPath)
     expect(r.changed).toBe(true)
-    const after = await fs.readFile(configPath, 'utf-8')
+    const after = await fs.readFile(fixture.configPath, 'utf-8')
     expect(after).not.toContain('old-binary')
     expect(after.split('[mcp_servers.prjct]').length - 1).toBe(1)
   })
 
   it('is idempotent — second run reports unchanged', async () => {
-    await ensureGrokMcpServer(configPath)
-    const first = await fs.readFile(configPath, 'utf-8')
-    const r = await ensureGrokMcpServer(configPath)
+    await ensureGrokMcpServer(fixture.configPath)
+    const first = await fs.readFile(fixture.configPath, 'utf-8')
+    const r = await ensureGrokMcpServer(fixture.configPath)
     expect(r.changed).toBe(false)
-    expect(await fs.readFile(configPath, 'utf-8')).toBe(first)
+    expect(await fs.readFile(fixture.configPath, 'utf-8')).toBe(first)
   })
 
   it('preserves a user-managed [mcp_servers.prjct] entry', async () => {
     const user = '[mcp_servers.prjct]\ncommand = "my-custom-wrapper"\nargs = []\n'
-    await fs.writeFile(configPath, user, 'utf-8')
+    await fs.writeFile(fixture.configPath, user, 'utf-8')
 
-    const r = await ensureGrokMcpServer(configPath)
+    const r = await ensureGrokMcpServer(fixture.configPath)
     expect(r.changed).toBe(false)
     expect(r.skipped).toBe('user-managed')
-    const body = await fs.readFile(configPath, 'utf-8')
+    const body = await fs.readFile(fixture.configPath, 'utf-8')
     expect(body).toContain('command = "my-custom-wrapper"')
     expect(body).not.toContain('# prjct:mcp:start')
   })
 
   it('grokHasPrjctMcpServer detects managed block', async () => {
-    expect(await grokHasPrjctMcpServer(configPath)).toBe(false)
-    await ensureGrokMcpServer(configPath)
-    expect(await grokHasPrjctMcpServer(configPath)).toBe(true)
+    expect(await grokHasPrjctMcpServer(fixture.configPath)).toBe(false)
+    await ensureGrokMcpServer(fixture.configPath)
+    expect(await grokHasPrjctMcpServer(fixture.configPath)).toBe(true)
   })
 })

@@ -24,7 +24,7 @@ function writeAnalysisChildren(db: SqliteDatabase, analysisId: string, a: LLMAna
   const finding = db.prepare(
     'INSERT INTO analysis_finding (id, analysis_id, kind, title, detail, severity, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'
   )
-  let i = 0
+  const findingIds: string[] = []
   const addFinding = (
     kind: string,
     title: string,
@@ -32,8 +32,10 @@ function writeAnalysisChildren(db: SqliteDatabase, analysisId: string, a: LLMAna
     severity: string | null
   ) => {
     if (!title) return
-    finding.run(`${analysisId}-f${i}`, analysisId, kind, title, detail, severity, i)
-    i++
+    const sortOrder = findingIds.length
+    const findingId = `${analysisId}-f${sortOrder}`
+    finding.run(findingId, analysisId, kind, title, detail, severity, sortOrder)
+    findingIds.push(findingId)
   }
   for (const p of a.patterns ?? []) addFinding('pattern', p.name, p.description, null)
   for (const ap of a.antiPatterns ?? [])
@@ -45,7 +47,7 @@ function writeAnalysisChildren(db: SqliteDatabase, analysisId: string, a: LLMAna
   for (const rf of a.refactorSuggestions ?? [])
     addFinding('refactor', rf.description, rf.benefit, null)
   for (const ins of a.projectInsights ?? []) addFinding('insight', ins, null, null)
-  for (const ins of a.architecture?.insights ?? []) addFinding('insight', ins, null, null)
+  for (const ins2 of a.architecture?.insights ?? []) addFinding('insight', ins2, null, null)
 
   const conv = db.prepare(
     'INSERT INTO analysis_convention (id, analysis_id, rule, sort_order) VALUES (?, ?, ?, ?)'
@@ -57,19 +59,22 @@ function writeAnalysisChildren(db: SqliteDatabase, analysisId: string, a: LLMAna
   const stack = db.prepare(
     'INSERT INTO analysis_stack_item (id, analysis_id, kind, name) VALUES (?, ?, ?, ?)'
   )
-  let si = 0
-  for (const lang of a.stack?.languages ?? [])
-    stack.run(`${analysisId}-s${si++}`, analysisId, 'language', lang)
-  for (const fw of a.stack?.frameworks ?? [])
-    stack.run(`${analysisId}-s${si++}`, analysisId, 'framework', fw)
+  const stackItems = [
+    ...(a.stack?.languages ?? []).map((name) => ({ kind: 'language', name })),
+    ...(a.stack?.frameworks ?? []).map((name) => ({ kind: 'framework', name })),
+  ]
+  stackItems.forEach((item, index) => {
+    stack.run(`${analysisId}-s${index}`, analysisId, item.kind, item.name)
+  })
 
   const cmd = db.prepare(
     'INSERT INTO analysis_command (id, analysis_id, name, command, purpose) VALUES (?, ?, ?, ?, ?)'
   )
-  let ci = 0
-  for (const [name, command] of Object.entries(a.commands ?? {})) {
-    if (command) cmd.run(`${analysisId}-cmd${ci++}`, analysisId, name, command, null)
-  }
+  Object.entries(a.commands ?? {})
+    .filter((entry): entry is [string, string] => Boolean(entry[1]))
+    .forEach(([name, command], index) => {
+      cmd.run(`${analysisId}-cmd${index}`, analysisId, name, command, null)
+    })
 
   const dom = db.prepare(
     'INSERT INTO analysis_domain (id, analysis_id, name, paths) VALUES (?, ?, ?, ?)'

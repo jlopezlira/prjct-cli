@@ -127,12 +127,13 @@ export function isOnPath(name: PkgManagerName): boolean {
 export function detectInstallerFromRunningBinary(): PkgManagerName | null {
   const candidates = [process.argv[1], process.execPath].filter(Boolean) as string[]
   for (const candidate of candidates) {
-    let real = candidate
-    try {
-      real = require('node:fs').realpathSync(candidate)
-    } catch {
-      // ignore
-    }
+    const real = (() => {
+      try {
+        return require('node:fs').realpathSync(candidate) as string
+      } catch {
+        return candidate
+      }
+    })()
     // Normalize so Windows backslashes match the same markers.
     const p = real.replace(/\\/g, '/').toLowerCase()
     if (p.includes('/.bun/install/global') || p.includes('/.bun/bin/')) return 'bun'
@@ -229,12 +230,13 @@ export function redirectToInstalledPackage(): void {
       const pkgJsonPath = path.join(candidate, 'package.json')
       if (!existsSync(pkgJsonPath)) continue
 
-      let resolved = candidate
-      try {
-        resolved = realpathSync(candidate)
-      } catch {
-        // ignore
-      }
+      const resolved = (() => {
+        try {
+          return realpathSync(candidate)
+        } catch {
+          return candidate
+        }
+      })()
 
       // Skip if the install resolves back to our source tree (e.g. npm link)
       if (sourceRoot && resolved === sourceRoot) continue

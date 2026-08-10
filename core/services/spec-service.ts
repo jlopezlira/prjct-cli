@@ -75,17 +75,18 @@ class SpecService {
     // Auto-context inference (B-CTX): only if `notes` is empty and the
     // caller didn't opt out. The composer reads `findRelevantFiles` +
     // `projectMemory.recall` and returns a tentative Markdown block.
-    let notes = args.content.notes ?? ''
     const autoContext = args.autoContext !== false
-    if (autoContext && !notes.trim()) {
-      const { inferSpecContext, warnNoContextMatch } = await import('./spec-context-inference')
-      const ctx = await inferSpecContext(args.title, projectId, projectPath)
-      if (ctx.empty) {
-        warnNoContextMatch(args.title)
-      } else {
-        notes = ctx.notesBlock
-      }
-    }
+    const declaredNotes = args.content.notes ?? ''
+    const notes =
+      autoContext && !declaredNotes.trim()
+        ? await import('./spec-context-inference').then(
+            async ({ inferSpecContext, warnNoContextMatch }) => {
+              const context = await inferSpecContext(args.title, projectId, projectPath)
+              if (context.empty) warnNoContextMatch(args.title)
+              return context.empty ? declaredNotes : context.notesBlock
+            }
+          )
+        : declaredNotes
 
     const validated = SpecContentSchema.parse({
       goal: args.content.goal,
@@ -155,15 +156,17 @@ class SpecService {
     if (!prev) return null
     const prevHash = computeAuditCandidateHash(prev.content)
     const nextHash = computeAuditCandidateHash(content)
-    let next = content
-    if (prevHash !== nextHash) {
+    const bodyDrifted = prevHash !== nextHash
+    const next = bodyDrifted
+      ? {
+          ...content,
+          reviews: {},
+          selected_reviewers: [],
+          audit_candidate_hash: null,
+        }
+      : content
+    if (bodyDrifted) {
       // C1: body drifted — invalidate lens admission and demote reviewed → draft.
-      next = {
-        ...content,
-        reviews: {},
-        selected_reviewers: [],
-        audit_candidate_hash: null,
-      }
       if (prev.status === 'reviewed' || prev.status === 'in_progress') {
         specStorage.setStatus(projectId, id, 'draft')
       }
@@ -189,10 +192,7 @@ class SpecService {
     // tasks_created_at idempotency. See spec a50b32d1 AC #12.
     const MAX_ATTEMPTS = 3
     const BACKOFF_MS = 50
-    let attempts = 0
-    let winningWriteHappenedHere = false
-    let updated: Spec | null = null
-    while (attempts < MAX_ATTEMPTS) {
+    const attemptReview = async (attempt: number): Promise<Spec | null> => {
       const spec = specStorage.get(projectId, id)
       if (!spec) return null
 
@@ -221,22 +221,16 @@ class SpecService {
         },
       }
       const ok = specStorage.casUpdate(projectId, id, nextContent, spec.updatedAt)
-      if (ok) {
-        winningWriteHappenedHere = true
-        updated = specStorage.get(projectId, id)
-        break
+      if (ok) return specStorage.get(projectId, id)
+      if (attempt + 1 >= MAX_ATTEMPTS) {
+        throw new Error(
+          `SPEC_RECORD_REVIEW_CONFLICT_RETRY_EXHAUSTED: ${MAX_ATTEMPTS} retries failed for spec ${id}`
+        )
       }
-      attempts++
-      if (attempts < MAX_ATTEMPTS) {
-        await new Promise((r) => setTimeout(r, BACKOFF_MS))
-      }
+      await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS))
+      return attemptReview(attempt + 1)
     }
-
-    if (!winningWriteHappenedHere) {
-      throw new Error(
-        `SPEC_RECORD_REVIEW_CONFLICT_RETRY_EXHAUSTED: ${MAX_ATTEMPTS} retries failed for spec ${id}`
-      )
-    }
+    const updated = await attemptReview(0)
 
     if (updated && reviewsGatePassedRelational(projectId, id)) {
       // All SELECTED lenses pass → auto-promote draft to reviewed.

@@ -19,28 +19,34 @@ import type { StalenessStatus } from '../../types/services.js'
 
 // Test Setup
 
-let tmpRoot: string | null = null
-let testProjectId: string
+const fixture: {
+  tmpRoot: string | null
+  testProjectId: string
+} = {
+  tmpRoot: null,
+  testProjectId: '',
+}
+
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 
 describe('StalenessChecker', () => {
   beforeEach(async () => {
-    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-staleness-test-'))
-    testProjectId = 'staleness-test-project'
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-staleness-test-'))
+    fixture.testProjectId = 'staleness-test-project'
 
     // Mock pathManager to use temp directory
     pathManager.getGlobalProjectPath = (projectId: string) => {
-      return path.join(tmpRoot!, projectId)
+      return path.join(fixture.tmpRoot!, projectId)
     }
   })
 
   afterEach(async () => {
-    prjctDb.close(testProjectId)
+    prjctDb.close(fixture.testProjectId)
     pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
 
-    if (tmpRoot) {
-      await fs.rm(tmpRoot, { recursive: true, force: true })
-      tmpRoot = null
+    if (fixture.tmpRoot) {
+      await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+      fixture.tmpRoot = null
     }
   })
 
@@ -49,7 +55,7 @@ describe('StalenessChecker', () => {
   describe('no sync history', () => {
     it('should report stale when no project.json exists', async () => {
       const checker = createStalenessChecker(process.cwd())
-      const status = await checker.check(testProjectId)
+      const status = await checker.check(fixture.testProjectId)
 
       expect(status.isStale).toBe(true)
       expect(status.reason).toContain('No sync history found')
@@ -57,10 +63,13 @@ describe('StalenessChecker', () => {
 
     it('should report stale when no lastSyncCommit in project doc', async () => {
       // Write project doc to SQLite without lastSyncCommit
-      prjctDb.setDoc(testProjectId, 'project', { name: 'test', lastSync: new Date().toISOString() })
+      prjctDb.setDoc(fixture.testProjectId, 'project', {
+        name: 'test',
+        lastSync: new Date().toISOString(),
+      })
 
       const checker = createStalenessChecker(process.cwd())
-      const status = await checker.check(testProjectId)
+      const status = await checker.check(fixture.testProjectId)
 
       expect(status.isStale).toBe(true)
       expect(status.reason).toContain('No sync commit recorded')
@@ -210,13 +219,13 @@ async function withBrokenGit<T>(fn: () => Promise<T>): Promise<T> {
 
 describe('typed git failures (WS1)', () => {
   it('reports "history changed" ONLY on a typed exit (sync commit really gone)', async () => {
-    prjctDb.setDoc(testProjectId, 'project', {
+    prjctDb.setDoc(fixture.testProjectId, 'project', {
       lastSyncCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       lastSync: new Date().toISOString(),
     })
 
     const checker = createStalenessChecker(process.cwd())
-    const status = await checker.check(testProjectId)
+    const status = await checker.check(fixture.testProjectId)
 
     expect(status.isStale).toBe(true)
     expect(status.reason).toContain('history changed')
@@ -224,13 +233,13 @@ describe('typed git failures (WS1)', () => {
 
   it('git infra failure (spawn) → staleness unknown, NEVER "history changed"', async () => {
     if (process.platform === 'win32') return
-    prjctDb.setDoc(testProjectId, 'project', {
+    prjctDb.setDoc(fixture.testProjectId, 'project', {
       lastSyncCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       lastSync: new Date().toISOString(),
     })
 
     await withBrokenGit(async () => {
-      const status = await createStalenessChecker(process.cwd()).check(testProjectId)
+      const status = await createStalenessChecker(process.cwd()).check(fixture.testProjectId)
       expect(status.isStale).toBe(false)
       expect(status.reason).toContain('unknown')
       expect(status.reason).not.toContain('history changed')

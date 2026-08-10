@@ -14,16 +14,21 @@ import {
   uninstallGeminiSettings,
 } from '../../utils/gemini-settings'
 
-let dir: string
-let settingsPath: string
+const fixture: {
+  dir: string
+  settingsPath: string
+} = {
+  dir: '',
+  settingsPath: '',
+}
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-gemini-settings-'))
-  settingsPath = path.join(dir, 'settings.json')
+  fixture.dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-gemini-settings-'))
+  fixture.settingsPath = path.join(fixture.dir, 'settings.json')
 })
 
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.dir, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('geminiHookMaps', () => {
@@ -43,9 +48,9 @@ describe('geminiHookMaps', () => {
 
 describe('ensureGeminiMcpServer', () => {
   it('writes mcpServers.prjct', async () => {
-    const r = await ensureGeminiMcpServer(settingsPath)
+    const r = await ensureGeminiMcpServer(fixture.settingsPath)
     expect(r.changed).toBe(true)
-    const body = JSON.parse(await fs.readFile(settingsPath, 'utf-8')) as {
+    const body = JSON.parse(await fs.readFile(fixture.settingsPath, 'utf-8')) as {
       mcpServers: Record<string, { command?: string; args?: string[] }>
     }
     expect(body.mcpServers.prjct).toBeDefined()
@@ -54,7 +59,7 @@ describe('ensureGeminiMcpServer', () => {
 
   it('preserves other MCP servers', async () => {
     await fs.writeFile(
-      settingsPath,
+      fixture.settingsPath,
       JSON.stringify({
         mcpServers: {
           other: { command: 'echo', args: ['hi'] },
@@ -62,8 +67,8 @@ describe('ensureGeminiMcpServer', () => {
       }),
       'utf-8'
     )
-    await ensureGeminiMcpServer(settingsPath)
-    const body = JSON.parse(await fs.readFile(settingsPath, 'utf-8')) as {
+    await ensureGeminiMcpServer(fixture.settingsPath)
+    const body = JSON.parse(await fs.readFile(fixture.settingsPath, 'utf-8')) as {
       mcpServers: Record<string, unknown>
     }
     expect(body.mcpServers.other).toBeDefined()
@@ -73,9 +78,9 @@ describe('ensureGeminiMcpServer', () => {
 
 describe('installGeminiHooks', () => {
   it('installs managed hooks with PRJCT_HOOK_HOST=gemini', async () => {
-    const r = await installGeminiHooks(settingsPath)
+    const r = await installGeminiHooks(fixture.settingsPath)
     expect(r.hooksWritten).toBeGreaterThan(0)
-    const body = JSON.parse(await fs.readFile(settingsPath, 'utf-8')) as {
+    const body = JSON.parse(await fs.readFile(fixture.settingsPath, 'utf-8')) as {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<Record<string, unknown>> }>>
     }
     expect(body.hooks.SessionStart).toBeDefined()
@@ -89,8 +94,8 @@ describe('installGeminiHooks', () => {
   })
 
   it('is idempotent', async () => {
-    await installGeminiHooks(settingsPath)
-    const r2 = await installGeminiHooks(settingsPath)
+    await installGeminiHooks(fixture.settingsPath)
+    const r2 = await installGeminiHooks(fixture.settingsPath)
     expect(r2.hooksWritten).toBe(0)
     expect(r2.alreadyPresent).toBe(geminiHookMaps().length)
   })
@@ -99,7 +104,7 @@ describe('installGeminiHooks', () => {
 describe('installGeminiSettings + uninstall', () => {
   it('installs both MCP and hooks; uninstall removes only prjct', async () => {
     await fs.writeFile(
-      settingsPath,
+      fixture.settingsPath,
       JSON.stringify({
         mcpServers: { keep: { command: 'true' } },
         hooks: {
@@ -110,15 +115,15 @@ describe('installGeminiSettings + uninstall', () => {
       }),
       'utf-8'
     )
-    const inst = await installGeminiSettings(settingsPath)
+    const inst = await installGeminiSettings(fixture.settingsPath)
     expect(inst.mcpChanged).toBe(true)
     expect(inst.hooksWritten).toBeGreaterThan(0)
 
-    const un = await uninstallGeminiSettings(settingsPath)
+    const un = await uninstallGeminiSettings(fixture.settingsPath)
     expect(un.hooksRemoved).toBeGreaterThan(0)
     expect(un.mcpRemoved).toBe(true)
 
-    const body = JSON.parse(await fs.readFile(settingsPath, 'utf-8')) as {
+    const body = JSON.parse(await fs.readFile(fixture.settingsPath, 'utf-8')) as {
       mcpServers?: Record<string, unknown>
       hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>>
     }

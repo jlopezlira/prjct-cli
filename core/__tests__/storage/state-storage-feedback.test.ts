@@ -22,33 +22,38 @@ import { stateStorage } from '../../storage/state-storage'
 
 // Test Setup
 
-let tmpRoot: string | null = null
-let testProjectId: string
+const fixture: {
+  tmpRoot: string | null
+  testProjectId: string
+} = {
+  tmpRoot: null,
+  testProjectId: '',
+}
 
 const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
 const originalGetStoragePath = pathManager.getStoragePath.bind(pathManager)
 const originalGetFilePath = pathManager.getFilePath.bind(pathManager)
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-feedback-test-'))
-  testProjectId = `test-feedback-${Date.now()}`
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-feedback-test-'))
+  fixture.testProjectId = `test-feedback-${Date.now()}`
 
   pathManager.getGlobalProjectPath = (projectId: string) => {
-    return path.join(tmpRoot!, projectId)
+    return path.join(fixture.tmpRoot!, projectId)
   }
 
   pathManager.getStoragePath = (projectId: string, filename: string) => {
-    return path.join(tmpRoot!, projectId, 'storage', filename)
+    return path.join(fixture.tmpRoot!, projectId, 'storage', filename)
   }
 
   pathManager.getFilePath = (projectId: string, layer: string, filename: string) => {
-    return path.join(tmpRoot!, projectId, layer, filename)
+    return path.join(fixture.tmpRoot!, projectId, layer, filename)
   }
 
-  const storagePath = pathManager.getStoragePath(testProjectId, '')
+  const storagePath = pathManager.getStoragePath(fixture.testProjectId, '')
   await fs.mkdir(storagePath, { recursive: true })
 
-  const syncPath = path.join(tmpRoot!, testProjectId, 'sync')
+  const syncPath = path.join(fixture.tmpRoot!, fixture.testProjectId, 'sync')
   await fs.mkdir(syncPath, { recursive: true })
 })
 
@@ -59,9 +64,9 @@ afterEach(async () => {
   pathManager.getStoragePath = originalGetStoragePath
   pathManager.getFilePath = originalGetFilePath
 
-  if (tmpRoot) {
-    await fs.rm(tmpRoot, { recursive: true, force: true })
-    tmpRoot = null
+  if (fixture.tmpRoot) {
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true })
+    fixture.tmpRoot = null
   }
 })
 
@@ -152,7 +157,7 @@ describe('Feedback Persistence', () => {
       patternsDiscovered: ['Uses Hono framework'],
     }
 
-    const state = await startAndCompleteWithFeedback(testProjectId, task, feedback)
+    const state = await startAndCompleteWithFeedback(fixture.testProjectId, task, feedback)
 
     expect(state.taskHistory).toBeDefined()
     expect(state.taskHistory!.length).toBe(1)
@@ -164,7 +169,7 @@ describe('Feedback Persistence', () => {
   it('should store task without feedback (backward compatible)', async () => {
     const task = createMockTask({ description: 'Task without feedback' })
 
-    const state = await startAndCompleteWithFeedback(testProjectId, task)
+    const state = await startAndCompleteWithFeedback(fixture.testProjectId, task)
 
     expect(state.taskHistory).toBeDefined()
     expect(state.taskHistory!.length).toBe(1)
@@ -174,19 +179,19 @@ describe('Feedback Persistence', () => {
   it('should preserve feedback through FIFO eviction', async () => {
     // Complete first task with feedback
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Pattern from task 1'],
     })
 
     // Complete second task with feedback
     const task2 = createMockTask({ description: 'Task 2' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Pattern from task 2'],
     })
 
-    const state = { taskHistory: await stateStorage.getTaskHistory(testProjectId) }
+    const state = { taskHistory: await stateStorage.getTaskHistory(fixture.testProjectId) }
     expect(state.taskHistory!.length).toBe(2)
     // Most recent first (FIFO)
     expect(state.taskHistory![0].feedback?.patternsDiscovered).toEqual(['Pattern from task 2'])
@@ -205,7 +210,7 @@ describe('Feedback Persistence', () => {
       issuesEncountered: ['ESLint conflicts with Prettier'],
     }
 
-    const state = await startAndCompleteWithFeedback(testProjectId, task, feedback)
+    const state = await startAndCompleteWithFeedback(fixture.testProjectId, task, feedback)
 
     const stored = state.taskHistory![0].feedback!
     expect(stored.stackConfirmed).toEqual(['React 18', 'TypeScript'])
@@ -226,19 +231,19 @@ describe('Feedback Aggregation', () => {
   it('should aggregate patterns from multiple tasks', async () => {
     // Task 1
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Pattern A'],
     })
 
     // Task 2
     const task2 = createMockTask({ description: 'Task 2' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Pattern B'],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.patternsDiscovered).toContain('Pattern A')
     expect(aggregated.patternsDiscovered).toContain('Pattern B')
   })
@@ -246,35 +251,35 @@ describe('Feedback Aggregation', () => {
   it('should deduplicate patterns', async () => {
     // Both tasks discover the same pattern
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Same pattern'],
     })
 
     const task2 = createMockTask({ description: 'Task 2' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Same pattern'],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.patternsDiscovered).toEqual(['Same pattern'])
   })
 
   it('should deduplicate stack confirmations', async () => {
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       stackConfirmed: ['TypeScript', 'React'],
     })
 
     const task2 = createMockTask({ description: 'Task 2' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId, {
       stackConfirmed: ['TypeScript', 'Next.js'],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.stackConfirmed).toContain('TypeScript')
     expect(aggregated.stackConfirmed).toContain('React')
     expect(aggregated.stackConfirmed).toContain('Next.js')
@@ -285,47 +290,47 @@ describe('Feedback Aggregation', () => {
   it('should promote recurring issues to known gotchas', async () => {
     // Same issue encountered twice
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       issuesEncountered: ['ESLint conflicts with Prettier'],
     })
 
     const task2 = createMockTask({ description: 'Task 2' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId, {
       issuesEncountered: ['ESLint conflicts with Prettier'],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.knownGotchas).toContain('ESLint conflicts with Prettier')
   })
 
   it('should NOT promote single-occurrence issues to gotchas', async () => {
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       issuesEncountered: ['One-time issue'],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.issuesEncountered).toContain('One-time issue')
     expect(aggregated.knownGotchas).not.toContain('One-time issue')
   })
 
   it('should aggregate agent accuracy across tasks', async () => {
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       agentAccuracy: [{ agent: 'backend.md', rating: 'helpful' }],
     })
 
     const task2 = createMockTask({ description: 'Task 2' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId, {
       agentAccuracy: [{ agent: 'backend.md', rating: 'inaccurate', note: 'Missing Hono context' }],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.agentAccuracy).toHaveLength(2)
     expect(aggregated.agentAccuracy[0].agent).toBe('backend.md')
     expect(aggregated.agentAccuracy[1].agent).toBe('backend.md')
@@ -334,10 +339,10 @@ describe('Feedback Aggregation', () => {
   it('should return empty aggregation when no feedback exists', async () => {
     // Complete task without feedback
     const task = createMockTask({ description: 'No feedback' })
-    await stateStorage.startTask(testProjectId, task)
-    await stateStorage.completeTask(testProjectId)
+    await stateStorage.startTask(fixture.testProjectId, task)
+    await stateStorage.completeTask(fixture.testProjectId)
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.stackConfirmed).toEqual([])
     expect(aggregated.patternsDiscovered).toEqual([])
     expect(aggregated.agentAccuracy).toEqual([])
@@ -346,7 +351,7 @@ describe('Feedback Aggregation', () => {
   })
 
   it('should return empty aggregation when no tasks exist', async () => {
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.stackConfirmed).toEqual([])
     expect(aggregated.patternsDiscovered).toEqual([])
     expect(aggregated.knownGotchas).toEqual([])
@@ -359,24 +364,24 @@ describe('Mixed Tasks (with and without feedback)', () => {
   it('should handle mix of tasks with and without feedback', async () => {
     // Task 1: with feedback
     const task1 = createMockTask({ description: 'With feedback' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Pattern from task 1'],
     })
 
     // Task 2: without feedback
     const task2 = createMockTask({ description: 'Without feedback' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId)
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId)
 
     // Task 3: with feedback
     const task3 = createMockTask({ description: 'With feedback again' })
-    await stateStorage.startTask(testProjectId, task3)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task3)
+    await stateStorage.completeTask(fixture.testProjectId, {
       patternsDiscovered: ['Pattern from task 3'],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.patternsDiscovered).toContain('Pattern from task 1')
     expect(aggregated.patternsDiscovered).toContain('Pattern from task 3')
     expect(aggregated.patternsDiscovered).toHaveLength(2)
@@ -385,24 +390,24 @@ describe('Mixed Tasks (with and without feedback)', () => {
   it('should correctly count occurrences for gotcha promotion with mixed tasks', async () => {
     // Task 1: encounters issue
     const task1 = createMockTask({ description: 'Task 1' })
-    await stateStorage.startTask(testProjectId, task1)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task1)
+    await stateStorage.completeTask(fixture.testProjectId, {
       issuesEncountered: ['Build fails on M1'],
     })
 
     // Task 2: no feedback
     const task2 = createMockTask({ description: 'Task 2' })
-    await stateStorage.startTask(testProjectId, task2)
-    await stateStorage.completeTask(testProjectId)
+    await stateStorage.startTask(fixture.testProjectId, task2)
+    await stateStorage.completeTask(fixture.testProjectId)
 
     // Task 3: encounters same issue
     const task3 = createMockTask({ description: 'Task 3' })
-    await stateStorage.startTask(testProjectId, task3)
-    await stateStorage.completeTask(testProjectId, {
+    await stateStorage.startTask(fixture.testProjectId, task3)
+    await stateStorage.completeTask(fixture.testProjectId, {
       issuesEncountered: ['Build fails on M1'],
     })
 
-    const aggregated = await stateStorage.getAggregatedFeedback(testProjectId)
+    const aggregated = await stateStorage.getAggregatedFeedback(fixture.testProjectId)
     expect(aggregated.knownGotchas).toContain('Build fails on M1')
   })
 })

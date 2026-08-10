@@ -25,14 +25,20 @@ describe('weak-model A/B release gate', () => {
   })
 
   it('harness intent router beats bare wrap-as-work', () => {
-    let harness = 0
-    let bare = 0
-    for (const f of INTENT_FIXTURES) {
-      if (routeIntent(f.signal) === f.verb) harness++
-      if (routeIntentBare(f.signal) === f.verb) bare++
+    const fixture: {
+      harness: number
+      bare: number
+    } = {
+      harness: 0,
+      bare: 0,
     }
-    expect(harness).toBeGreaterThan(bare)
-    expect(harness / INTENT_FIXTURES.length).toBeGreaterThanOrEqual(0.95)
+
+    for (const f of INTENT_FIXTURES) {
+      if (routeIntent(f.signal) === f.verb) fixture.harness++
+      if (routeIntentBare(f.signal) === f.verb) fixture.bare++
+    }
+    expect(fixture.harness).toBeGreaterThan(fixture.bare)
+    expect(fixture.harness / INTENT_FIXTURES.length).toBeGreaterThanOrEqual(0.95)
   })
 
   it('public demo rows stay fully green', () => {

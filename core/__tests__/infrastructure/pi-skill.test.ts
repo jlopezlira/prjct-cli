@@ -15,11 +15,15 @@ import {
 const PREV_HOME = process.env.HOME
 const PREV_TEST = process.env.PRJCT_TEST_MODE
 
-let home: string
+const fixture: {
+  home: string
+} = {
+  home: '',
+}
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-pi-skill-test-'))
-  process.env.HOME = home
+  fixture.home = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-pi-skill-test-'))
+  process.env.HOME = fixture.home
   process.env.PRJCT_TEST_MODE = '1'
 })
 
@@ -28,7 +32,7 @@ afterEach(async () => {
   else process.env.HOME = PREV_HOME
   if (PREV_TEST === undefined) delete process.env.PRJCT_TEST_MODE
   else process.env.PRJCT_TEST_MODE = PREV_TEST
-  await fs.rm(home, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(fixture.home, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('installPiSkill', () => {

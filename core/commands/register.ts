@@ -31,18 +31,21 @@ export function resetGroupLoaders(): void {
 }
 
 function lazy(factory: () => Promise<object>): () => Promise<object> {
-  let memo: Promise<object> | undefined
+  const cache: { promise?: Promise<object> } = {}
   loaderResetters.push(() => {
-    memo = undefined
+    delete cache.promise
   })
-  return () =>
-    (memo ??= factory().catch((err) => {
+  return () => {
+    if (cache.promise) return cache.promise
+    cache.promise = factory().catch((err) => {
       // A failed load must NOT be memoized: a transient import/constructor
       // error would otherwise poison every command in the group for the
       // daemon's lifetime. Clear the memo so the next dispatch retries.
-      memo = undefined
+      delete cache.promise
       throw err
-    }))
+    })
+    return cache.promise
+  }
 }
 
 /** Exported for manifest-completeness.test.ts, which instantiates every

@@ -7,32 +7,39 @@ import { EvalCommands } from '../../commands/eval'
 import { REGISTERED_VERBS_SET } from '../../commands/verb-names'
 import { execFileAsync } from '../../utils/exec'
 
-let tmpRoot = ''
-let projectPath = ''
-let originalCliHome: string | undefined
-let spies: Array<ReturnType<typeof spyOn>> = []
+const fixture: {
+  tmpRoot: string
+  projectPath: string
+  originalCliHome: string | undefined
+  spies: Array<ReturnType<typeof spyOn>>
+} = {
+  tmpRoot: '',
+  projectPath: '',
+  originalCliHome: undefined as unknown as string | undefined,
+  spies: [],
+}
 
 async function writeFile(relativePath: string, content: string): Promise<void> {
-  const filePath = path.join(projectPath, relativePath)
+  const filePath = path.join(fixture.projectPath, relativePath)
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, content, 'utf-8')
 }
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-eval-command-'))
-  projectPath = path.join(tmpRoot, 'repo')
-  await fs.mkdir(projectPath, { recursive: true })
-  originalCliHome = process.env.PRJCT_CLI_HOME
-  process.env.PRJCT_CLI_HOME = path.join(tmpRoot, 'home')
-  spies.push(spyOn(console, 'log').mockImplementation(() => {}))
-  spies.push(spyOn(console, 'error').mockImplementation(() => {}))
-  await execFileAsync('git', ['init'], { cwd: projectPath })
+  fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-eval-command-'))
+  fixture.projectPath = path.join(fixture.tmpRoot, 'repo')
+  await fs.mkdir(fixture.projectPath, { recursive: true })
+  fixture.originalCliHome = process.env.PRJCT_CLI_HOME
+  process.env.PRJCT_CLI_HOME = path.join(fixture.tmpRoot, 'home')
+  fixture.spies.push(spyOn(console, 'log').mockImplementation(() => {}))
+  fixture.spies.push(spyOn(console, 'error').mockImplementation(() => {}))
+  await execFileAsync('git', ['init'], { cwd: fixture.projectPath })
   await execFileAsync('git', ['config', 'user.email', 'eval-command@example.com'], {
-    cwd: projectPath,
+    cwd: fixture.projectPath,
   })
-  await execFileAsync('git', ['config', 'user.name', 'Eval Command'], { cwd: projectPath })
+  await execFileAsync('git', ['config', 'user.name', 'Eval Command'], { cwd: fixture.projectPath })
   await execFileAsync('git', ['remote', 'add', 'origin', 'git@github.com:acme/prjct-evals.git'], {
-    cwd: projectPath,
+    cwd: fixture.projectPath,
   })
   await writeFile('AGENTS.md', '# Agent contract\n')
   await writeFile('.prjct/prjct.config.json', '{"projectId":"eval-command"}\n')
@@ -47,11 +54,11 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  for (const spy of spies) spy.mockRestore()
-  spies = []
-  if (originalCliHome === undefined) delete process.env.PRJCT_CLI_HOME
-  else process.env.PRJCT_CLI_HOME = originalCliHome
-  await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => undefined)
+  for (const spy of fixture.spies) spy.mockRestore()
+  fixture.spies = []
+  if (fixture.originalCliHome === undefined) delete process.env.PRJCT_CLI_HOME
+  else process.env.PRJCT_CLI_HOME = fixture.originalCliHome
+  await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => undefined)
 })
 
 describe('prjct eval command', () => {
@@ -77,9 +84,9 @@ describe('prjct eval command', () => {
   test('runs, reports, and compares through the command surface', async () => {
     const cmd = new EvalCommands()
 
-    const run = await cmd.eval('run', projectPath, { candidate: 'command-a', md: true })
-    const report = await cmd.eval('report', projectPath, { json: true })
-    const compare = await cmd.eval('compare', projectPath, { candidate: 'command-a' })
+    const run = await cmd.eval('run', fixture.projectPath, { candidate: 'command-a', md: true })
+    const report = await cmd.eval('report', fixture.projectPath, { json: true })
+    const compare = await cmd.eval('compare', fixture.projectPath, { candidate: 'command-a' })
 
     expect(run.success).toBe(true)
     expect(run.runId).toBeString()
@@ -90,9 +97,9 @@ describe('prjct eval command', () => {
   test('compare --publish publishes comparison artifacts in dry-run mode', async () => {
     const cmd = new EvalCommands()
 
-    await cmd.eval('run', projectPath, { candidate: 'baseline-command' })
-    await cmd.eval('run', projectPath, { candidate: 'candidate-command' })
-    const result = await cmd.eval('compare', projectPath, {
+    await cmd.eval('run', fixture.projectPath, { candidate: 'baseline-command' })
+    await cmd.eval('run', fixture.projectPath, { candidate: 'candidate-command' })
+    const result = await cmd.eval('compare', fixture.projectPath, {
       baseline: 'baseline-command',
       candidate: 'candidate-command',
       publish: true,
@@ -117,8 +124,11 @@ describe('prjct eval command', () => {
   test('publish subcommand supports dry-run cloud output', async () => {
     const cmd = new EvalCommands()
 
-    await cmd.eval('run', projectPath, { candidate: 'command-publish' })
-    const published = await cmd.eval('publish', projectPath, { dryRun: true, target: 'cloud' })
+    await cmd.eval('run', fixture.projectPath, { candidate: 'command-publish' })
+    const published = await cmd.eval('publish', fixture.projectPath, {
+      dryRun: true,
+      target: 'cloud',
+    })
 
     expect(published.success).toBe(true)
     expect(published.dryRun).toBe(true)

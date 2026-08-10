@@ -70,8 +70,6 @@ export async function buildProjectState(
   if (!config?.projectId) return null
 
   const lines: string[] = ['# prjct: project state']
-  let hasContent = false
-
   // Active work — most useful single fact. Resolved PER worktree so a parallel
   // agent sees its own work, not a sibling's. Falls back to singular outside a
   // worktree.
@@ -88,24 +86,24 @@ export async function buildProjectState(
         )
       }
       // Loop control — one write returns post-bump task (no second getCurrentTask).
-      let turns = 0
-      let loopVerdict: ReturnType<typeof loopGuardVerdict> | null = null
-      let currentTask: Awaited<ReturnType<typeof stateStorage.getCurrentTask>> = null
-      try {
-        const bumped = await stateStorage.bumpTurnCount(config.projectId)
-        turns = bumped.count
-        currentTask = bumped.task
-        loopVerdict = loopGuardVerdict(config, currentTask)
-      } catch {
-        /* best-effort — never block the state block on the counter */
-      }
+      const { turns, loopVerdict, currentTask } = await (async () => {
+        try {
+          const bumped = await stateStorage.bumpTurnCount(config.projectId)
+          return {
+            turns: bumped.count,
+            currentTask: bumped.task,
+            loopVerdict: loopGuardVerdict(config, bumped.task),
+          }
+        } catch {
+          /* best-effort — never block the state block on the counter */
+          return { turns: 0, currentTask: null, loopVerdict: null }
+        }
+      })()
       if (!loopVerdict?.stopped && turns < STUCK_TURN_THRESHOLD) {
         lines.push(
           '  ↳ Stay on this goal. Each turn, before acting: is this step ADVANCING it? If you have hit the same wall twice, or you are exploring rather than progressing, STOP — re-plan, split the cycle, or ask the user. Do not loop; finish the cycle, then `prjct status done`.'
         )
       }
-      hasContent = true
-
       // Token budget — uses post-bump task (no extra SQLite read).
       try {
         const budget = config.maxTokensPerCycle ?? 0
@@ -162,7 +160,6 @@ export async function buildProjectState(
         if (card.markdown) {
           lines.push('')
           lines.push(card.markdown)
-          hasContent = true
         }
       } catch {
         /* advisory */
@@ -173,19 +170,16 @@ export async function buildProjectState(
         lines.push(
           `- Owner: ${currentTask.ownerAgent}${currentTask.ownerIdentity ? `/${currentTask.ownerIdentity}` : ''}${currentTask.yieldStatus === 'yielded' ? ' (yielded — awaiting accept)' : ''}`
         )
-        hasContent = true
       }
     }
     const others = overview.all.filter((v) => !v.isCurrent)
     if (others.length > 0) {
       lines.push(`- ${others.length} task(s) active in other workspace(s)`)
-      hasContent = true
     }
     if (!overview.current && others.length > 0) {
       lines.push(
         '- This workspace idle but siblings busy — `prjct work` auto-isolates to a worktree when needed'
       )
-      hasContent = true
     }
   } catch {
     /* best-effort */
@@ -253,11 +247,10 @@ export async function buildProjectState(
   for (const line of secondary) {
     if (line) {
       lines.push(line)
-      hasContent = true
     }
   }
 
-  if (!hasContent) return null
+  if (lines.length === 1) return null
   return lines.join('\n')
 }
 
@@ -349,18 +342,21 @@ async function captureGitUncached(projectPath: string): Promise<GitSnapshot> {
   ])
   if (!branch) return empty
 
-  let modified = 0
-  let staged = 0
-  let untracked = 0
-  for (const line of status.split('\n')) {
-    if (!line) continue
-    const code = line.slice(0, 2)
-    if (code.startsWith('??')) untracked++
-    else {
-      if (code[0] !== ' ' && code[0] !== '?') staged++
-      if (code[1] !== ' ') modified++
-    }
-  }
+  const { modified, staged, untracked } = status
+    .split('\n')
+    .filter(Boolean)
+    .reduce(
+      (counts, line) => {
+        const code = line.slice(0, 2)
+        if (code.startsWith('??')) counts.untracked++
+        else {
+          if (code[0] !== ' ' && code[0] !== '?') counts.staged++
+          if (code[1] !== ' ') counts.modified++
+        }
+        return counts
+      },
+      { modified: 0, staged: 0, untracked: 0 }
+    )
 
   const ahead = Number.parseInt(aheadStr, 10) || 0
 

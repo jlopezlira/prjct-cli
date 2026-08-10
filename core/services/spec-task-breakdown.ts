@@ -60,9 +60,8 @@ export async function breakdownSpecToTasks(
 
   // Partial-recovery detection: marker null but linked_tasks non-empty
   // means a previous attempt crashed mid-loop. Wipe + restart from scratch.
-  let recoveredFromPartial = false
-  if (spec.content.linked_tasks.length > 0) {
-    recoveredFromPartial = true
+  const recoveredFromPartial = spec.content.linked_tasks.length > 0
+  if (recoveredFromPartial) {
     await queueStorage.deleteByFeatureId(projectId, spec.id)
     const cleared: SpecContent = {
       ...spec.content,

@@ -88,21 +88,16 @@ export function excessAgainstIndex(
   }
 
   const cand = embedLocalText(content)
-  let maxSim = 0
-  let nearestId: string | null = null
-
-  for (let i = 0; i < index.entries.length; i++) {
-    const ref = index.entries[i]!
-    if (excludeId && ref.id === excludeId) continue
-    const sim = cosineSimilarity(cand, index.vectors[i]!)
-    if (sim > maxSim) {
-      maxSim = sim
-      nearestId = ref.id
-    }
-  }
-
-  // Numerical safety
-  maxSim = Math.max(0, Math.min(1, maxSim))
+  const nearest = index.entries.reduce(
+    (best, ref, indexPosition) => {
+      if (excludeId && ref.id === excludeId) return best
+      const similarity = cosineSimilarity(cand, index.vectors[indexPosition]!)
+      return similarity > best.maxSim ? { maxSim: similarity, nearestId: ref.id } : best
+    },
+    { maxSim: 0, nearestId: null as string | null }
+  )
+  const maxSim = Math.max(0, Math.min(1, nearest.maxSim))
+  const nearestId = nearest.nearestId
   const nearDup = maxSim >= NEAR_DUP_SIM
   const excess = nearDup ? 0 : Math.max(0, Math.min(1, 1 - maxSim))
 

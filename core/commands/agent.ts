@@ -79,17 +79,19 @@ export class AgentCommands extends PrjctCommandsBase {
         ? Math.min(options.maxSteps, 40)
         : 12
 
-    let workCtx: OwnedAgentWorkContext
-    try {
-      workCtx = await prepareOwnedAgentWorkContext({
-        root: requestedRoot,
-        intent: text,
-        profile,
-        noWork: options.noWork === true,
-      })
-    } catch (e) {
-      return failHard(`Work context failed: ${getErrorMessage(e)}`, options)
+    const preparation = await prepareOwnedAgentWorkContext({
+      root: requestedRoot,
+      intent: text,
+      profile,
+      noWork: options.noWork === true,
+    }).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error })
+    )
+    if ('error' in preparation) {
+      return failHard(`Work context failed: ${getErrorMessage(preparation.error)}`, options)
     }
+    const workCtx: OwnedAgentWorkContext = preparation.value
 
     const root = workCtx.root
 

@@ -200,11 +200,7 @@ class DependencyValidator {
         timeout: 5000, // 5 second timeout
       })
 
-      let version: string | undefined
-      if (definition.versionRegex) {
-        const match = output.match(definition.versionRegex)
-        version = match ? match[1] : undefined
-      }
+      const version = definition.versionRegex?.exec(output)?.[1]
 
       return { available: true, version }
     } catch {

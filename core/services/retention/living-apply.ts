@@ -64,15 +64,15 @@ export function formatLivingApplyLine(entry: MemoryEntry): LivingApplyLine {
   const files = extractCitedFiles(entry.content)
   const liveMod = role === 'suggest' || role === 'sot' ? buildLiveModSuggestion(entry) : undefined
   const roleTag = role === 'sot' ? 'SoT' : role === 'suggest' ? 'SUGGEST' : 'ctx'
-  let line = `[${roleTag}·${entry.type}] ${title}  \`${entry.id}\``
-  // tip→user: agent must restate this in the terminal chat (no separate UI).
-  if (role === 'sot') {
-    line += ' — tip→user · BINDING; supersede via `prjct remember` if wrong'
-  } else if (role === 'suggest' && liveMod) {
-    line += ` — tip→user · ${liveMod.slice(0, 160)}`
-  } else if (role === 'suggest') {
-    line += ` — tip→user · ${actionableClause(entry.content).slice(0, 120)}`
-  }
+  const suffix =
+    role === 'sot'
+      ? ' — tip→user · BINDING; supersede via `prjct remember` if wrong'
+      : role === 'suggest' && liveMod
+        ? ` — tip→user · ${liveMod.slice(0, 160)}`
+        : role === 'suggest'
+          ? ` — tip→user · ${actionableClause(entry.content).slice(0, 120)}`
+          : ''
+  const line = `[${roleTag}·${entry.type}] ${title}  \`${entry.id}\`${suffix}`
   return { id: entry.id, type: entry.type, role, line, liveMod, files }
 }
 
@@ -93,14 +93,14 @@ export function buildLivingApplyBlock(
   }
   if (sug.length > 0) {
     out.push('## Live modification suggestions')
-    for (const l of sug) {
-      out.push(`- ${l.line}`)
-      if (l.liveMod && !l.line.includes(l.liveMod.slice(0, 40))) out.push(`  → ${l.liveMod}`)
+    for (const l2 of sug) {
+      out.push(`- ${l2.line}`)
+      if (l2.liveMod && !l2.line.includes(l2.liveMod.slice(0, 40))) out.push(`  → ${l2.liveMod}`)
     }
   }
   if (ctx.length > 0) {
     out.push('## Context')
-    for (const l of ctx) out.push(`- ${l.line}`)
+    for (const l3 of ctx) out.push(`- ${l3.line}`)
   }
   return out.join('\n')
 }

@@ -298,31 +298,33 @@ export function runMemoryDream(opts: RunMemoryDreamOptions): MemoryDreamReport {
 
   try {
     // Phase 1 — Orient
-    let health: VaultHealth
-    try {
-      health = vaultHealth(projectId)
-    } catch {
-      health = {
-        live: 0,
-        softDeleted: 0,
-        archives: 0,
-        rememberEvents: 0,
-        autoSourceLive: 0,
+    const health: VaultHealth = (() => {
+      try {
+        return vaultHealth(projectId)
+      } catch {
+        return {
+          live: 0,
+          softDeleted: 0,
+          archives: 0,
+          rememberEvents: 0,
+          autoSourceLive: 0,
+        }
       }
-    }
+    })()
 
     // Phase 2 — Gather (dry retention preview for reporting)
-    let preview: ApplyRetentionResult | null = null
-    try {
-      preview = applyRetention(projectId, {
-        dryRun: true,
-        maxArchive: opts.maxArchive ?? 50,
-        maxDelete: opts.maxDelete ?? 25,
-        nowMs,
-      })
-    } catch {
-      preview = null
-    }
+    const preview: ApplyRetentionResult | null = (() => {
+      try {
+        return applyRetention(projectId, {
+          dryRun: true,
+          maxArchive: opts.maxArchive ?? 50,
+          maxDelete: opts.maxDelete ?? 25,
+          nowMs,
+        })
+      } catch {
+        return null
+      }
+    })()
 
     const inboxCount = (() => {
       try {
@@ -338,69 +340,77 @@ export function runMemoryDream(opts: RunMemoryDreamOptions): MemoryDreamReport {
     })()
 
     // Phase 3 — Consolidate
-    let retention: ApplyRetentionResult | null = null
-    let inboxMerged = 0
-    let inboxArchived = 0
-    if (!dryRun) {
-      try {
-        const tri = triageInbox(projectId, nowMs)
-        inboxMerged = tri.merged + (tri.junkForgotten ?? 0)
-        inboxArchived = tri.archived
-      } catch {
-        /* best-effort */
-      }
-      // Broader junk pass (context/idea/todo dumps, not only inbox).
-      try {
-        const junk = forgetJunkCaptures(projectId, { max: 40 })
-        if (junk.forgotten > 0) inboxMerged += junk.forgotten
-      } catch {
-        /* best-effort */
-      }
-      try {
-        retention = applyRetention(projectId, {
-          dryRun: false,
-          maxArchive: opts.maxArchive ?? 50,
-          maxDelete: opts.maxDelete ?? 25,
-          nowMs,
-        })
-      } catch {
-        retention = null
-      }
-    } else {
-      retention = preview
-    }
+    const { retention, inboxMerged, inboxArchived } = dryRun
+      ? { retention: preview, inboxMerged: 0, inboxArchived: 0 }
+      : (() => {
+          const triage = (() => {
+            try {
+              const result = triageInbox(projectId, nowMs)
+              return {
+                merged: result.merged + (result.junkForgotten ?? 0),
+                archived: result.archived,
+              }
+            } catch {
+              return { merged: 0, archived: 0 }
+            }
+          })()
+          const junkForgotten = (() => {
+            try {
+              return forgetJunkCaptures(projectId, { max: 40 }).forgotten
+            } catch {
+              return 0
+            }
+          })()
+          const applied = (() => {
+            try {
+              return applyRetention(projectId, {
+                dryRun: false,
+                maxArchive: opts.maxArchive ?? 50,
+                maxDelete: opts.maxDelete ?? 25,
+                nowMs,
+              })
+            } catch {
+              return null
+            }
+          })()
+          return {
+            retention: applied,
+            inboxMerged: triage.merged + junkForgotten,
+            inboxArchived: triage.archived,
+          }
+        })()
 
     // Phase 4 — Prune / index
-    let index: MemoryL0IndexStamp | null = null
-    if (!dryRun) {
-      index = buildAndStoreMemoryL0Index({ projectId, source: 'dream' })
-    } else {
-      // Dry-run still builds index in-memory for preview; does not store.
-      try {
-        index = buildMemoryL0Index({ projectId, source: 'dream' })
-      } catch {
-        index = null
-      }
-    }
+    const index: MemoryL0IndexStamp | null = dryRun
+      ? (() => {
+          // Dry-run still builds index in-memory for preview; does not store.
+          try {
+            return buildMemoryL0Index({ projectId, source: 'dream' })
+          } catch {
+            return null
+          }
+        })()
+      : buildAndStoreMemoryL0Index({ projectId, source: 'dream' })
 
     const archived = dryRun ? (preview?.wouldArchive ?? 0) : (retention?.archived ?? 0)
     const deleted = dryRun ? (preview?.wouldDelete ?? 0) : (retention?.deleted ?? 0)
 
-    let stamp: MemoryDreamStamp | null = loadDreamStamp(projectId)
-    if (!dryRun) {
-      stamp = {
-        version: 1,
-        lastDreamAt: getTimestamp(),
-        sessionsSinceDream: 0,
-        lastResult: {
-          archived: retention?.archived ?? 0,
-          deleted: retention?.deleted ?? 0,
-          inboxMerged,
-          inboxArchived,
-          dryRun: false,
-          live: health.live,
-        },
-      }
+    const stamp: MemoryDreamStamp | null = dryRun
+      ? loadDreamStamp(projectId)
+      : {
+          version: 1,
+          lastDreamAt: getTimestamp(),
+          sessionsSinceDream: 0,
+          lastResult: {
+            archived: retention?.archived ?? 0,
+            deleted: retention?.deleted ?? 0,
+            inboxMerged,
+            inboxArchived,
+            dryRun: false,
+            live: health.live,
+          },
+        }
+    if (!dryRun && stamp) {
       try {
         writeDreamStamp(projectId, stamp)
       } catch {
