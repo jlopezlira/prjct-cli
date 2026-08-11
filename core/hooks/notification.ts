@@ -3,6 +3,8 @@
  * Fire a best-effort desktop notification so a wait never hangs silently.
  *
  * Side-effect only: it emits no context (returns null → `{}`), it just pings.
+ * The ping runs in `afterEmit` — `notifyDesktop` forks `osascript` (~50-200ms
+ * on macOS), which must never sit between stdin and the host-visible response.
  * Gated by config.notify (default on). Best-effort + safeRun — never disturbs
  * the session.
  */
@@ -20,9 +22,9 @@ export function runNotificationHook(
     {
       event: 'Notification',
       projectPath,
-      build: async (_input, p) => {
+      afterEmit: async (_input, p) => {
         const config = await configManager.readConfig(p).catch(() => null)
-        if (!config?.projectId || effectiveNotifyMode(config) === 'off') return null
+        if (!config?.projectId || effectiveNotifyMode(config) === 'off') return
         const detail = await collectActiveTasks(config.projectId, p)
           .then((overview) =>
             overview.current
@@ -31,7 +33,6 @@ export function runNotificationHook(
           )
           .catch(() => 'Waiting for your input')
         await notifyDesktop('prjct — Claude needs you', detail)
-        return null
       },
     },
     io

@@ -20,6 +20,8 @@ import { resetGroupLoaders } from '../commands/register'
 import { commandRegistry } from '../commands/registry'
 import type { HookIo } from '../hooks/_runner'
 import { getHookRunner } from '../hooks/registry'
+import configManager from '../infrastructure/config-manager'
+import { performanceTracker } from '../infrastructure/performance-tracker'
 import { refreshUpdateStatus } from '../services/update-checker'
 import prjctDb from '../storage/database'
 import { realtimeManager } from '../sync/realtime-manager'
@@ -485,10 +487,16 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
   return daemonRequestJournal.run(request, async () => {
     state.activeRequests++
     try {
-      // Hooks use a separate lane so a long CLI command cannot head-of-line
-      // block Claude Code's Prompt/Stop path. Commands stay exclusive because
-      // they patch global console.log/error for output capture.
-      const lane = request.command === 'hook' ? 'hook' : 'command'
+      // Hooks never share the command lane (commands patch global console).
+      // Prompt/Stop preserve turn-state order; every other read-mostly hook
+      // uses bounded concurrency so a slow hook cannot head-of-line-block a
+      // PreToolUse response.
+      const lane =
+        request.command !== 'hook'
+          ? 'command'
+          : request.args[0] === 'prompt' || request.args[0] === 'stop'
+            ? 'hook-state'
+            : 'hook'
       return await daemonRequestLanes.run(lane, () => handleRequestInner(request))
     } finally {
       state.activeRequests--
@@ -587,6 +595,7 @@ async function handleRequestInner(request: DaemonRequest): Promise<DaemonRespons
  * the daemon down.
  */
 async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse> {
+  const startedAt = performance.now()
   const runner = getHookRunner(request.args[0])
   if (!runner) {
     return { id: request.id, success: true, exitCode: 0, stdout: '{}\n' }
@@ -621,6 +630,20 @@ async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse
   } catch {
     /* runner is fail-soft; guard anyway so the daemon never crashes */
   }
+
+  const durationMs = performance.now() - startedAt
+  setImmediate(async () => {
+    try {
+      const projectId = await configManager.getProjectId(request.cwd)
+      if (projectId) {
+        performanceTracker.recordTiming(projectId, 'command_duration', durationMs, {
+          command: `hook:${request.args[0] ?? 'unknown'}`,
+        })
+      }
+    } catch {
+      /* telemetry is best-effort and never blocks the response */
+    }
+  })
 
   return { id: request.id, success: true, exitCode: 0, stdout: captured.join('') || '{}\n' }
 }

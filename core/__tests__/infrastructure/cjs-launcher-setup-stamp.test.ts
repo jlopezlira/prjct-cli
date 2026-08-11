@@ -27,7 +27,14 @@ describe('portable CJS launcher setup gate', () => {
   test('skips setup for diagnostic and hot hook paths', () => {
     const src = source()
 
-    for (const command of ['version', '--version', '--help', 'hook', '__internal-auto-update']) {
+    for (const command of [
+      'version',
+      '--version',
+      '--help',
+      'hook',
+      '__internal-auto-update',
+      '__internal-ensure-daemon',
+    ]) {
       expect(src).toContain(`'${command}'`)
     }
   })

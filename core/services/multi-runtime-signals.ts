@@ -3,7 +3,7 @@
  *
  * Hosts differ (hooks APIs ≠ ASCII). Parity is proven by:
  *   1. PRJCT_HOOKS install set (Claude source of truth)
- *   2. Host mappers (Codex/Gemini/Cursor) including pre-package + prompt
+ *   2. Host mappers (Codex/Gemini/Cursor) including consolidated pre-bash + prompt
  *   3. Compact skill CONTRACT.loop on Codex/Gemini surfaces
  *   4. Grok native MCP + skill; hooks still inherit Claude (harness-surfaces)
  *
@@ -22,8 +22,8 @@ export const CORE_SUPERIORITY_RUNTIMES = ['claude', 'codex', 'gemini', 'cursor',
 export const REQUIRED_HOOK_SUBCOMMANDS = [
   'prompt',
   'session-start',
-  'pre-package',
-  'pre-secrets',
+  'pre-bash',
+  'pre-edit',
   'stop',
 ] as const
 
@@ -63,13 +63,13 @@ export function multiRuntimeInstallParityReport(): {
   const geminiSubs = new Set(geminiHookMaps().map((m) => m.subcommand))
   const codexSubs = new Set(codexHookSpecs().map((m) => m.subcommand))
 
-  for (const sub2 of ['prompt', 'session-start', 'pre-package'] as const) {
+  for (const sub2 of ['prompt', 'session-start', 'pre-bash'] as const) {
     if (!cursorSubs.has(sub2)) missing.push(`cursor map missing ${sub2}`)
     if (!geminiSubs.has(sub2)) missing.push(`gemini map missing ${sub2}`)
-    // Codex may skip some events; pre-package maps if PreToolUse Bash is supported
-    if (sub2 === 'pre-package' && !codexSubs.has(sub2) && !codexSubs.has('pre-secrets')) {
+    // Codex may skip some events; pre-bash maps if PreToolUse Bash is supported.
+    if (sub2 === 'pre-bash' && !codexSubs.has(sub2)) {
       // codexHookSpecs filters by CODEX_HOOK_EVENTS — PreToolUse should include bash hooks
-      if (!codexHookSpecs().some((s) => s.subcommand === 'pre-package')) {
+      if (!codexHookSpecs().some((s) => s.subcommand === 'pre-bash')) {
         // Only fail if Claude has it but codex filter dropped all bash prettools
         const bashHooks = PRJCT_HOOKS.filter(
           (h) => h.event === 'PreToolUse' && h.matcher === 'Bash'
@@ -82,12 +82,12 @@ export function multiRuntimeInstallParityReport(): {
     }
   }
 
-  // Explicit: pre-package must be in Cursor + Gemini bash/shell maps
-  if (!cursorHookMaps().some((m) => m.subcommand === 'pre-package')) {
-    missing.push('cursor missing pre-package')
+  // Explicit: the consolidated Bash gate must reach Cursor + Gemini.
+  if (!cursorHookMaps().some((m) => m.subcommand === 'pre-bash')) {
+    missing.push('cursor missing pre-bash')
   }
-  if (!geminiHookMaps().some((m) => m.subcommand === 'pre-package')) {
-    missing.push('gemini missing pre-package')
+  if (!geminiHookMaps().some((m) => m.subcommand === 'pre-bash')) {
+    missing.push('gemini missing pre-bash')
   }
 
   const codexSkill = buildCodexSkill()

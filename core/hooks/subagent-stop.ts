@@ -3,8 +3,10 @@
  * desktop notification so the user, who may have tabbed away during the wait,
  * learns it's done and sees what's still active + pending.
  *
- * Side-effect only (returns null → `{}`). Gated by config.notify (default on).
- * Best-effort + safeRun — never disturbs the session.
+ * Side-effect only (returns null → `{}`). The ping runs in `afterEmit` —
+ * `notifyDesktop` forks `osascript` (~50-200ms on macOS), which must never
+ * sit between stdin and the host-visible response. Gated by config.notify
+ * (default on). Best-effort + safeRun — never disturbs the session.
  */
 
 import configManager from '../infrastructure/config-manager'
@@ -21,9 +23,9 @@ export function runSubagentStopHook(
     {
       event: 'SubagentStop',
       projectPath,
-      build: async (_input, p) => {
+      afterEmit: async (_input, p) => {
         const config = await configManager.readConfig(p).catch(() => null)
-        if (!config?.projectId || effectiveNotifyMode(config) === 'off') return null
+        if (!config?.projectId || effectiveNotifyMode(config) === 'off') return
         const bits: string[] = []
         try {
           const overview = await collectActiveTasks(config.projectId, p)
@@ -38,7 +40,6 @@ export function runSubagentStopHook(
           /* best-effort */
         }
         await notifyDesktop('prjct — subagent finished', bits.join(' · ') || 'A subagent finished')
-        return null
       },
     },
     io

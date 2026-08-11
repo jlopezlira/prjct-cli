@@ -330,6 +330,28 @@ describe('PerformanceTracker', () => {
       expect(report.commandDurations!.status.avg).toBe(50)
     })
 
+    it('reports p50/p95 by command and hook subcommand', () => {
+      for (const value of [10, 20, 30, 40, 50]) {
+        performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', value, {
+          command: 'hook:prompt',
+        })
+      }
+      performanceTracker.recordTiming(fixture.testProjectId, 'command_duration', 100, {
+        command: 'sync',
+      })
+
+      const report = performanceTracker.getLatencyReport(fixture.testProjectId, 7)
+      expect(report.commands['hook:prompt']).toEqual({
+        count: 5,
+        min: 10,
+        p50: 30,
+        p95: 50,
+        max: 50,
+        avg: 30,
+      })
+      expect(report.commands.sync?.p50).toBe(100)
+    })
+
     it('should filter by date range', () => {
       // Record some metrics
       performanceTracker.recordTiming(fixture.testProjectId, 'startup_time', 300)

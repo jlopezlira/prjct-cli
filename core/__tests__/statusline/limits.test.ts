@@ -28,7 +28,7 @@ function runStatusline(input: unknown): string {
   const result = spawnSync('bash', [script], {
     input: JSON.stringify(input),
     encoding: 'utf-8',
-    env: { ...process.env, HOME: fixture.home, NO_COLOR: '1' },
+    env: { ...process.env, HOME: fixture.home, NO_COLOR: '1', PRJCT_STATUSLINE_NO_CACHE: '1' },
   })
   expect(result.status).toBe(0)
   return stripAnsi(result.stdout.trim())

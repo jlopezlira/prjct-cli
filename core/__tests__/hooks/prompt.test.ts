@@ -20,6 +20,7 @@ import {
   _resetGitSnapshotCacheForTests,
   buildProjectState,
   buildTopicalCue,
+  runPromptHook,
 } from '../../hooks/prompt'
 import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
@@ -179,6 +180,40 @@ describe('UserPromptSubmit — project state', () => {
     _resetGitSnapshotCacheForTests()
     const fresh = await buildProjectState(fixture.projectPath)
     expect(fresh).toMatch(/working tree 2 untracked/)
+  })
+
+  it('emits once, dedupes an unchanged payload, and bumps turns only after emit', async () => {
+    await freshProject()
+    await stateStorage.startTask(fixture.projectId, {
+      id: `t-${Date.now()}`,
+      description: 'dedupe prompt state',
+      startedAt: new Date().toISOString(),
+      sessionId: 's',
+    } as Parameters<typeof stateStorage.startTask>[1])
+
+    const invoke = async (): Promise<{ output: string; pending: Array<() => Promise<void>> }> => {
+      const chunks: string[] = []
+      const pending: Array<() => Promise<void>> = []
+      await runPromptHook(fixture.projectPath, {
+        input: { prompt: 'continue the current work' },
+        sink: (chunk) => chunks.push(chunk),
+        detachAfterEmit: (fn) => pending.push(fn),
+      })
+      return { output: chunks.join(''), pending }
+    }
+
+    const first = await invoke()
+    expect(first.output).toContain('dedupe prompt state')
+    expect((await stateStorage.getCurrentTask(fixture.projectId))?.turnCount ?? 0).toBe(0)
+    expect(first.pending).toHaveLength(1)
+    await first.pending[0]!()
+    expect((await stateStorage.getCurrentTask(fixture.projectId))?.turnCount).toBe(1)
+
+    const second = await invoke()
+    expect(second.output).toBe('{}\n')
+    // Dedupe suppresses tokens, not accounting: the turn still increments.
+    await second.pending[0]!()
+    expect((await stateStorage.getCurrentTask(fixture.projectId))?.turnCount).toBe(2)
   })
 })
 

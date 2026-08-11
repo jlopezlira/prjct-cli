@@ -4,6 +4,34 @@
 # Modular component system with graceful degradation
 # ============================================================================
 
+# Render cache: Claude Code re-renders constantly, so cache the full rendered
+# line for 2s keyed by project (PWD hash). This fast path runs BEFORE the
+# bash 4 re-exec, so it must stay bash 3.2 / POSIX compatible (no assoc
+# arrays, no mapfile). The epoch is stored inside the cache file (line 1) to
+# avoid stat differences between macOS and Linux.
+PRJCT_RENDER_TTL=2
+_prjct_hash=$(printf '%s' "$PWD" | cksum 2>/dev/null)
+_prjct_hash=${_prjct_hash%% *}
+[[ -z "$_prjct_hash" ]] && _prjct_hash="default"
+PRJCT_RENDER_CACHE="${TMPDIR:-/tmp}/prjct-statusline-cache.${_prjct_hash}"
+_prjct_now=$(date +%s)
+
+if [[ -z "$PRJCT_STATUSLINE_NO_CACHE" && -f "$PRJCT_RENDER_CACHE" ]]; then
+  {
+    IFS= read -r _prjct_epoch
+    IFS= read -r _prjct_cached_render
+  } < "$PRJCT_RENDER_CACHE"
+  case $_prjct_epoch in
+    ''|*[!0-9]*) _prjct_epoch=0 ;;
+  esac
+  if (( _prjct_now - _prjct_epoch < PRJCT_RENDER_TTL )); then
+    # Drain stdin with shell builtins so Claude Code isn't left hanging on the pipe.
+    while IFS= read -r _prjct_discard || [[ -n "$_prjct_discard" ]]; do :; done
+    printf '%s\n' "$_prjct_cached_render"
+    exit 0
+  fi
+fi
+
 # Require bash 4.0+ for associative arrays
 if [[ ${BASH_VERSINFO[0]} -lt 4 ]]; then
   # Try to find a modern bash and re-exec
@@ -99,5 +127,11 @@ build_statusline() {
   echo -e "$line"
 }
 
-# Output the statusline
-build_statusline
+# Output the statusline (and refresh the render cache)
+rendered=$(build_statusline)
+if [[ -z "$PRJCT_STATUSLINE_NO_CACHE" ]]; then
+  PRJCT_RENDER_CACHE_TMP="${PRJCT_RENDER_CACHE}.$$"
+  { printf '%s\n' "$_prjct_now"; printf '%s\n' "$rendered"; } > "$PRJCT_RENDER_CACHE_TMP" 2>/dev/null
+  mv -f "$PRJCT_RENDER_CACHE_TMP" "$PRJCT_RENDER_CACHE" 2>/dev/null || true
+fi
+printf '%s\n' "$rendered"

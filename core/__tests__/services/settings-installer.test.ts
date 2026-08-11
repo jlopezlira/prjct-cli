@@ -91,8 +91,8 @@ describe('settings-installer', () => {
     const commands = JSON.stringify(parsed.hooks)
     expect(commands).not.toContain('hook legacy-recall')
     // The retired hook's now-empty PostToolUse/Bash block is gone, but the
-    // current pre-commit PreToolUse hook is present.
-    expect(commands).toContain('hook pre-commit')
+    // current consolidated Bash PreToolUse hook is present.
+    expect(commands).toContain('hook pre-bash')
   })
 
   test('prune leaves foreign (non-prjct) hooks with unknown subcommands untouched', async () => {

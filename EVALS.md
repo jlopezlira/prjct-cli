@@ -50,6 +50,17 @@ prjct eval publish --target cloud --dry-run --md
 
 Every scenario and comparison carries actionables. Regressions are blocking actionables; improvements and unchanged scenarios still tell maintainers what to protect or keep measuring.
 
+## Hook latency SLOs
+
+The agent-runtime hot path is a release contract:
+
+- Warm hook handler p50: **< 20ms**, observed with `prjct perf --md`.
+- Cold production hook p50: **≤ 400ms** and p95: **≤ 800ms**, gated by `node scripts/bench-hooks.mjs --runtime both`.
+- Prompt state payload: **≤ 1500 characters** and byte-hash deduplicated when unchanged.
+- PreToolUse fan-out: **one prjct process per host event** (`pre-bash` or `pre-edit`); do not reinstall separate secret/package/commit processes.
+
+Use `--no-fail` only for exploratory benchmark capture. The default benchmark exits non-zero on an SLO regression.
+
 ## CI usage
 
 CI should run evals and upload local artifacts with the CI provider's normal artifact mechanism when needed. Publishing to the shared benchmark history is intentionally not wired to GitHub Actions in this repo; it is an explicit `prjct eval ... --publish --target cloud` operation that uses prjct cloud auth and server-side ownership/subscription checks.
