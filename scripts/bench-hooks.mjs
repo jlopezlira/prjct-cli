@@ -14,11 +14,11 @@
  * artifact in `dist/`.
  *
  * Usage:
- *   node scripts/bench-hooks.mjs [--iterations N] [--runtime node|bun|both]
+ *   node scripts/bench-hooks.mjs [--iterations N] [--runtime node|bun|both] [--no-fail]
  *
  * Notes:
- *   - Hooks always bypass the daemon (see bin/prjct.ts `_binCommands`), so
- *     this measures the cold path every prompt actually pays today.
+ *   - PRJCT_NO_DAEMON=1 deliberately measures the cold-path SLO. Warm-path
+ *     percentiles are continuously visible through `prjct perf --md`.
  *   - Run from inside a real prjct project so the DB/config/vault paths are
  *     exercised. Defaults to the repo itself.
  */
@@ -33,7 +33,7 @@ const repoRoot = path.resolve(__dirname, '..')
 const distEntry = path.join(repoRoot, 'dist', 'bin', 'prjct.mjs')
 
 function parseArgs(argv) {
-  const out = { iterations: 30, runtime: 'both' }
+  const out = { iterations: 20, runtime: 'both', failOnBudget: true }
   const parseAt = (index) => {
     if (index >= argv.length) return
     const arg = argv[index]
@@ -44,6 +44,10 @@ function parseArgs(argv) {
     if (arg === '--runtime') {
       out.runtime = argv[index + 1] ?? 'both'
       return parseAt(index + 2)
+    }
+    if (arg === '--no-fail') {
+      out.failOnBudget = false
+      return parseAt(index + 1)
     }
     parseAt(index + 1)
   }
@@ -58,8 +62,39 @@ const EVENTS = [
     name: 'prompt',
     stdin: JSON.stringify({ prompt: 'how should we cache the auth token responses?' }),
   },
+  {
+    name: 'pre-bash',
+    stdin: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git status --short' } }),
+  },
+  {
+    name: 'pre-edit',
+    stdin: JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: 'package.json' } }),
+  },
+  {
+    name: 'pre-search',
+    stdin: JSON.stringify({ tool_name: 'Grep', tool_input: { pattern: 'daemon' } }),
+  },
+  {
+    name: 'post-edit',
+    stdin: JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: 'package.json' } }),
+  },
   { name: 'stop', stdin: JSON.stringify({}) },
+  { name: 'subagent-start', stdin: JSON.stringify({ agent_id: 'bench' }) },
+  { name: 'subagent-stop', stdin: JSON.stringify({ agent_id: 'bench' }) },
+  { name: 'notification', stdin: JSON.stringify({ message: 'bench' }) },
+  { name: 'cwd-changed', stdin: JSON.stringify({ cwd: repoRoot }) },
 ]
+
+const BUDGETS = {
+  node: {
+    p50: Number(process.env.PRJCT_HOOK_COLD_P50_MS ?? 400),
+    p95: Number(process.env.PRJCT_HOOK_COLD_P95_MS ?? 800),
+  },
+  bun: {
+    p50: Number(process.env.PRJCT_HOOK_COLD_P50_MS ?? 400),
+    p95: Number(process.env.PRJCT_HOOK_COLD_P95_MS ?? 800),
+  },
+}
 
 function hasBun() {
   return spawnSync('bun', ['--version'], { stdio: 'ignore' }).status === 0
@@ -77,7 +112,12 @@ function timeOnce(runtime, event) {
   const res = spawnSync(runtime, [distEntry, 'hook', event.name], {
     input: event.stdin,
     cwd: repoRoot,
-    env: { ...process.env, PRJCT_NO_DAEMON: '1', PRJCT_NO_UPDATE_NOTICE: '1' },
+    env: {
+      ...process.env,
+      PRJCT_NO_DAEMON: '1',
+      PRJCT_NO_UPDATE_NOTICE: '1',
+      PRJCT_HOOK_BENCH: '1',
+    },
     encoding: 'utf-8',
   })
   const ms = Number(process.hrtime.bigint() - start) / 1_000_000
@@ -86,6 +126,7 @@ function timeOnce(runtime, event) {
 
 function benchRuntime(runtime, iterations) {
   console.log(`\n── runtime: ${runtime} ──`)
+  const regressions = []
   for (const event of EVENTS) {
     // Warm the filesystem cache; discard.
     Array.from({ length: 3 }, () => timeOnce(runtime, event))
@@ -99,23 +140,40 @@ function benchRuntime(runtime, iterations) {
         `min ${s.min.toFixed(1)}ms  p50 ${s.p50.toFixed(1)}ms  ` +
         `p95 ${s.p95.toFixed(1)}ms  max ${s.max.toFixed(1)}ms  mean ${s.mean.toFixed(1)}ms${f}`
     )
+    const budget = BUDGETS[runtime] ?? BUDGETS.node
+    if (failures > 0 || s.p50 > budget.p50 || s.p95 > budget.p95) {
+      regressions.push({ event: event.name, failures, stats: s, budget })
+    }
   }
+  return regressions
 }
 
 function main() {
-  const { iterations, runtime } = parseArgs(process.argv.slice(2))
+  const { iterations, runtime, failOnBudget } = parseArgs(process.argv.slice(2))
   if (!existsSync(distEntry)) {
     console.error(`dist not built: ${distEntry}\nRun \`npm run build\` first.`)
     process.exit(1)
   }
   console.log(`prjct hook hot-path benchmark — ${iterations} iterations/event, cwd=${repoRoot}`)
   const runtimes = runtime === 'both' ? ['node', ...(hasBun() ? ['bun'] : [])] : [runtime]
-  for (const rt of runtimes) benchRuntime(rt, iterations)
-  console.log(
-    '\nHooks bypass the daemon today (bin/prjct.ts `_binCommands`), so these are the' +
-      '\nper-event costs every session pays. Compare against a daemon-routed build to' +
-      '\nquantify the win before committing to that refactor.'
+  const regressions = runtimes.flatMap((rt) =>
+    benchRuntime(rt, iterations).map((regression) => ({ runtime: rt, ...regression }))
   )
+  console.log(
+    '\nCold SLO: p50 ≤ 400ms, p95 ≤ 800ms per installed hook. ' +
+      'Warm production samples: `prjct perf --md`.'
+  )
+  if (regressions.length > 0) {
+    for (const regression of regressions) {
+      console.error(
+        `REGRESSION ${regression.runtime}/${regression.event}: ` +
+          `p50 ${regression.stats.p50.toFixed(1)}ms (≤${regression.budget.p50}), ` +
+          `p95 ${regression.stats.p95.toFixed(1)}ms (≤${regression.budget.p95}), ` +
+          `exits=${regression.failures}`
+      )
+    }
+    if (failOnBudget) process.exitCode = 1
+  }
 }
 
 main()

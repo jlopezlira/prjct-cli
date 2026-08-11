@@ -33,6 +33,10 @@ const HOOK_LOADERS: Record<string, { load: HookLoader; exportName: string }> = {
     load: () => import('./prompt'),
     exportName: 'runPromptHook',
   },
+  'pre-bash': {
+    load: () => import('./pre-bash'),
+    exportName: 'runPreBashHook',
+  },
   'pre-commit': {
     load: () => import('./pre-commit'),
     exportName: 'runPreCommitHook',

@@ -58,13 +58,15 @@ describe('daemon-shim ↔ manifest sync', () => {
   })
 
   test('detached-child internals are skipped by the shim (never routed to the daemon)', () => {
-    // `__internal-auto-update` and `__post-upgrade` are handled at the very
-    // top of bin/prjct.ts. The shim's default for unknown commands is the
-    // daemon — which has no registry handler for them, so routing there
-    // makes the detached children silently fail (stdio is ignored).
+    // `__internal-auto-update`, `__post-upgrade` and `__internal-ensure-daemon`
+    // are handled at the very top of bin/prjct.ts. The shim's default for
+    // unknown commands is the daemon — which has no registry handler for
+    // them, so routing there makes the detached children silently fail
+    // (stdio is ignored).
     const shim = extractShimSkip()
     expect(shim.has('__internal-auto-update')).toBe(true)
     expect(shim.has('__post-upgrade')).toBe(true)
+    expect(shim.has('__internal-ensure-daemon')).toBe(true)
 
     const src = extractBinUsage()
     expect(src).toContain("_initialFastCommand === '__post-upgrade'")
@@ -72,6 +74,23 @@ describe('daemon-shim ↔ manifest sync', () => {
     // command path (the regression this guards: ~30s stall on the first
     // command after every upgrade).
     expect(src).toContain("spawn(process.execPath, [process.argv[1], '__post-upgrade']")
+  })
+
+  test('hook fast path warms the daemon when the socket is missing', () => {
+    // Regression guard: hooks used to pay the cold start (~300ms bun /
+    // ~950ms node) forever in pure-Claude sessions because nothing but
+    // non-hook CLI commands auto-started the daemon. Now both the source
+    // entry and the production shim fire a detached `__internal-ensure-daemon`
+    // child before falling through to the cold hook path.
+    const src = extractBinUsage()
+    expect(src).toContain("_initialFastCommand === '__internal-ensure-daemon'")
+    expect(src).toContain("spawn(process.execPath, [entry, '__internal-ensure-daemon']")
+
+    const shim = generateDaemonShim()
+    expect(shim).toContain('spawn(process.execPath,[process.argv[1],"__internal-ensure-daemon"]')
+    // Fire-and-forget: the spawn must be detached + unref'd and sit in the
+    // cold (no-endpoint) branch, never blocking the hook response.
+    expect(shim).toMatch(/__internal-ensure-daemon"\],\{detached:true,stdio:"ignore"\}\);c\.unref/)
   })
 })
 
@@ -97,12 +116,13 @@ describe('daemon-shim fallback policy', () => {
     expect(buildSrc).toContain('"ship"')
     // A 5s timeout used to be a hair-trigger that fell through to a core
     // re-import, double-running mutating commands like `ship`. The hook fast
-    // path reintroduces a short (5s) timeout ON PURPOSE — a hook must never
-    // freeze the agent turn — but it is fail-soft: every 5s timeout routes to
-    // `soft`, which writes the empty no-op `{}` and exits 0. It must NEVER
+    // path reintroduces a short (800ms) timeout ON PURPOSE — a hook must never
+    // freeze the agent turn — but it is fail-soft: every 800ms timeout routes
+    // to `soft`, which writes the empty no-op `{}` and exits 0. It must NEVER
     // call fallback() (which re-imports core and could double-run).
-    const fiveSecTimeouts = buildSrc.match(/setTimeout\([^,]*,\s*5000\)/g) ?? []
-    for (const t of fiveSecTimeouts) {
+    const hookTimeouts = buildSrc.match(/setTimeout\([^,]*,\s*800\)/g) ?? []
+    expect(hookTimeouts.length).toBeGreaterThan(0)
+    for (const t of hookTimeouts) {
       expect(t).toContain('soft')
       expect(t).not.toContain('fallback')
     }

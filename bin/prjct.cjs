@@ -362,6 +362,7 @@ async function main() {
     'hook',
     '__internal-auto-update',
     '__post-upgrade',
+    '__internal-ensure-daemon',
   ])
   const version = packageVersion()
   if (!setupSkipCommands.has(args[0]) && shouldRunSetup(version)) {

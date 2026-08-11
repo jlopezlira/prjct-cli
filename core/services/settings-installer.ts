@@ -33,22 +33,11 @@ const MANAGED_MARKER = '_prjctManaged'
 export const PRJCT_HOOKS = [
   { event: 'SessionStart', matcher: '', subcommand: 'session-start' },
   { event: 'UserPromptSubmit', matcher: '', subcommand: 'prompt' },
-  {
-    event: 'PreToolUse',
-    matcher: 'Bash',
-    subcommand: 'pre-commit',
-    ifClause: 'Bash(git commit *)',
-  },
-  // Credential non-exposure MUST — deny tools whose args contain secret
-  // material. No $PPID / host-only env (Gemini sanitizes env and skips hooks
-  // that require vars it does not set). Two matchers share one subcommand.
-  { event: 'PreToolUse', matcher: 'Bash', subcommand: 'pre-secrets' },
-  { event: 'PreToolUse', matcher: 'Edit|Write', subcommand: 'pre-secrets' },
-  // Package legitimacy — flag/deny unknown npm|pnpm|yarn|bun adds BEFORE install.
-  { event: 'PreToolUse', matcher: 'Bash', subcommand: 'pre-package' },
-  // Push a file's preventive memory (gotchas/anti-patterns) the moment Claude
-  // is about to edit it — closes the apply loop that pull-only `guard` left to
-  // the agent's (unreliable) instinct. Fires regardless of model = update-proof.
+  // One Bash hook combines commit memory + secret scanning + package
+  // legitimacy. This preserves every decision while cutting three process
+  // starts per Bash tool call down to one.
+  { event: 'PreToolUse', matcher: 'Bash', subcommand: 'pre-bash' },
+  // Secret scanning is folded into pre-edit before preventive memory/deny.
   { event: 'PreToolUse', matcher: 'Edit|Write', subcommand: 'pre-edit' },
   // Non-blocking code-graph augment for Grep/Glob (CBM-inspired). Never denies.
   { event: 'PreToolUse', matcher: 'Grep|Glob', subcommand: 'pre-search' },
@@ -194,7 +183,8 @@ function hookEntryFor(spec: HookSpec): HookEntry {
     command: hookCommand(spec.subcommand),
     [MANAGED_MARKER]: true,
   }
-  if ('ifClause' in spec && spec.ifClause) entry.if = spec.ifClause
+  const ifClause = 'ifClause' in spec ? spec.ifClause : undefined
+  if (typeof ifClause === 'string' && ifClause) entry.if = ifClause
   return entry
 }
 

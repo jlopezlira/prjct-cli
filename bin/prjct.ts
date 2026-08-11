@@ -43,6 +43,25 @@ if (_initialFastCommand === '__post-upgrade') {
   process.exit(0)
 }
 
+// Internal hook — `prjct __internal-ensure-daemon` is spawned as a detached
+// child by the hook fast path (and the production shim) when the daemon
+// socket is missing. A pure Claude session only ever runs `prjct hook <sub>`,
+// so nothing else would start the daemon and every hook would pay the cold
+// start (~300ms bun / ~950ms node) forever. This child just calls
+// spawnDaemon() — single-flight via the cross-process spawn lock — and
+// exits; the hook that triggered it never waits.
+if (_initialFastCommand === '__internal-ensure-daemon') {
+  try {
+    if (process.env.PRJCT_NO_DAEMON !== '1') {
+      const { spawnDaemon } = await import('../core/daemon/client')
+      await spawnDaemon()
+    }
+  } catch {
+    // Detached child — never crash visibly. The next hook retries.
+  }
+  process.exit(0)
+}
+
 // Read all of stdin (the hook event JSON) as a string, with a timeout
 // safety net. Used only on the hook fast path to forward the event to the
 // daemon. Returns whatever arrived if stdin never closes.
@@ -83,7 +102,7 @@ if (_initialFastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
       const { sendRequest } = await import('../core/daemon/client')
       const { HOOK_REQUEST_TIMEOUT_MS } = await import('../core/daemon/protocol')
       const crypto = await import('node:crypto')
-      // 5s fail-soft — matches production shim; never stall Claude for 30s.
+      // 800ms fail-soft — matches production shim; never stall Claude.
       const response = await sendRequest(
         {
           id: crypto.randomUUID(),
@@ -167,6 +186,26 @@ if (_initialFastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
     } catch {
       process.stdout.write('{}\n')
       process.exit(0)
+    }
+  } else {
+    // No daemon running: this hook pays the cold path, but kick a detached
+    // `__internal-ensure-daemon` child so the NEXT hook is warm. Fire-and-
+    // forget — never awaited, never blocks the hook response; spawnDaemon's
+    // cross-process lock keeps concurrent hooks from racing the socket bind.
+    // stdin has NOT been read yet, so fall through to main()'s cold hook
+    // handler, which reads it there.
+    try {
+      const entry = process.argv[1]
+      if (entry) {
+        const { spawn } = await import('node:child_process')
+        const child = spawn(process.execPath, [entry, '__internal-ensure-daemon'], {
+          detached: true,
+          stdio: 'ignore',
+        })
+        child.unref()
+      }
+    } catch {
+      /* best-effort — the cold path below still serves this hook */
     }
   }
 }

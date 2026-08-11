@@ -62,6 +62,17 @@ afterEach(async () => {
 })
 
 describe('pre-edit hook', () => {
+  test('runs the credential guard before edit memory decisions', async () => {
+    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
+    const out = await runWith({
+      file_path: '/abs/repo/.env',
+      content: `OPENAI_API_KEY=${syntheticKey}`,
+    })
+    expect(out).toContain('permissionDecision')
+    expect(out).toContain('deny')
+    expect(out).toContain('credential guard')
+  })
+
   test('default off: classic heads-up for a gotcha (no CONFLICT spam)', async () => {
     await projectMemory.remember(fixture.projectPath, {
       type: 'gotcha',

@@ -20,7 +20,7 @@
 import { evaluateToolInputSecrets } from '../services/trust-boundary'
 import { type HookIo, runHook } from './_runner'
 
-interface HookInput {
+export interface SecretHookInput {
   tool_name?: string
   tool_input?: unknown
   toolInput?: unknown
@@ -29,14 +29,14 @@ interface HookInput {
   [key: string]: unknown
 }
 
-function decideSecrets(input: HookInput): { deny: string } | null {
+export function decideSecrets(input: SecretHookInput): { deny: string } | null {
   const verdict = evaluateToolInputSecrets(input)
   if (verdict.allow) return null
   return { deny: verdict.denyMessage }
 }
 
 export function runPreSecretsHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {
-  return runHook<HookInput>(
+  return runHook<SecretHookInput>(
     {
       event: 'PreToolUse',
       projectPath,

@@ -21,11 +21,17 @@
  * error (no project, no git) we emit `{}` and stay out of the way.
  */
 
+import { createHash } from 'node:crypto'
+import fs from 'node:fs/promises'
 import path from 'node:path'
+import { DAEMON_PATHS } from '../daemon/protocol'
 import configManager from '../infrastructure/config-manager'
 import { deriveTitle } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
+import { buildAlignmentCard } from '../services/alignment-card'
+import { contextPressureVerdict } from '../services/context-pressure'
 import { buildIndexedFileCue } from '../services/file-cue'
+import { qualityInjectForProject } from '../services/judgment-orchestrator'
 import { loopGuardVerdict } from '../services/loop-guard'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
@@ -49,6 +55,17 @@ const STATE_BUDGET = 1500
 const STUCK_TURN_THRESHOLD = 15
 /** FTS candidates fetched before the preventive-type filter picks ONE. */
 const CUE_CANDIDATES = 8
+const GIT_SNAPSHOT_TTL_MS = 15_000
+
+interface PromptAfterEmit {
+  projectId: string
+  projectPath: string
+  bumpTurn: boolean
+  surfacedIds: string[]
+}
+
+const promptAfterEmit = new WeakMap<object, PromptAfterEmit>()
+const promptPayloadHashes = new Map<string, string>()
 
 interface HookInput {
   prompt?: string
@@ -85,14 +102,15 @@ export async function buildProjectState(
           '  ↳ Before session end: `prjct land` · hand-off `prjct remember context "Session close: …"`'
         )
       }
-      // Loop control — one write returns post-bump task (no second getCurrentTask).
+      // Read-only turn state. The increment moved to afterEmit so SQLite never
+      // sits between the prompt event and the host-visible response.
       const { turns, loopVerdict, currentTask } = await (async () => {
         try {
-          const bumped = await stateStorage.bumpTurnCount(config.projectId)
+          const task = await stateStorage.getCurrentTask(config.projectId)
           return {
-            turns: bumped.count,
-            currentTask: bumped.task,
-            loopVerdict: loopGuardVerdict(config, bumped.task),
+            turns: task?.turnCount ?? 0,
+            currentTask: task,
+            loopVerdict: loopGuardVerdict(config, task),
           }
         } catch {
           /* best-effort — never block the state block on the counter */
@@ -142,12 +160,6 @@ export async function buildProjectState(
       }
 
       try {
-        const [{ contextPressureVerdict }, { buildAlignmentCard }, { qualityInjectForProject }] =
-          await Promise.all([
-            import('../services/context-pressure'),
-            import('../services/alignment-card'),
-            import('../services/judgment-orchestrator'),
-          ])
         const pressure = contextPressureVerdict(config, currentTask)
         const qualityInject = qualityInjectForProject(config.projectId)
         const card = buildAlignmentCard({
@@ -259,11 +271,12 @@ export async function buildProjectState(
  * BM25-matches the prompt's keywords, as a one-line cue. Best-effort —
  * any failure returns null and the state block ships without it.
  */
-export function buildTopicalCue(
-  projectId: string,
-  prompt: string,
-  projectPath?: string
-): string | null {
+interface TopicalCueResult {
+  cue: string
+  memoryId: string
+}
+
+function buildTopicalCueResult(projectId: string, prompt: string): TopicalCueResult | null {
   try {
     const keywords = extractKeywords(prompt)
     if (keywords.length === 0) return null
@@ -273,18 +286,30 @@ export function buildTopicalCue(
       hits.find((e) => e.type === 'anti-pattern' || e.type === 'pattern') ??
       hits.find((e) => e.type === 'gotcha' || e.type === 'anti-pattern')
     if (!ranked) return null
-    if (projectPath) void recordSurfacedForActiveTask(projectId, projectPath, [ranked.id])
-    // Terminal-only tip channel: agent must relay this to the user in chat.
     if (ranked.type === 'decision' || ranked.type === 'gotcha' || ranked.type === 'fact') {
-      return `> Tip→user (SoT): ${deriveTitle(ranked)}  \`${ranked.id}\` — say it briefly in chat; binding — do not contradict without superseding`
+      return {
+        cue: `> Tip→user (SoT): ${deriveTitle(ranked)}  \`${ranked.id}\` — say it briefly in chat; binding — do not contradict without superseding`,
+        memoryId: ranked.id,
+      }
     }
     if (ranked.type === 'anti-pattern' || ranked.type === 'pattern') {
-      return `> Tip→user (suggest): ${deriveTitle(ranked)}  \`${ranked.id}\` — propose the live change in chat, then apply when editing`
+      return {
+        cue: `> Tip→user (suggest): ${deriveTitle(ranked)}  \`${ranked.id}\` — propose the live change in chat, then apply when editing`,
+        memoryId: ranked.id,
+      }
     }
-    return `> Tip→user: ${deriveTitle(ranked)}  \`${ranked.id}\``
+    return { cue: `> Tip→user: ${deriveTitle(ranked)}  \`${ranked.id}\``, memoryId: ranked.id }
   } catch {
     return null
   }
+}
+
+export function buildTopicalCue(
+  projectId: string,
+  prompt: string,
+  _projectPath?: string
+): string | null {
+  return buildTopicalCueResult(projectId, prompt)?.cue ?? null
 }
 
 interface GitSnapshot {
@@ -295,30 +320,91 @@ interface GitSnapshot {
   ahead: number
 }
 
+interface GitSnapshotCacheEntry {
+  snapshot: GitSnapshot
+  expiresAt: number
+  indexMtimeMs: number
+}
+
 // The daemon serves hooks from a long-lived process, so agentic bursts
 // (dozens of prompts per minute) would fork `git status` dozens of times
 // for a snapshot that can't meaningfully change between turns. A short
-// TTL bounds staleness to 3s — far below the rate at which branch/staged
-// state matters in the injected one-liner — and drops the fork rate from
-// O(prompts) to at most one burst per TTL window per cwd.
-const GIT_SNAPSHOT_TTL_MS = 3000
-const gitSnapshotCache = new Map<string, { snapshot: GitSnapshot; expiresAt: number }>()
+// A 15s TTL plus .git/index mtime invalidation drops forks across both warm
+// and cold hooks while still observing staged/branch changes immediately.
+const gitSnapshotCache = new Map<string, GitSnapshotCacheEntry>()
+const gitSnapshotTestState = { skipDiskSnapshotOnce: false }
 
 /** Test-only: drop cached git snapshots so a test can observe fresh state. */
 export function _resetGitSnapshotCacheForTests(): void {
   gitSnapshotCache.clear()
+  gitSnapshotTestState.skipDiskSnapshotOnce = true
 }
 
 async function captureGit(projectPath: string): Promise<GitSnapshot> {
+  const indexMtimeMs = await fs
+    .stat(path.join(projectPath, '.git', 'index'))
+    .then((stat) => stat.mtimeMs)
+    .catch(() => 0)
   const cached = gitSnapshotCache.get(projectPath)
-  if (cached && cached.expiresAt > Date.now()) return cached.snapshot
+  if (cached && cached.expiresAt > Date.now() && cached.indexMtimeMs === indexMtimeMs) {
+    return cached.snapshot
+  }
+
+  const diskPath = gitSnapshotPath(projectPath)
+  if (!gitSnapshotTestState.skipDiskSnapshotOnce) {
+    const disk = await fs
+      .readFile(diskPath, 'utf-8')
+      .then((raw) => JSON.parse(raw) as GitSnapshotCacheEntry)
+      .catch(() => null)
+    if (disk && disk.expiresAt > Date.now() && disk.indexMtimeMs === indexMtimeMs) {
+      gitSnapshotCache.set(projectPath, disk)
+      return disk.snapshot
+    }
+  }
+  gitSnapshotTestState.skipDiskSnapshotOnce = false
 
   const snapshot = await captureGitUncached(projectPath)
   // Bound the map: hooks only ever run for a handful of cwds per daemon,
   // but a runaway caller must not grow this unbounded.
   if (gitSnapshotCache.size > 32) gitSnapshotCache.clear()
-  gitSnapshotCache.set(projectPath, { snapshot, expiresAt: Date.now() + GIT_SNAPSHOT_TTL_MS })
+  const entry = { snapshot, expiresAt: Date.now() + GIT_SNAPSHOT_TTL_MS, indexMtimeMs }
+  gitSnapshotCache.set(projectPath, entry)
+  await fs
+    .mkdir(path.dirname(diskPath), { recursive: true })
+    .then(() => fs.writeFile(diskPath, JSON.stringify(entry)))
+    .catch(() => undefined)
   return snapshot
+}
+
+function gitSnapshotPath(projectPath: string): string {
+  const key = createHash('sha1').update(path.resolve(projectPath)).digest('hex').slice(0, 16)
+  return path.join(DAEMON_PATHS.runDir(), `prompt-git-${key}.json`)
+}
+
+function promptHashKey(projectId: string, projectPath: string): string {
+  const cwd = createHash('sha1').update(path.resolve(projectPath)).digest('hex').slice(0, 12)
+  return `${projectId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${cwd}`
+}
+
+async function dedupePromptPayload(
+  projectId: string,
+  projectPath: string,
+  payload: string
+): Promise<string | null> {
+  const key = promptHashKey(projectId, projectPath)
+  const hash = createHash('sha256').update(payload).digest('hex')
+  if (promptPayloadHashes.get(key) === hash) return null
+  if (promptPayloadHashes.size > 64) promptPayloadHashes.clear()
+  promptPayloadHashes.set(key, hash)
+
+  const stamp = path.join(DAEMON_PATHS.runDir(), `prompt-state-${key}.hash`)
+  const previous = await fs.readFile(stamp, 'utf-8').catch(() => '')
+  if (previous.trim() === hash) return null
+  await fs
+    .mkdir(path.dirname(stamp), { recursive: true })
+    .then(() => fs.writeFile(stamp, hash))
+    .catch(() => undefined)
+  return payload
 }
 
 async function captureGitUncached(projectPath: string): Promise<GitSnapshot> {
@@ -387,6 +473,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         const prompt = (input.prompt ?? '').trim()
         if (!prompt) return null
         const config = await configManager.readConfig(p)
+        if (!config?.projectId) return null
         // PUSH→PULL: the per-turn hook injects ONLY lean project-state facts
         // (active work, branch, working tree) so the agent can disambiguate
         // intent without asking. Topical memory and improvement signals are
@@ -400,11 +487,59 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         // The ONE push exception: a single trap cue when the prompt's
         // keywords hit a gotcha/anti-pattern (see header). State leads;
         // the cue is appended and shares the same hard budget.
-        const cue = config?.projectId ? buildTopicalCue(config.projectId, prompt, p) : null
-        const files = config?.projectId ? buildIndexedFileCue(config.projectId, prompt) : null
-        return safeTruncate([state, cue, files].filter(Boolean).join('\n\n'), STATE_BUDGET)
+        const cueResult = buildTopicalCueResult(config.projectId, prompt)
+        const files = buildIndexedFileCue(config.projectId, prompt)
+        promptAfterEmit.set(input as object, {
+          projectId: config.projectId,
+          projectPath: p,
+          bumpTurn: state.includes('Active work cycle:'),
+          surfacedIds: cueResult ? [cueResult.memoryId] : [],
+        })
+        const payload = safeTruncate(
+          [state, cueResult?.cue, files].filter(Boolean).join('\n\n'),
+          STATE_BUDGET
+        )
+        return dedupePromptPayload(config.projectId, p, payload)
+      },
+      afterEmit: async (input, p) => {
+        const pending =
+          promptAfterEmit.get(input as object) ?? (await rebuildPromptAfterEmit(input, p))
+        promptAfterEmit.delete(input as object)
+        if (!pending) return
+        await Promise.all([
+          pending.bumpTurn
+            ? stateStorage.bumpTurnCount(pending.projectId).then(() => undefined)
+            : Promise.resolve(),
+          pending.surfacedIds.length > 0
+            ? recordSurfacedForActiveTask(
+                pending.projectId,
+                pending.projectPath,
+                pending.surfacedIds
+              )
+            : Promise.resolve(),
+        ])
       },
     },
     io
   )
+}
+
+async function rebuildPromptAfterEmit(
+  input: HookInput,
+  projectPath: string
+): Promise<PromptAfterEmit | null> {
+  const prompt = (input.prompt ?? '').trim()
+  if (!prompt) return null
+  const config = await configManager.readConfig(projectPath).catch(() => null)
+  if (!config?.projectId) return null
+  const [task, cueResult] = await Promise.all([
+    stateStorage.getCurrentTask(config.projectId).catch(() => null),
+    Promise.resolve(buildTopicalCueResult(config.projectId, prompt)),
+  ])
+  return {
+    projectId: config.projectId,
+    projectPath,
+    bumpTurn: Boolean(task),
+    surfacedIds: cueResult ? [cueResult.memoryId] : [],
+  }
 }

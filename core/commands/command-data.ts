@@ -763,6 +763,28 @@ export const COMMANDS: CommandMeta[] = [
     ],
   },
   {
+    name: 'perf',
+    group: 'optional',
+    surface: 'ai-agile',
+    routing: { group: 'product', method: 'perf' },
+    optionSchema: { numbers: ['days'] },
+    description: 'Report p50/p95 latency for commands and hooks from local telemetry',
+    usage: {
+      claude: 'p. perf [7]',
+      terminal: 'prjct perf [days] [--md]',
+    },
+    params: '[days]',
+    implemented: true,
+    hasTemplate: false,
+    requiresProject: true,
+    isOptional: true,
+    features: [
+      'Reads existing command_duration samples from SQLite',
+      'Groups hook samples under hook:<subcommand>',
+      'Reports p50, p95, average, min, max, and sample count',
+    ],
+  },
+  {
     name: 'cloud',
     group: 'setup',
     surface: 'support',

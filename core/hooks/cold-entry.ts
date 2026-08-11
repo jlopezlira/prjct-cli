@@ -103,6 +103,7 @@ async function main(): Promise<void> {
     })()
     const pending: Array<() => Promise<void>> = []
     await runner(process.cwd(), {
+      afterEmitOnly: isAfterEmitWorker,
       input,
       sink: (chunk: string) => {
         // Worker: parent already answered the host — never write again.
@@ -123,6 +124,7 @@ async function main(): Promise<void> {
     // transcript/pattern work) does not block host process exit. If the
     // spawn fails, fall back to in-process await so work is not lost.
     if (pending.length > 0) {
+      if (process.env.PRJCT_HOOK_BENCH === '1') process.exit(0)
       const detached = trySpawnAfterEmitWorker(subcommand, stdinPayload)
       if (!detached) {
         for (const fn2 of pending) await fn2().catch(() => undefined)
