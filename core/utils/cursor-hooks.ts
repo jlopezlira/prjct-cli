@@ -87,21 +87,14 @@ export function cursorHookMaps(): CursorHookMap[] {
         cursorEvent: 'preToolUse',
         matcher: 'Shell|Bash',
         subcommand: spec.subcommand,
-        // Disambiguate when the same subcommand installs on shell + write matchers
-        name:
-          spec.subcommand === 'pre-secrets'
-            ? 'prjct-pre-secrets-shell'
-            : `prjct-${spec.subcommand}`,
+        name: `prjct-${spec.subcommand}`,
       })
     } else if (spec.event === 'PreToolUse' && spec.matcher === 'Edit|Write') {
       maps.push({
         cursorEvent: 'preToolUse',
         matcher: 'Write|StrReplace|Edit',
         subcommand: spec.subcommand,
-        name:
-          spec.subcommand === 'pre-secrets'
-            ? 'prjct-pre-secrets-write'
-            : `prjct-${spec.subcommand}`,
+        name: `prjct-${spec.subcommand}`,
       })
     } else if (spec.event === 'PostToolUse' && spec.matcher === 'Edit|Write') {
       maps.push({

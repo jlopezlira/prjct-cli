@@ -90,19 +90,19 @@ export function geminiHookMaps(): GeminiHookMap[] {
         name: `prjct-${spec.subcommand}`,
       })
     } else if (spec.event === 'PreToolUse' && spec.matcher === 'Bash') {
-      // pre-secrets + pre-commit both map here; names disambiguate.
+      // Consolidated Bash gate: one process covers secrets, packages, commit memory.
       maps.push({
         geminiEvent: 'BeforeTool',
         matcher: 'run_shell_command',
         subcommand: spec.subcommand,
-        name: `prjct-${spec.subcommand}${spec.subcommand === 'pre-secrets' ? '-shell' : ''}`,
+        name: `prjct-${spec.subcommand}`,
       })
     } else if (spec.event === 'PreToolUse' && spec.matcher === 'Edit|Write') {
       maps.push({
         geminiEvent: 'BeforeTool',
         matcher: 'write_file|replace',
         subcommand: spec.subcommand,
-        name: `prjct-${spec.subcommand}${spec.subcommand === 'pre-secrets' ? '-write' : ''}`,
+        name: `prjct-${spec.subcommand}`,
       })
     } else if (spec.event === 'PostToolUse' && spec.matcher === 'Edit|Write') {
       maps.push({

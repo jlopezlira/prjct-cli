@@ -5,6 +5,7 @@
  */
 
 import { detectAgentRuntimes } from '../infrastructure/agent-runtime-registry'
+import { type LatencyReport, performanceTracker } from '../infrastructure/performance-tracker'
 import type { MemoryEntry, MemoryType } from '../memory/entries'
 import { deriveTitle, flatDetail, preventiveLabel } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
@@ -300,6 +301,23 @@ export class ProductCommands extends PrjctCommandsBase {
         options.md ? formatPerformanceMd(days, cycles) : formatPerformanceText(days, cycles)
       )
       return { success: true, days, cycles: cycles.length }
+    } catch (error) {
+      return failHard(getErrorMessage(error), options)
+    }
+  }
+
+  async perf(
+    input: string | null = null,
+    projectPath: string = process.cwd(),
+    options: ProductOptions = {}
+  ): Promise<CommandResult> {
+    try {
+      const guard = await requireProject(projectPath, options)
+      if (!guard.ok) return guard.result
+      const days = pickDays(input, options.days, 7)
+      const report = performanceTracker.getLatencyReport(guard.value, days)
+      console.log(options.md ? formatLatencyMd(report) : formatLatencyText(report))
+      return { success: true, days, commands: Object.keys(report.commands).length }
     } catch (error) {
       return failHard(getErrorMessage(error), options)
     }
@@ -1167,6 +1185,39 @@ function formatPerformanceText(days: number, cycles: PerformanceCycle[]): string
   const knownTime = cycles.filter((cycle) => cycle.minutes !== null)
   const minutes = knownTime.reduce((sum, cycle) => sum + (cycle.minutes ?? 0), 0)
   return `AI work performance (${days}d): ${cycles.length} cycle(s), ${knownTime.length} with duration, ${minutes} known minute(s).`
+}
+
+function formatLatencyMd(report: LatencyReport): string {
+  const lines = ['# prjct performance', '', `Window: ${report.period}`, '']
+  const rows = Object.entries(report.commands).sort(([a], [b]) => a.localeCompare(b))
+  if (rows.length === 0) {
+    lines.push('No command or hook latency samples recorded in this window.')
+    return lines.join('\n')
+  }
+  lines.push('| Command / hook | Samples | p50 | p95 | Avg | Min | Max |')
+  lines.push('|---|---:|---:|---:|---:|---:|---:|')
+  for (const [command, stats] of rows) {
+    lines.push(
+      `| ${escapeCell(command)} | ${stats.count} | ${stats.p50.toFixed(1)}ms | ${stats.p95.toFixed(1)}ms | ${stats.avg.toFixed(1)}ms | ${stats.min.toFixed(1)}ms | ${stats.max.toFixed(1)}ms |`
+    )
+  }
+  lines.push(
+    '',
+    'Hook samples are recorded after the host-visible response; telemetry never blocks the hook.'
+  )
+  return lines.join('\n')
+}
+
+function formatLatencyText(report: LatencyReport): string {
+  const rows = Object.entries(report.commands)
+  if (rows.length === 0) return `prjct performance (${report.period}): no latency samples.`
+  return rows
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(
+      ([command, stats]) =>
+        `${command}: p50 ${stats.p50.toFixed(1)}ms · p95 ${stats.p95.toFixed(1)}ms · n=${stats.count}`
+    )
+    .join('\n')
 }
 
 /**

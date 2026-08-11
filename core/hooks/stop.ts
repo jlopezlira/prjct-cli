@@ -16,6 +16,8 @@
  */
 
 import fs from 'node:fs/promises'
+import path from 'node:path'
+import { DAEMON_PATHS } from '../daemon/protocol'
 import configManager from '../infrastructure/config-manager'
 import { recordAgentSessionEnd } from '../services/agent-session-recorder'
 import { embeddingService } from '../services/embeddings'
@@ -45,19 +47,81 @@ interface HookInput {
  * Claude fires Stop after EVERY assistant turn, but pattern detection
  * (2 git forks, ~110ms), session cleanup (inbox recall + archive prune) and
  * the embeddings backfill are session-cadence work — running them per turn
- * made the Stop hook do O(session) duplicated work all day. Daemon-resident
- * map: the warm daemon (the hot case) honors the cooldown; a cold one-shot
- * CLI stop simply runs the work — correct either way, since every step is
- * idempotent.
+ * made the Stop hook do O(session) duplicated work all day.
+ *
+ * Source of truth is a per-project stamp file in the daemon run dir
+ * (`~/.prjct-cli/run/stop-heavy-<projectId>.stamp`): the COLD path spawns a
+ * fresh detached worker per event (core/hooks/cold-entry.ts), where an
+ * in-memory map would reset every time and every Stop would re-run the
+ * mining. The in-memory map remains as a same-process fast path for the
+ * warm daemon. The stamp is written BEFORE the work runs so concurrent
+ * Stops don't duplicate it. If the run dir is unreadable/unwritable we
+ * fall through and run the work — every step is idempotent.
  */
 const HEAVY_STEP_COOLDOWN_MS = 10 * 60 * 1000
 const heavyStepLastRun = new Map<string, number>()
 
-function heavyStepsDue(projectId: string): boolean {
+/** Exported for tests (stamp location is part of the cooldown contract). */
+export function heavyStepStampPath(projectId: string): string {
+  // projectId is not guaranteed filename-safe across hosts — clamp it.
+  const safeId = projectId.replace(/[^a-zA-Z0-9._-]/g, '_')
+  return path.join(DAEMON_PATHS.runDir(), `stop-heavy-${safeId}.stamp`)
+}
+
+async function claimHeavyStep(stamp: string, now: number, retry: boolean = true): Promise<boolean> {
+  const recent = await fs
+    .stat(stamp)
+    .then((stat) => now - stat.mtimeMs < HEAVY_STEP_COOLDOWN_MS)
+    .catch(() => false)
+  if (recent) return false
+
+  const lock = `${stamp}.lock`
+  try {
+    await fs.mkdir(lock)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    const staleLock = await fs
+      .stat(lock)
+      .then((stat) => now - stat.mtimeMs >= HEAVY_STEP_COOLDOWN_MS)
+      .catch(() => false)
+    if (!staleLock || !retry) return false
+    await fs.rmdir(lock).catch(() => undefined)
+    return claimHeavyStep(stamp, now, false)
+  }
+
+  try {
+    // Re-check under the atomic mkdir lock: another process may have written
+    // the stamp between our optimistic stat and lock acquisition.
+    const claimed = await fs
+      .stat(stamp)
+      .then((stat) => now - stat.mtimeMs < HEAVY_STEP_COOLDOWN_MS)
+      .catch(() => false)
+    if (claimed) return false
+    await fs.writeFile(stamp, String(now))
+    return true
+  } finally {
+    await fs.rmdir(lock).catch(() => undefined)
+  }
+}
+
+/** Exported for tests (core/__tests__/hooks/stop-heavy-cooldown.test.ts). */
+export async function heavyStepsDue(projectId: string): Promise<boolean> {
+  const now = Date.now()
+  // Fast path: same-process (warm daemon) — no disk hit.
   const last = heavyStepLastRun.get(projectId) ?? 0
-  if (Date.now() - last < HEAVY_STEP_COOLDOWN_MS) return false
+  if (now - last < HEAVY_STEP_COOLDOWN_MS) return false
+  try {
+    const stamp = heavyStepStampPath(projectId)
+    await fs.mkdir(path.dirname(stamp), { recursive: true })
+    const due = await claimHeavyStep(stamp, now)
+    if (heavyStepLastRun.size > 32) heavyStepLastRun.clear()
+    heavyStepLastRun.set(projectId, now)
+    return due
+  } catch {
+    // Run dir unwritable → run the work anyway (idempotent).
+  }
   if (heavyStepLastRun.size > 32) heavyStepLastRun.clear()
-  heavyStepLastRun.set(projectId, Date.now())
+  heavyStepLastRun.set(projectId, now)
   return true
 }
 
@@ -181,7 +245,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // Session-cadence work behind the cooldown (see heavyStepsDue): these
         // steps are idempotent and their signal changes on the minutes scale,
         // not per turn.
-        const runHeavySteps = heavyStepsDue(config.projectId)
+        const runHeavySteps = await heavyStepsDue(config.projectId)
 
         // M2: detect durable patterns (hot files for now) and persist them
         // as learning memory entries. Lookup-first protocol means Claude

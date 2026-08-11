@@ -82,8 +82,8 @@ describe('package install parse (PreToolUse superiority)', () => {
     expect(r.newPackages).toEqual(['evil-typo'])
   })
 
-  it('pre-package is registered in PRJCT_HOOKS', () => {
-    expect(PRJCT_HOOKS.some((h) => h.subcommand === 'pre-package')).toBe(true)
+  it('package legitimacy is registered through the consolidated Bash hook', () => {
+    expect(PRJCT_HOOKS.some((h) => h.subcommand === 'pre-bash')).toBe(true)
   })
 })
 

@@ -104,6 +104,31 @@ describe('hook routing — process/daemon parity', () => {
     expect(pendingAfterEmit).toBe(1)
     expect(afterEmitCalls).toHaveLength(0)
   })
+
+  test('afterEmit-only workers skip build and schedule only the side-effect', async () => {
+    const calls: string[] = []
+    const pending: Array<() => Promise<void>> = []
+    const opts: RunHookOptions<unknown> = {
+      event: 'Stop',
+      build: async () => {
+        calls.push('build')
+        return 'context'
+      },
+      afterEmit: async () => {
+        calls.push('after')
+      },
+    }
+    await runHook(opts, {
+      afterEmitOnly: true,
+      input: {},
+      sink: () => calls.push('sink'),
+      detachAfterEmit: (fn) => pending.push(fn),
+    })
+    expect(calls).toEqual([])
+    expect(pending).toHaveLength(1)
+    await pending[0]!()
+    expect(calls).toEqual(['after'])
+  })
 })
 
 describe('hook registry', () => {
@@ -112,6 +137,7 @@ describe('hook registry', () => {
     for (const name of [
       'session-start',
       'prompt',
+      'pre-bash',
       'pre-commit',
       'post-edit',
       'stop',

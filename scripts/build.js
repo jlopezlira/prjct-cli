@@ -207,7 +207,14 @@ const __dirname = __pathDirname(__filename);`,
  * the very top of bin/prjct.ts — routing them to the daemon (the shim's
  * default for unknown commands) would error: no registry handler exists.
  */
-const SHIM_EXTRA_SKIP = ['dev', 'web', 'serve', '__internal-auto-update', '__post-upgrade']
+const SHIM_EXTRA_SKIP = [
+  'dev',
+  'web',
+  'serve',
+  '__internal-auto-update',
+  '__post-upgrade',
+  '__internal-ensure-daemon',
+]
 
 /**
  * Evaluate the command manifest (command-data.ts) at
@@ -273,7 +280,7 @@ function generateDaemonShim() {
   // execute via dist/bin/prjct.mjs). Any future change to the fallback
   // policy MUST update both this string and bin/prjct.ts + protocol.ts.
   return `#!/usr/bin/env node
-import{connect}from"node:net";import{existsSync}from"node:fs";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{join,resolve}from"node:path";
+import{connect}from"node:net";import{existsSync}from"node:fs";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{join,resolve}from"node:path";import{spawn}from"node:child_process";
 const cliHome=process.env.PRJCT_CLI_HOME?resolve(process.env.PRJCT_CLI_HOME):join(homedir(),".prjct-cli");
 const namedPipe=process.platform==="win32";
 const sockPath=namedPipe?"\\\\.\\pipe\\prjct-"+createHash("sha1").update(resolve(cliHome)).digest("hex").slice(0,16)+"-daemon":join(cliHome,"run","daemon.sock");
@@ -293,7 +300,7 @@ function sendHook(sub,data){
   const msg=JSON.stringify({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data})+"\\n";
   const sock=connect(sockPath);const chunks=[],completion=new AbortController();
   const soft=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();process.stdout.write("{}\\n");process.exit(0)}};
-  const t=setTimeout(soft,5000);
+  const t=setTimeout(soft,800);
   sock.on("connect",()=>sock.write(msg));
   sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));if(r.retry){soft();return}completion.abort();clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(r.exitCode!=null?r.exitCode:0)}});
   sock.on("error",soft);
@@ -307,6 +314,12 @@ if(cmd==="hook"){
     // Cold path (daemon disabled/unreachable): run the hook from the dedicated
     // hooks bundle, NOT the full core. cold-entry emits host JSON then detaches
     // afterEmit into a worker (PRJCT_HOOK_AFTER_EMIT) so Stop does not block.
+    // When the daemon is simply DOWN (not disabled), kick a detached
+    // __internal-ensure-daemon child first (fire-and-forget — never blocks
+    // this hook) so the NEXT hook gets the warm path. The child re-runs this
+    // shim; __internal-ensure-daemon is in the skip set, so it falls through
+    // to prjct-core.mjs, whose bin entry calls spawnDaemon() and exits.
+    if(process.env.PRJCT_NO_DAEMON!=="1"){try{const c=spawn(process.execPath,[process.argv[1],"__internal-ensure-daemon"],{detached:true,stdio:"ignore"});c.unref()}catch{}}
     import("./prjct-hooks.mjs").catch(()=>{process.stdout.write("{}\\n");process.exit(0)})
   }
 }else if(cmd&&!skip.has(cmd)&&process.env.PRJCT_NO_DAEMON!=="1"&&hasEndpoint()){

@@ -23,7 +23,7 @@ import { safeTruncate } from './_shared'
 const MAX_CHARS = 1200
 const MAX_ENTRIES = 3
 
-interface HookInput {
+export interface CommitHookInput {
   tool_name?: string
   tool_input?: { command?: string }
 }
@@ -71,7 +71,7 @@ function mentionsFragment(entry: MemoryEntry, fragments: string[]): boolean {
   return false
 }
 
-async function buildPreCommitContext(projectPath: string): Promise<string | null> {
+export async function buildPreCommitContext(projectPath: string): Promise<string | null> {
   const config = await configManager.readConfig(projectPath)
   if (!config?.projectId) return null
 
@@ -109,7 +109,7 @@ async function buildPreCommitContext(projectPath: string): Promise<string | null
 }
 
 export function runPreCommitHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {
-  return runHook<HookInput>(
+  return runHook<CommitHookInput>(
     {
       event: 'PreToolUse',
       projectPath,
@@ -117,11 +117,14 @@ export function runPreCommitHook(projectPath: string = process.cwd(), io?: HookI
         // Only fire for `git commit` invocations — the matcher in
         // settings.json already narrows to Bash, but the `if:` clause
         // is pattern-based and the host may pass us other Bash calls.
-        const command = input.tool_input?.command ?? ''
-        if (!/\bgit\s+commit\b/.test(command)) return null
+        if (!isCommitInput(input)) return null
         return buildPreCommitContext(p)
       },
     },
     io
   )
+}
+
+export function isCommitInput(input: CommitHookInput): boolean {
+  return /\bgit\s+commit\b/.test(input.tool_input?.command ?? '')
 }

@@ -196,10 +196,13 @@ describe('managed hooks never depend on PPID', () => {
     expect(hookCommandUsesFragileEnv(fragile)).toBe(true)
   })
 
-  it('registers pre-secrets for both Bash and Edit|Write', () => {
-    const secrets = PRJCT_HOOKS.filter((h) => h.subcommand === 'pre-secrets')
-    expect(secrets.length).toBe(2)
-    const matchers = secrets.map((h) => String(h.matcher)).sort()
-    expect(matchers).toEqual(['Bash', 'Edit|Write'])
+  it('registers one consolidated pre-process per Bash/Edit event', () => {
+    const preTools = PRJCT_HOOKS.filter((h) => h.event === 'PreToolUse')
+    expect(preTools.filter((h) => h.matcher === 'Bash').map((h) => h.subcommand)).toEqual([
+      'pre-bash',
+    ])
+    expect(preTools.filter((h) => h.matcher === 'Edit|Write').map((h) => h.subcommand)).toEqual([
+      'pre-edit',
+    ])
   })
 })

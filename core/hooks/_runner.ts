@@ -62,6 +62,8 @@ export interface RunHookOptions<I> {
  * daemon instead of cold in a freshly-spawned process.
  */
 export interface HookIo {
+  /** Detached cold worker: run only side-effects; parent already built/emitted. */
+  afterEmitOnly?: boolean
   /** The hook event payload, already parsed from the wire request. */
   input: unknown
   /** Receives the exact bytes the process path would write to stdout
@@ -78,13 +80,16 @@ export async function runHook<I = Record<string, unknown>>(
   io?: HookIo
 ): Promise<void> {
   const projectPath = opts.projectPath ?? process.cwd()
-
   if (io) {
     // Daemon (warm) path. Mirror the process path's fail-soft contract:
     // any throw becomes the empty no-op `{}` so a broken hook can never
     // disturb the host session.
     try {
       const input = io.input as I
+      if (io.afterEmitOnly) {
+        if (opts.afterEmit) io.detachAfterEmit(() => opts.afterEmit!(input, projectPath))
+        return
+      }
       const decision = opts.decide ? await opts.decide(input, projectPath) : null
       if (decision) {
         const payload = adaptHookOutputForHost(buildDenyOutput(opts.event, decision.deny))

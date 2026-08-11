@@ -28,15 +28,16 @@ import { conflictModeWithWeakModel } from '../services/weak-model-mode'
 import { stateStorage } from '../storage/state-storage'
 import { type HookIo, runHook } from './_runner'
 import { safeTruncate } from './_shared'
+import { decideSecrets, type SecretHookInput } from './pre-secrets'
 
 const MAX_CHARS = 1200
 
 /** Per-invocation cache so decide + build share one recall (P0-3). */
 const preventiveRecallCache = new Map<string, MemoryEntry[]>()
 
-interface HookInput {
+interface HookInput extends SecretHookInput {
   tool_name?: string
-  tool_input?: { file_path?: string }
+  tool_input?: { file_path?: string; [key: string]: unknown }
 }
 
 function recallPreventiveOnce(projectId: string, filePath: string): MemoryEntry[] {
@@ -226,6 +227,8 @@ export function runPreEditHook(projectPath: string = process.cwd(), io?: HookIo)
       projectPath,
       decide: async (input, p) => {
         clearPreventiveCache()
+        const secretDecision = decideSecrets(input)
+        if (secretDecision) return secretDecision
         return decideHardStop(p, input.tool_input?.file_path?.trim())
       },
       build: async (input, p) => {

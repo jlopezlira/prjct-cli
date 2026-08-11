@@ -25,6 +25,20 @@ import prjctDb from '../storage/database'
 /** Max age for stale marks before cleanup (5 minutes in nanoseconds) */
 const STALE_MARK_NS = BigInt(5 * 60 * 1_000_000_000)
 
+export interface LatencyPercentiles {
+  count: number
+  min: number
+  p50: number
+  p95: number
+  max: number
+  avg: number
+}
+
+export interface LatencyReport {
+  period: string
+  commands: Record<string, LatencyPercentiles>
+}
+
 class PerformanceTracker {
   private marks: Map<string, bigint> = new Map()
 
@@ -327,6 +341,39 @@ class PerformanceTracker {
     }
 
     return report
+  }
+
+  /** p50/p95 by command (hooks use the `hook:<subcommand>` namespace). */
+  getLatencyReport(projectId: string, days: number = 7): LatencyReport {
+    const sinceDate = new Date()
+    sinceDate.setDate(sinceDate.getDate() - days)
+    const entries = this.getMetrics(projectId, sinceDate).filter(
+      (entry): entry is PerformanceMetric =>
+        'metric' in entry && entry.metric === 'command_duration'
+    )
+    const grouped = new Map<string, number[]>()
+    for (const entry of entries) {
+      const command = typeof entry.context?.command === 'string' ? entry.context.command : 'unknown'
+      const values = grouped.get(command) ?? []
+      values.push(entry.value)
+      grouped.set(command, values)
+    }
+
+    const commands: Record<string, LatencyPercentiles> = {}
+    for (const [command, values] of grouped) {
+      const sorted = [...values].sort((a, b) => a - b)
+      const percentile = (value: number): number =>
+        sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * value) - 1))]!
+      commands[command] = {
+        count: sorted.length,
+        min: sorted[0]!,
+        p50: percentile(0.5),
+        p95: percentile(0.95),
+        max: sorted.at(-1)!,
+        avg: Math.round((sorted.reduce((sum, item) => sum + item, 0) / sorted.length) * 100) / 100,
+      }
+    }
+    return { period: `${days}d`, commands }
   }
 }
 

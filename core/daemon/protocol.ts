@@ -46,8 +46,14 @@ export const DAEMON_PATHS = {
   log: () => path.join(DAEMON_PATHS.runDir(), 'daemon.log'),
 }
 
-/** Default idle timeout before auto-shutdown (30 minutes) */
-export const IDLE_TIMEOUT_MS = 30 * 60 * 1000
+/**
+ * Default idle timeout before auto-shutdown (8 hours). Sized to outlive a
+ * full working session: every request — hooks included — resets the idle
+ * timer, so the daemon only dies after 8h of total inactivity (e.g.
+ * overnight). The old 30min value let the daemon die mid-session, silently
+ * degrading every later hook to the cold path (~300ms bun / ~950ms node).
+ */
+export const IDLE_TIMEOUT_MS = 8 * 60 * 60 * 1000
 
 /** Maximum buffer size per connection before rejecting (1 MB) */
 export const MAX_BUFFER_SIZE = 1024 * 1024
@@ -86,10 +92,12 @@ export const LONG_RUNNING_COMMANDS: ReadonlySet<string> = new Set([
 
 /**
  * Client timeout for hook requests. Hooks are fail-soft and latency-critical
- * (Claude Code waits). A hung daemon must not block the host for 30s — the
- * production shim already uses 5s; keep the source path identical.
+ * (Claude Code waits). The warm daemon answers in ~5-20ms, so 800ms is
+ * already generous; a hung daemon must degrade to the cold in-process path
+ * fast, never block the host for 30s. The production shim uses the same
+ * value — keep them identical.
  */
-export const HOOK_REQUEST_TIMEOUT_MS = 5_000
+export const HOOK_REQUEST_TIMEOUT_MS = 800
 
 /** Resolve the client-side wait budget for a daemon-routed command. */
 export function commandRequestTimeoutMs(command: string): number {

@@ -6,6 +6,7 @@ import {
   getDaemonRunDir,
   getDaemonSocketPath,
   HOOK_REQUEST_TIMEOUT_MS,
+  IDLE_TIMEOUT_MS,
   isDaemonNamedPipe,
   LONG_COMMAND_TIMEOUT_MS,
   LONG_RUNNING_COMMANDS,
@@ -32,9 +33,9 @@ describe('daemon IPC platform paths', () => {
 })
 
 describe('commandRequestTimeoutMs', () => {
-  test('hooks stay fail-soft at 5s', () => {
+  test('hooks stay fail-soft at 800ms', () => {
     expect(commandRequestTimeoutMs('hook')).toBe(HOOK_REQUEST_TIMEOUT_MS)
-    expect(HOOK_REQUEST_TIMEOUT_MS).toBe(5_000)
+    expect(HOOK_REQUEST_TIMEOUT_MS).toBe(800)
   })
 
   test('ship/sync and other long verbs get the 10min budget', () => {
@@ -50,5 +51,14 @@ describe('commandRequestTimeoutMs', () => {
     expect(commandRequestTimeoutMs('search')).toBe(COMMAND_REQUEST_TIMEOUT_MS)
     expect(commandRequestTimeoutMs('remember')).toBe(COMMAND_REQUEST_TIMEOUT_MS)
     expect(COMMAND_REQUEST_TIMEOUT_MS).toBe(30_000)
+  })
+})
+
+describe('IDLE_TIMEOUT_MS', () => {
+  test('is 8h so the daemon outlives a full working session', () => {
+    // 30min let the daemon die mid-Claude-session, silently degrading every
+    // later hook to the cold path. Every request (hooks included) resets the
+    // timer, so 8h only shuts down after a full stretch of inactivity.
+    expect(IDLE_TIMEOUT_MS).toBe(8 * 60 * 60 * 1000)
   })
 })
