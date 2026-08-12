@@ -137,6 +137,12 @@ export interface SkillMiss {
 export interface SkillMissResult {
   signalsRecorded: number
   signalsSkipped: number
+  failures: Array<{
+    category: 'skill-miss'
+    expectedBehavior: string
+    observedBehavior: string
+    relatedRuleId: string
+  }>
 }
 
 /**
@@ -150,7 +156,7 @@ export async function detectSkillMisses(
   projectPath: string,
   transcriptPath: string,
   sessionId: string | null,
-  opts: { preloadedLines?: TranscriptJsonlLine[] } = {}
+  opts: { preloadedLines?: TranscriptJsonlLine[]; runtime?: string; model?: string } = {}
 ): Promise<SkillMissResult> {
   const lines = opts.preloadedLines
     ? (opts.preloadedLines as TranscriptLine[])
@@ -158,13 +164,13 @@ export async function detectSkillMisses(
         .readFile(transcriptPath, 'utf-8')
         .then(parseJsonl)
         .catch(() => null)
-  if (!lines) return { signalsRecorded: 0, signalsSkipped: 0 }
+  if (!lines) return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
 
   const projectId = projectIdFromPath(projectPath)
-  if (!projectId) return { signalsRecorded: 0, signalsSkipped: 0 }
+  if (!projectId) return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
 
   const transcriptText = transcriptTextOf(lines)
-  if (!transcriptText) return { signalsRecorded: 0, signalsSkipped: 0 }
+  if (!transcriptText) return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
 
   const candidates = (() => {
     try {
@@ -173,8 +179,8 @@ export async function detectSkillMisses(
       return null
     }
   })()
-  if (!candidates) return { signalsRecorded: 0, signalsSkipped: 0 }
-  if (candidates.length === 0) return { signalsRecorded: 0, signalsSkipped: 0 }
+  if (!candidates) return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
+  if (candidates.length === 0) return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
 
   // Best-effort booster — absence never blocks token-based detection.
   const changedFiles = await getModifiedFiles(projectPath).catch(() => [])
@@ -198,7 +204,7 @@ export async function detectSkillMisses(
   })()
 
   const misses = analyze(transcriptText, changedFiles, candidates, crewFiles)
-  if (misses.length === 0) return { signalsRecorded: 0, signalsSkipped: 0 }
+  if (misses.length === 0) return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
 
   const existing = existingSkillMissKeys(projectId)
   const outcomes: Array<'recorded' | 'skipped'> = []
@@ -216,6 +222,8 @@ export async function detectSkillMisses(
           source: SOURCE_TAG,
           kind: 'skill-miss',
           category: 'skill-miss',
+          ...(opts.runtime ? { runtime: opts.runtime } : {}),
+          ...(opts.model ? { model: opts.model } : {}),
           relates: miss.memId,
           file: miss.evidenceFile,
           key,
@@ -234,7 +242,16 @@ export async function detectSkillMisses(
   }
   const recorded = outcomes.filter((outcome) => outcome === 'recorded').length
   const skipped = outcomes.filter((outcome) => outcome === 'skipped').length
-  return { signalsRecorded: recorded, signalsSkipped: skipped }
+  return {
+    signalsRecorded: recorded,
+    signalsSkipped: skipped,
+    failures: misses.slice(0, MAX_SKILL_MISSES_PER_SESSION).map((miss) => ({
+      category: 'skill-miss',
+      expectedBehavior: `Apply relevant project rule ${miss.memId}.`,
+      observedBehavior: 'Relevant project knowledge was not referenced in the session.',
+      relatedRuleId: miss.memId,
+    })),
+  }
 }
 
 // Pure core — exported via _internal for unit tests (no DB / no fs).

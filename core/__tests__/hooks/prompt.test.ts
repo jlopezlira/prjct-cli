@@ -18,12 +18,16 @@ import path from 'node:path'
 import { indexProject } from '../../domain/bm25'
 import {
   _resetGitSnapshotCacheForTests,
+  buildDeliveryGuidance,
   buildProjectState,
+  buildSelectiveGuidance,
   buildTopicalCue,
+  classifyDeliveryIntent,
   runPromptHook,
 } from '../../hooks/prompt'
 import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
+import { BASE_MEMORY_TYPES } from '../../memory/entries'
 import { buildIndexedFileCue } from '../../services/file-cue'
 import prjctDb from '../../storage/database'
 import { stateStorage } from '../../storage/state-storage'
@@ -218,7 +222,12 @@ describe('UserPromptSubmit — project state', () => {
 })
 
 describe('UserPromptSubmit — topical trap cue', () => {
-  function seedMirror(id: string, type: string, content: string): void {
+  function seedMirror(
+    id: string,
+    type: string,
+    content: string,
+    tags: Record<string, string> = {}
+  ): void {
     // Single-source: searchFts/recall read memory_entries (FTS trigger indexes).
     const createdMs = Date.now()
     prjctDb.run(
@@ -236,6 +245,16 @@ describe('UserPromptSubmit — topical trap cue', () => {
       createdMs,
       createdMs
     )
+    for (const [key, value] of Object.entries(tags)) {
+      prjctDb.run(
+        fixture.projectId,
+        `INSERT INTO memory_entry_tags (entry_id, key, value, is_machine)
+         VALUES (?, ?, ?, 0)`,
+        id,
+        key,
+        value
+      )
+    }
   }
 
   it('surfaces ONE gotcha when prompt keywords match', async () => {
@@ -264,6 +283,95 @@ describe('UserPromptSubmit — topical trap cue', () => {
     seedMirror('mem_4', 'gotcha', 'biome resolves zero files inside a git worktree')
     const cue = buildTopicalCue(fixture.projectId, 'completely unrelated cooking recipe question')
     expect(cue).toBeNull()
+  })
+
+  it('makes example a first-class memory type', () => {
+    expect(BASE_MEMORY_TYPES).toContain('example')
+  })
+
+  it('classifies explicit PR, review, CI-watch, and merge delivery intents', () => {
+    expect(classifyDeliveryIntent('Open a PR for this change')).toBe('pr')
+    expect(classifyDeliveryIntent('Address the review feedback')).toBe('review')
+    expect(classifyDeliveryIntent('Watch CI until all checks pass')).toBe('ci-watch')
+    expect(classifyDeliveryIntent('merge it')).toBe('merge')
+    expect(classifyDeliveryIntent('review this local parser implementation')).toBeNull()
+  })
+
+  it('provides compact intent-specific delivery guidance', () => {
+    const pr = buildDeliveryGuidance('Open a PR for this change')!
+    expect(pr).toContain('human outcome')
+    expect(pr).toContain('Problem/why first')
+    expect(pr).toContain('Bad:')
+    expect(pr).toContain('Good:')
+
+    const review = buildDeliveryGuidance('Address the review feedback')!
+    expect(review).toContain('original goal/spec')
+    expect(review).toContain('--fromCurrent')
+
+    const ci = buildDeliveryGuidance('Watch CI until all checks pass')!
+    expect(ci).toContain('repository failure')
+    expect(ci).toContain('infrastructure flake')
+
+    const merge = buildDeliveryGuidance('merge it')!
+    expect(merge).toContain('required checks')
+    expect(merge).toContain('approval')
+    for (const guidance of [pr, review, ci, merge]) {
+      expect(guidance.length).toBeLessThanOrEqual(420)
+    }
+  })
+
+  it('selects at most two distinctive guidance entries within 420 chars', async () => {
+    await freshProject()
+    seedMirror(
+      'mem_voice',
+      'voice',
+      'For websocket compression reports, lead with the user-visible latency result.'
+    )
+    seedMirror('mem_good', 'example', 'Good: Cut websocket payload size by 70% with compression.', {
+      domain: 'websocket',
+      polarity: 'good',
+    })
+    seedMirror(
+      'mem_bad',
+      'example',
+      'Bad: Refactor websocket transport implementation internals.',
+      { domain: 'websocket', polarity: 'bad' }
+    )
+
+    const result = buildSelectiveGuidance(
+      fixture.projectId,
+      'Write the websocket compression PR description'
+    )
+    expect(result).not.toBeNull()
+    expect(result!.memoryIds).toHaveLength(2)
+    expect(result!.text.length).toBeLessThanOrEqual(420)
+    expect(result!.text).toContain('selective guidance')
+  })
+
+  it('requires example domain/polarity tags and does not match generic prompts', async () => {
+    await freshProject()
+    seedMirror('mem_untagged', 'example', 'Good: explain database replication plainly.')
+    seedMirror('mem_voice_generic', 'voice', 'Keep reports short and direct.')
+
+    expect(buildSelectiveGuidance(fixture.projectId, 'continue the current work')).toBeNull()
+    expect(
+      buildSelectiveGuidance(fixture.projectId, 'explain database replication plainly')
+    ).toBeNull()
+  })
+
+  it('injects delivery scope containment after state and requires separate capture', async () => {
+    await freshProject()
+    const chunks: string[] = []
+    await runPromptHook(fixture.projectPath, {
+      input: { prompt: 'Address the PR review feedback and watch CI' },
+      sink: (chunk) => chunks.push(chunk),
+      detachAfterEmit: () => {},
+    })
+    const output = chunks.join('')
+    expect(output).toContain('delivery guidance')
+    expect(output).toContain('original goal')
+    expect(output).toContain('--fromCurrent')
+    expect(output.indexOf('project state')).toBeLessThan(output.indexOf('delivery guidance'))
   })
 })
 

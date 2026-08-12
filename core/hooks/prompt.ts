@@ -6,16 +6,15 @@
  * so the LLM can disambiguate intent without asking ("listo" + dirty tree +
  * active work + unpushed commits → ship; clean tree → close work).
  *
- * Topical memory and improvement signals are PULL, not PUSH: the agent
+ * General memory and improvement signals are PULL, not PUSH: the agent
  * fetches them on demand (`prjct context memory <topic>`, `prjct guard
  * <file>`, MCP recall). Per-turn keyword-matched recall used to match on
  * stopwords/noise and burn the context window with entries the turn never
  * needed — exactly the bloat we refuse to ship to clients.
  *
- * ONE exception to PULL: preventive knowledge. When the prompt's keywords
- * BM25-match a `gotcha`/`anti-pattern`, a single one-line trap cue rides
- * along — the same class the pre-edit guard pushes, because a trap only
- * helps BEFORE it's stepped in. Decisions/learnings/facts stay pull-only.
+ * Narrow exceptions to PULL: preventive knowledge and explicitly authored,
+ * selectively matched instruction guidance. Decisions/learnings/facts stay
+ * pull-only; every pushed section shares the existing hard state budget.
  *
  * Zero "do X" prescription. The LLM decides. Degrades gracefully: on any
  * error (no project, no git) we emit `{}` and stay out of the way.
@@ -31,12 +30,18 @@ import { projectMemory } from '../memory/project-memory'
 import { buildAlignmentCard } from '../services/alignment-card'
 import { contextPressureVerdict } from '../services/context-pressure'
 import { buildIndexedFileCue } from '../services/file-cue'
+import {
+  buildDeliveryGuidance,
+  classifyDeliveryIntent,
+  type DeliveryIntent,
+} from '../services/instruction-guidance'
 import { qualityInjectForProject } from '../services/judgment-orchestrator'
 import { loopGuardVerdict } from '../services/loop-guard'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
 import { prjctDb } from '../storage/database'
+import { instructionFailureStorage } from '../storage/instruction-failure-storage'
 import { queueStorage } from '../storage/queue-storage'
 import { shippedStorage } from '../storage/shipped-storage'
 import { stateStorage } from '../storage/state-storage'
@@ -55,13 +60,38 @@ const STATE_BUDGET = 1500
 const STUCK_TURN_THRESHOLD = 15
 /** FTS candidates fetched before the preventive-type filter picks ONE. */
 const CUE_CANDIDATES = 8
+const GUIDANCE_BUDGET = 420
+const GUIDANCE_MAX_ENTRIES = 2
 const GIT_SNAPSHOT_TTL_MS = 15_000
+
+export { buildDeliveryGuidance, classifyDeliveryIntent, type DeliveryIntent }
+
+const GENERIC_GUIDANCE_TOKENS = new Set([
+  'address',
+  'apply',
+  'check',
+  'continue',
+  'create',
+  'current',
+  'description',
+  'feedback',
+  'handle',
+  'merge',
+  'monitor',
+  'please',
+  'review',
+  'should',
+  'title',
+  'watch',
+  'write',
+])
 
 interface PromptAfterEmit {
   projectId: string
   projectPath: string
   bumpTurn: boolean
   surfacedIds: string[]
+  guidanceRuleId: string | null
 }
 
 const promptAfterEmit = new WeakMap<object, PromptAfterEmit>()
@@ -276,6 +306,91 @@ interface TopicalCueResult {
   memoryId: string
 }
 
+export interface SelectiveGuidanceResult {
+  text: string
+  memoryIds: string[]
+}
+
+function isValidGuidanceEntry(entry: { type: string; tags: Record<string, string> }): boolean {
+  if (entry.type === 'voice' || entry.type === 'glossary') return true
+  return (
+    entry.type === 'example' &&
+    Boolean(entry.tags.domain) &&
+    (entry.tags.polarity === 'good' || entry.tags.polarity === 'bad')
+  )
+}
+
+/**
+ * Selective, bounded guidance for a prompt. Generic action words never open
+ * the memory floodgate: topical lookup requires a distinctive token, while
+ * explicit delivery intents may additionally use entries tagged for that
+ * delivery domain.
+ */
+export function buildSelectiveGuidance(
+  projectId: string,
+  prompt: string
+): SelectiveGuidanceResult | null {
+  try {
+    const intent = classifyDeliveryIntent(prompt)
+    const distinctive = extractKeywords(prompt).filter(
+      (token) => token.length >= 5 && !GENERIC_GUIDANCE_TOKENS.has(token)
+    )
+    const topical =
+      distinctive.length > 0
+        ? projectMemory.searchFts(projectId, distinctive, CUE_CANDIDATES * 2)
+        : []
+    const delivery = intent
+      ? projectMemory
+          .recall(projectId, {
+            types: ['voice', 'glossary', 'example'],
+            limit: CUE_CANDIDATES * 2,
+          })
+          .filter((entry) => entry.tags.domain === 'delivery' || entry.tags.domain === intent)
+      : []
+    const unique = new Map([...topical, ...delivery].map((entry) => [entry.id, entry]))
+    const typeRank = new Map([
+      ['voice', 0],
+      ['glossary', 1],
+      ['example', 2],
+    ])
+    const selected = [...unique.values()]
+      .filter(isValidGuidanceEntry)
+      .sort((a, b) => (typeRank.get(a.type) ?? 3) - (typeRank.get(b.type) ?? 3))
+      .slice(0, GUIDANCE_MAX_ENTRIES)
+    if (selected.length === 0) return null
+
+    const lines = ['# prjct: selective guidance']
+    for (const entry of selected) {
+      const qualifiers =
+        entry.type === 'example'
+          ? ` ${entry.tags.polarity}/${entry.tags.domain}`
+          : entry.tags.domain
+            ? ` ${entry.tags.domain}`
+            : ''
+      const available = GUIDANCE_BUDGET - lines.join('\n').length - qualifiers.length - 8
+      if (available < 24) break
+      const content = safeTruncate(
+        entry.content.replace(/\s+/g, ' ').trim(),
+        Math.min(150, available)
+      )
+      lines.push(`- ${entry.type}${qualifiers}: ${content}`)
+    }
+    if (lines.length === 1) return null
+    return {
+      text: safeTruncate(lines.join('\n'), GUIDANCE_BUDGET),
+      memoryIds: selected.slice(0, lines.length - 1).map((entry) => entry.id),
+    }
+  } catch {
+    return null
+  }
+}
+
+function appendPromptSection(payload: string, section: string | null | undefined): string | null {
+  if (!section) return payload
+  const candidate = payload ? `${payload}\n\n${section}` : section
+  return candidate.length <= STATE_BUDGET ? candidate : null
+}
+
 function buildTopicalCueResult(projectId: string, prompt: string): TopicalCueResult | null {
   try {
     const keywords = extractKeywords(prompt)
@@ -464,6 +579,45 @@ function formatRelative(isoTimestamp: string): string {
   return `${Math.floor(days / 30)}mo ago`
 }
 
+interface PromptGuidanceComputation {
+  prioritized: string
+  cueResult: TopicalCueResult | null
+  guidance: SelectiveGuidanceResult | null
+  guidanceIncluded: boolean
+  guidanceRuleId: string | null
+}
+
+/**
+ * Shared by the fast in-process `build:` path and `rebuildPromptAfterEmit`'s
+ * cross-process fallback (the `afterEmit:` WeakMap cache doesn't survive a
+ * detached/re-entrant hook invocation) — one computation, not two drifting
+ * copies of the same prioritized-payload + guidance-attribution logic.
+ */
+function computePromptGuidance(
+  projectId: string,
+  prompt: string,
+  state: string
+): PromptGuidanceComputation {
+  const cueResult = buildTopicalCueResult(projectId, prompt)
+  const files = buildIndexedFileCue(projectId, prompt)
+  const delivery = buildDeliveryGuidance(prompt)
+  const guidance = buildSelectiveGuidance(projectId, prompt)
+  const prioritized = [cueResult?.cue, delivery, guidance?.text, files]
+    .filter((section): section is string => Boolean(section))
+    .reduce<string>(
+      (payload, section) => appendPromptSection(payload, section) ?? payload,
+      safeTruncate(state, STATE_BUDGET)
+    )
+  const guidanceIncluded = Boolean(guidance?.text && prioritized.includes(guidance.text))
+  const deliveryIncluded = Boolean(delivery && prioritized.includes(delivery))
+  const guidanceRuleId = deliveryIncluded
+    ? `delivery:${classifyDeliveryIntent(prompt) ?? 'unknown'}`
+    : guidanceIncluded
+      ? (guidance?.memoryIds[0] ?? null)
+      : null
+  return { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId }
+}
+
 export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {
   return runHook<HookInput>(
     {
@@ -474,32 +628,31 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         if (!prompt) return null
         const config = await configManager.readConfig(p)
         if (!config?.projectId) return null
-        // PUSH→PULL: the per-turn hook injects ONLY lean project-state facts
+        // PUSH→PULL: the per-turn hook starts with lean project-state facts
         // (active work, branch, working tree) so the agent can disambiguate
-        // intent without asking. Topical memory and improvement signals are
-        // PULL, not PUSH — the agent fetches them on demand via
+        // intent without asking. General memory and improvement signals are
+        // PULL — the agent fetches them on demand via
         // `prjct context memory <topic>`, `prjct guard <file>`, or the MCP
         // recall tools. Pushing keyword-matched memory into every prompt
         // matched on stopwords/noise and burned the context window with
         // entries the turn never needed.
         const state = await buildProjectState(p, config)
         if (!state) return null
-        // The ONE push exception: a single trap cue when the prompt's
-        // keywords hit a gotcha/anti-pattern (see header). State leads;
-        // the cue is appended and shares the same hard budget.
-        const cueResult = buildTopicalCueResult(config.projectId, prompt)
-        const files = buildIndexedFileCue(config.projectId, prompt)
+        // Narrow push exceptions: one preventive cue plus selective delivery
+        // and authored guidance. State leads; all sections share one budget.
+        const { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
+          computePromptGuidance(config.projectId, prompt, state)
         promptAfterEmit.set(input as object, {
           projectId: config.projectId,
           projectPath: p,
           bumpTurn: state.includes('Active work cycle:'),
-          surfacedIds: cueResult ? [cueResult.memoryId] : [],
+          surfacedIds: [
+            ...(cueResult ? [cueResult.memoryId] : []),
+            ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
+          ],
+          guidanceRuleId,
         })
-        const payload = safeTruncate(
-          [state, cueResult?.cue, files].filter(Boolean).join('\n\n'),
-          STATE_BUDGET
-        )
-        return dedupePromptPayload(config.projectId, p, payload)
+        return dedupePromptPayload(config.projectId, p, prioritized)
       },
       afterEmit: async (input, p) => {
         const pending =
@@ -517,6 +670,13 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 pending.surfacedIds
               )
             : Promise.resolve(),
+          pending.guidanceRuleId
+            ? Promise.resolve(
+                instructionFailureStorage.recordGuidanceActivation(pending.projectId, {
+                  ruleId: pending.guidanceRuleId,
+                })
+              ).then(() => undefined)
+            : Promise.resolve(),
         ])
       },
     },
@@ -532,14 +692,23 @@ async function rebuildPromptAfterEmit(
   if (!prompt) return null
   const config = await configManager.readConfig(projectPath).catch(() => null)
   if (!config?.projectId) return null
-  const [task, cueResult] = await Promise.all([
+  const [task, state] = await Promise.all([
     stateStorage.getCurrentTask(config.projectId).catch(() => null),
-    Promise.resolve(buildTopicalCueResult(config.projectId, prompt)),
+    buildProjectState(projectPath, config),
   ])
+  const { cueResult, guidance, guidanceIncluded, guidanceRuleId } = computePromptGuidance(
+    config.projectId,
+    prompt,
+    state ?? ''
+  )
   return {
     projectId: config.projectId,
     projectPath,
     bumpTurn: Boolean(task),
-    surfacedIds: cueResult ? [cueResult.memoryId] : [],
+    surfacedIds: [
+      ...(cueResult ? [cueResult.memoryId] : []),
+      ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
+    ],
+    guidanceRuleId,
   }
 }

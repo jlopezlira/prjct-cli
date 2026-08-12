@@ -151,6 +151,18 @@ export async function applyDoctorHeal(
     skillPoisoned,
   })
 
+  // Computed once, reused by multi-runtime-wire and agent-surfaces below —
+  // both need "which runtimes are actually present" and detectAgentRuntimes
+  // does real filesystem probing, not worth calling twice in one heal pass.
+  const runtimeIdsCache: { value: string[] | null } = { value: null }
+  async function detectedIds(): Promise<string[]> {
+    if (!runtimeIdsCache.value) {
+      const runtimes = await detectAgentRuntimes(projectPath)
+      runtimeIdsCache.value = runtimes.filter((r) => r.detected).map((r) => r.runtime.id)
+    }
+    return runtimeIdsCache.value
+  }
+
   for (const action of plan.actions) {
     if (!action.needed && action.id !== 'organic-board') {
       skipped.push(action.id)
@@ -166,27 +178,26 @@ export async function applyDoctorHeal(
         applied.push(action.id)
       } else if (action.id === 'multi-runtime-wire') {
         // Mirror install.ts: wire every detected host
-        const runtimes = await detectAgentRuntimes(projectPath)
-        const detected = runtimes.filter((r) => r.detected)
-        if (detected.some((r) => r.runtime.id === 'codex')) {
+        const detected = await detectedIds()
+        if (detected.includes('codex')) {
           const { ensureCodexMcpServer } = await import('../utils/codex-mcp')
           const { installCodexHooks } = await import('../utils/codex-hooks')
           await ensureCodexMcpServer()
           await installCodexHooks()
         }
-        if (detected.some((r) => r.runtime.id === 'gemini')) {
+        if (detected.includes('gemini')) {
           const { installGeminiSettings } = await import('../utils/gemini-settings')
           await installGeminiSettings()
         }
-        if (detected.some((r) => r.runtime.id === 'cursor')) {
+        if (detected.includes('cursor')) {
           const { installCursorHooks } = await import('../utils/cursor-hooks')
           await installCursorHooks()
         }
-        if (detected.some((r) => r.runtime.id === 'kimi-cli')) {
+        if (detected.includes('kimi-cli')) {
           const { ensureKimiMcpServer } = await import('../utils/kimi-mcp')
           await ensureKimiMcpServer()
         }
-        if (detected.some((r) => r.runtime.id === 'grok')) {
+        if (detected.includes('grok')) {
           const { ensureGrokMcpServer } = await import('../utils/grok-mcp')
           const { installGrokSkill } = await import('../infrastructure/grok-skill')
           const { installGrokPlugin } = await import('../utils/grok-plugin')
@@ -194,11 +205,11 @@ export async function applyDoctorHeal(
           await installGrokSkill()
           await installGrokPlugin()
         }
-        if (detected.some((r) => r.runtime.id === 'opencode')) {
+        if (detected.includes('opencode')) {
           const { ensureOpenCodeMcpServer } = await import('../utils/opencode-mcp')
           await ensureOpenCodeMcpServer()
         }
-        if (detected.some((r) => r.runtime.id === 'pi')) {
+        if (detected.includes('pi')) {
           const { installPiSkill } = await import('../infrastructure/pi-skill')
           await installPiSkill()
         }
@@ -206,7 +217,10 @@ export async function applyDoctorHeal(
         await installHooks()
         applied.push(action.id)
       } else if (action.id === 'agent-surfaces') {
-        await writeProjectAgentSurfaces(projectPath, { explicit: true })
+        // Same detection-gated CLAUDE.md rule as agents.ts/install.ts: only
+        // write it when Claude is actually present, never unconditionally.
+        const detected = await detectedIds()
+        await writeProjectAgentSurfaces(projectPath, { explicit: true, agents: detected })
         applied.push(action.id)
       } else if (action.id === 'organic-board') {
         coverageSnapshots.push(await probeHarnessCoverage(projectPath))

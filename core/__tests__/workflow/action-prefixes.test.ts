@@ -237,3 +237,58 @@ describe('action prefix: git:commit / git:push', () => {
     await fs.rm(remotePath, { recursive: true, force: true })
   })
 })
+
+describe('action prefix: pr:ensure', () => {
+  // Regression: `ship` used to stop at git:push — repeated ships on a
+  // feature branch pushed commits with no PR ever opened/updated, silently
+  // piling up unreviewed work (see PR #606). pr:ensure must never fail an
+  // otherwise-successful ship over PR bookkeeping (missing/unauthenticated
+  // `gh`, network errors) — every failure path is caught and reported as
+  // an instruction line, never thrown. Full create/already-exists paths
+  // need a real GitHub remote + gh auth and are verified manually, not here.
+  const fixture = { projectPath: '', projectId: '' }
+
+  beforeEach(async () => {
+    Object.assign(fixture, await freshProject())
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: fixture.projectPath })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: fixture.projectPath })
+    await fs.writeFile(path.join(fixture.projectPath, 'README.md'), '# tmp\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.projectPath })
+  })
+
+  afterEach(async () => {
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
+  })
+
+  test('is a silent no-op on main — never attempts gh at all', async () => {
+    addStep(fixture.projectId, 'pr:ensure')
+
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
+      runContext: {},
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.instructions).toEqual([])
+  })
+
+  test('reports (never fails) when there is no GitHub remote to operate against', async () => {
+    // No `origin` remote configured — whether or not `gh` itself is on PATH
+    // in the environment running this test (dev machines commonly install
+    // git+gh side by side, so hiding gh via PATH is not reliably
+    // reproducible), `gh pr list`/`gh pr create` cannot succeed without a
+    // real GitHub remote. Every failure path here must report an
+    // instruction and keep result.success true — never throw.
+    execFileSync('git', ['checkout', '-q', '-b', 'feat/x'], { cwd: fixture.projectPath })
+    addStep(fixture.projectId, 'pr:ensure')
+
+    const result = await executeWorkflowRules(fixture.projectId, 'ship', 'before', {
+      projectPath: fixture.projectPath,
+      runContext: {},
+    })
+    expect(result.success).toBe(true)
+    expect(result.instructions.some((i) => i.includes('pr:ensure'))).toBe(true)
+  })
+})

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  identifyTranscriptModel,
   parseTranscriptJsonl,
   sumTranscriptUsage,
   sumTranscriptUsageDetailed,
@@ -89,5 +90,21 @@ describe('sumTranscriptUsage', () => {
     const usage = sumTranscriptUsage(lines)
     expect(usage.tokensIn).toBe(300 + 50)
     expect(usage.tokensOut).toBe(120 + 25)
+  })
+
+  it('identifies one model, mixed models, and unknown without guessing', () => {
+    expect(
+      identifyTranscriptModel([
+        { message: { role: 'assistant', model: 'claude-opus-5' } },
+        { message: { role: 'assistant', model: 'claude-opus-5' } },
+      ])
+    ).toBe('claude-opus-5')
+    expect(
+      identifyTranscriptModel([
+        { message: { role: 'assistant', model: 'gpt-5.6' } },
+        { message: { role: 'assistant', model: 'gpt-5.6-mini' } },
+      ])
+    ).toBe('mixed')
+    expect(identifyTranscriptModel([{ message: { role: 'assistant' } }])).toBe('unknown')
   })
 })

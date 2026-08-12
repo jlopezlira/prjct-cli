@@ -12,6 +12,23 @@
 
 export type TranscriptJsonlLine = Record<string, unknown>
 
+/**
+ * Attribute a transcript to its actual model without inferring from runtime.
+ * A session that contains more than one model is deliberately `mixed` so
+ * reports never credit the wrong model for an instruction failure.
+ */
+export function identifyTranscriptModel(lines: TranscriptJsonlLine[]): string {
+  const models = new Set<string>()
+  for (const line of lines) {
+    const message = asRecord(line.message)
+    const raw = message?.model ?? line.model
+    if (typeof raw === 'string' && raw.trim()) models.add(raw.trim().slice(0, 120))
+  }
+  if (models.size === 0) return 'unknown'
+  if (models.size > 1) return 'mixed'
+  return [...models][0]!
+}
+
 /** Parse transcript JSONL into raw line objects, skipping malformed lines. */
 export function parseTranscriptJsonl(raw: string): TranscriptJsonlLine[] {
   const out: TranscriptJsonlLine[] = []

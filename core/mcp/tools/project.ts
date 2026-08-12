@@ -506,6 +506,20 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
     )
 
     s.registerTool(
+      'prjct_project_facts',
+      {
+        description:
+          'Verified-only per-project facts: stack line + real test/lint/build commands (never guessed). Live — no write.',
+        inputSchema: z.object({ projectPath: optionalProjectPath }),
+      },
+      safeMcpCall('prjct_project_facts', async (args: { projectPath?: string }) => {
+        const path = resolveProjectPath(args.projectPath)
+        const { formatProjectFactsMd } = await import('../../services/prjct-md')
+        return { content: [{ type: 'text', text: await formatProjectFactsMd(path) }] }
+      })
+    )
+
+    s.registerTool(
       'prjct_context_tiers',
       {
         description: 'Context cache tiers L0–L3 + live L0 budget. Never stuff L2 into L0.',

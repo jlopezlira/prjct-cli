@@ -7,6 +7,10 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { HarnessCommands } from '../../commands/harness'
+import configManager from '../../infrastructure/config-manager'
+import pathManager from '../../infrastructure/path-manager'
+import { prjctDb } from '../../storage/database'
+import { instructionFailureStorage } from '../../storage/instruction-failure-storage'
 
 describe('prjct harness command', () => {
   const cmd = new HarnessCommands()
@@ -59,5 +63,78 @@ describe('prjct harness command', () => {
     expect(r.success).toBe(true)
     expect(r.programDone).toBe(true)
     expect(logged()).toContain('Harness score')
+  })
+
+  it('instructions rejects invalid windows with stable result fields', async () => {
+    const r = await cmd.instructions('90d', process.cwd(), { md: true })
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('Invalid instruction window')
+  })
+
+  it('instructions returns the stable report fields', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-harness-instructions-'))
+    const projectId = `harness-instructions-${Math.random().toString(36).slice(2, 10)}`
+    const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
+    const projectSpy = spyOn(configManager, 'getProjectId').mockResolvedValue(projectId)
+    pathManager.getGlobalProjectPath = (id: string) => path.join(dir, id)
+    try {
+      const r = await cmd.instructions(null, dir, { md: true })
+      expect(r).toMatchObject({
+        success: true,
+        window: '7d',
+        total: 0,
+        attributed: 0,
+        attributionRate: 0,
+        open: 0,
+        resolved: 0,
+        falsePositive: 0,
+        falseTriggerRate: 0,
+        groups: [],
+        unresolved: [],
+      })
+      expect(logged()).toContain('No observed sessions')
+    } finally {
+      prjctDb.close(projectId)
+      projectSpy.mockRestore()
+      pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('instructions set records a false-positive disposition', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-harness-disposition-'))
+    const projectId = `harness-disposition-${Math.random().toString(36).slice(2, 10)}`
+    const originalGetGlobalProjectPath = pathManager.getGlobalProjectPath.bind(pathManager)
+    const projectSpy = spyOn(configManager, 'getProjectId').mockResolvedValue(projectId)
+    pathManager.getGlobalProjectPath = (targetId: string) => path.join(dir, targetId)
+    try {
+      const recorded = instructionFailureStorage.record(projectId, {
+        source: 'test',
+        runtime: 'codex',
+        model: 'codex-eval',
+        category: 'scope-creep',
+        expectedBehavior: 'stay in scope',
+        observedBehavior: 'expanded scope',
+      })
+      const result = await cmd.instructionDisposition(recorded.failure.id, 'false-positive', dir)
+      expect(result).toMatchObject({
+        success: true,
+        id: recorded.failure.id,
+        disposition: 'false_positive',
+      })
+      expect(instructionFailureStorage.getById(projectId, recorded.failure.id)?.disposition).toBe(
+        'false_positive'
+      )
+    } finally {
+      prjctDb.close(projectId)
+      projectSpy.mockRestore()
+      pathManager.getGlobalProjectPath = originalGetGlobalProjectPath
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('instructions set fails for missing cases and invalid dispositions', async () => {
+    expect((await cmd.instructionDisposition(null, null)).success).toBe(false)
+    expect((await cmd.instructionDisposition('if_missing', 'ignored')).success).toBe(false)
   })
 })

@@ -48,6 +48,7 @@ pnpm-debug.log*
 .cursor/
 CLAUDE.md
 AGENTS.md
+PRJCT.md
 HANDOFF-*.md
 design-notes/
 images/

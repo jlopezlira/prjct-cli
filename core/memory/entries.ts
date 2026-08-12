@@ -39,6 +39,9 @@ export const BASE_MEMORY_TYPES = [
   'pattern',
   'anti-pattern',
   'shipped',
+  // Selective few-shot guidance. Valid examples carry authored
+  // domain + polarity=good|bad tags and are only pushed on a topical match.
+  'example',
   // Sovereign knowledge base — see KB_MEMORY_TYPES.
   ...KB_MEMORY_TYPES,
   // The history of contexts: one rich, git-linked entry per task — what

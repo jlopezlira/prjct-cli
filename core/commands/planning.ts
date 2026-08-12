@@ -144,6 +144,7 @@ export class PlanningCommands extends PrjctCommandsBase {
 
           const surfaces = await writeProjectAgentSurfaces(projectPath, {
             agents: await this._agentSelections(wizardResult, projectPath),
+            explicit: true,
           }).catch(() => null)
 
           out.done('initialized')
@@ -159,6 +160,7 @@ export class PlanningCommands extends PrjctCommandsBase {
           await commandInstaller.installGlobalConfig()
           const surfaces = await writeProjectAgentSurfaces(projectPath, {
             agents: await this._agentSelections(wizardResult, projectPath),
+            explicit: true,
           }).catch(() => null)
           out.done('blank project - provide idea for architect mode')
           this._printNextSteps(wizardResult, surfaces ?? undefined)
@@ -180,6 +182,7 @@ export class PlanningCommands extends PrjctCommandsBase {
         await commandInstaller.installGlobalConfig()
         const surfaces = await writeProjectAgentSurfaces(projectPath, {
           agents: await this._agentSelections(wizardResult, projectPath),
+          explicit: true,
         }).catch(() => null)
 
         out.done('architect mode ready')
@@ -190,6 +193,7 @@ export class PlanningCommands extends PrjctCommandsBase {
       await commandInstaller.installGlobalConfig()
       const surfaces = await writeProjectAgentSurfaces(projectPath, {
         agents: await this._agentSelections(wizardResult, projectPath),
+        explicit: true,
       }).catch(() => null)
 
       out.done('initialized')
@@ -312,11 +316,53 @@ export class PlanningCommands extends PrjctCommandsBase {
   }
 
   /**
+   * Not every project wants ship to auto-open a PR — some have a custom
+   * template (use it), some are on a non-GitHub/no-remote host (pr:ensure
+   * only speaks `gh`, default to manual), and some are a genuinely
+   * ambiguous GitHub-with-no-template case worth asking a human about
+   * when one is actually at the terminal. Non-interactive runs (CI,
+   * `init --yes`) always get the detected default, never a prompt.
+   */
+  private async _resolveInitialPrConvention(projectId: string, projectPath: string): Promise<void> {
+    const { detectPrConventionSignal, defaultPrConventionFor } = await import(
+      '../services/pr-convention'
+    )
+    const { customWorkflowStorage } = await import('../storage/custom-workflow-storage')
+
+    const signal = await detectPrConventionSignal(projectPath)
+    const detectedConvention = defaultPrConventionFor(signal)
+
+    const isTTY = Boolean(process.stdout.isTTY && process.stdin.isTTY)
+    const askedConvention =
+      signal.kind === 'github-ambiguous' && isTTY
+        ? await (async () => {
+            const p = await import('@clack/prompts')
+            const answer = await p.confirm({
+              message:
+                'This project ships to GitHub with no PR template. Should ship open/update the PR automatically?',
+              initialValue: true,
+            })
+            return p.isCancel(answer) ? null : answer ? 'auto' : 'manual'
+          })()
+        : null
+    const convention = askedConvention ?? detectedConvention
+
+    customWorkflowStorage.updateWorkflow(projectId, 'ship', {
+      metadata: { prConvention: convention },
+    })
+  }
+
+  /**
    * Seed default workflow rules for ship command.
    * Creates sensible defaults based on detected project tools.
    */
   private async _seedShipWorkflow(projectId: string, projectPath: string): Promise<void> {
     const detected = await detectProjectCommands(projectPath)
+    // Decide the PR convention before seeding ship's steps, so
+    // seedCodeShipRules sees a resolved decision immediately instead of
+    // falling back to a silent default (or, for existing projects,
+    // the ship-time backfill question in buildClarification's Case 3.5).
+    await this._resolveInitialPrConvention(projectId, projectPath)
     // Workflow-first core: version bump, changelog, git commit/push live
     // as rules seeded here. Non-code projects get none and ship reduces
     // to a shipped_features write + clarification for ambiguous runs.

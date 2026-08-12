@@ -2686,6 +2686,43 @@ export const migrations: Migration[] = [
       )
     },
   },
+  {
+    version: 64,
+    name: 'instruction-failure-ledger',
+    up: (db: SqliteDatabase) => {
+      db.run("ALTER TABLE agent_sessions ADD COLUMN runtime TEXT NOT NULL DEFAULT 'unknown'")
+      db.run("ALTER TABLE agent_sessions ADD COLUMN model TEXT NOT NULL DEFAULT 'unknown'")
+      db.run(
+        `CREATE TABLE IF NOT EXISTS instruction_failures (
+           id                  TEXT PRIMARY KEY,
+           project_id          TEXT NOT NULL,
+           dedup_key           TEXT NOT NULL UNIQUE,
+           source              TEXT NOT NULL,
+           runtime             TEXT NOT NULL,
+           model               TEXT NOT NULL,
+           session_id          TEXT,
+           task_id             TEXT,
+           category            TEXT NOT NULL,
+           expected_behavior   TEXT NOT NULL,
+           observed_behavior   TEXT NOT NULL,
+           related_rule_id     TEXT,
+           disposition         TEXT NOT NULL DEFAULT 'open'
+                               CHECK (disposition IN ('open', 'resolved', 'false_positive')),
+           occurred_at         TEXT NOT NULL,
+           created_at          TEXT NOT NULL
+         )`
+      )
+      db.run(
+        'CREATE INDEX IF NOT EXISTS ix_instruction_failures_project_occurred ON instruction_failures(project_id, occurred_at DESC)'
+      )
+      db.run(
+        'CREATE INDEX IF NOT EXISTS ix_instruction_failures_runtime_model ON instruction_failures(project_id, runtime, model)'
+      )
+      db.run(
+        'CREATE INDEX IF NOT EXISTS ix_instruction_failures_disposition_occurred ON instruction_failures(project_id, disposition, occurred_at)'
+      )
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations[migrations.length - 1]?.version ?? 0

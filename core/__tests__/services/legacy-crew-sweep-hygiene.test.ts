@@ -295,4 +295,28 @@ describe('legacyCrewSweep — client .prjct config-only', () => {
     expect(again.ghostDirsPurged).toEqual([])
     expect(again.errors).toEqual([])
   })
+
+  test('leaves .prjct/memory-export/ alone — a legitimate, git-shareable feature, not ghost junk', async () => {
+    // Regression: this directory used to get ingested-then-deleted on the
+    // very next sync after `prjct memory export`, silently destroying the
+    // git-shareable export the moment a teammate re-synced.
+    const exportDir = path.join(fixture.projectPath, '.prjct', 'memory-export')
+    await fs.mkdir(exportDir, { recursive: true })
+    await fs.writeFile(
+      path.join(exportDir, 'manifest.json'),
+      JSON.stringify({ version: 1, entries: 1, chunks: 1 })
+    )
+    await fs.writeFile(path.join(exportDir, 'chunk-001.jsonl'), '{"id":"1"}\n')
+
+    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
+
+    expect(result.clientPrjctJunkPurged).not.toContain('memory-export')
+    const entries = await fs.readdir(path.join(fixture.projectPath, '.prjct'))
+    expect(entries.sort()).toEqual(['memory-export', 'prjct.config.json'])
+    const manifestStillThere = await fs
+      .access(path.join(exportDir, 'manifest.json'))
+      .then(() => true)
+      .catch(() => false)
+    expect(manifestStillThere).toBe(true)
+  })
 })

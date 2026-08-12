@@ -22,11 +22,13 @@ import configManager from '../infrastructure/config-manager'
 import { recordAgentSessionEnd } from '../services/agent-session-recorder'
 import { embeddingService } from '../services/embeddings'
 import { detectFriction } from '../services/friction-detector'
+import { resolveInstructionRuntime } from '../services/instruction-attribution'
 import { detectAndPersistLeanDebt } from '../services/lean-detector'
 import { detectAndPersistPatterns } from '../services/pattern-detector'
 import { recordCleanupReport, runSessionCleanup } from '../services/session-cleanup'
 import { detectSkillMisses } from '../services/skill-miss-detector'
 import {
+  identifyTranscriptModel,
   parseTranscriptJsonl,
   sumTranscriptUsage,
   type TranscriptJsonlLine,
@@ -35,6 +37,7 @@ import {
 import { ingestTranscript } from '../services/transcript-learner'
 import { usefulnessService } from '../services/usefulness'
 import { recordTaskTokenUsage } from '../services/work-cost-service'
+import { instructionFailureStorage } from '../storage/instruction-failure-storage'
 import { type HookIo, runHook } from './_runner'
 
 interface HookInput {
@@ -133,6 +136,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
       afterEmit: async (input, p) => {
         const config = await configManager.readConfig(p).catch(() => null)
         if (!config?.projectId) return
+        const runtime = resolveInstructionRuntime()
 
         // Read + parse the transcript ONCE. Three consumers below
         // (transcript-learner, friction-detector, skill-miss-detector) each
@@ -142,10 +146,21 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           transcriptUsage?: TranscriptUsage
           activeTaskId?: string
           activeTaskDescription?: string
+          activeTaskStartedAt?: string
         } = {}
         if (input.transcript_path) {
           const raw = await fs.readFile(input.transcript_path, 'utf-8').catch(() => null)
           if (raw !== null) stopContext.transcriptLines = parseTranscriptJsonl(raw)
+        }
+        const model = identifyTranscriptModel(stopContext.transcriptLines ?? [])
+        try {
+          const { collectActiveTasks } = await import('../services/task-overview')
+          const overview = await collectActiveTasks(config.projectId, p)
+          stopContext.activeTaskId = overview.current?.id
+          stopContext.activeTaskDescription = overview.current?.description
+          stopContext.activeTaskStartedAt = overview.current?.startedAt
+        } catch {
+          /* task attribution is best-effort and independent from token usage */
         }
 
         // Measure the work cycle's token cost: sum the transcript usage and
@@ -159,12 +174,8 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
             // the whole session.
             stopContext.transcriptUsage = sumTranscriptUsage(stopContext.transcriptLines)
             if (stopContext.transcriptUsage.tokensIn + stopContext.transcriptUsage.tokensOut > 0) {
-              const { collectActiveTasks } = await import('../services/task-overview')
-              const overview = await collectActiveTasks(config.projectId, p)
-              stopContext.activeTaskId = overview.current?.id
-              stopContext.activeTaskDescription = overview.current?.description
-              const taskWindow = overview.current?.startedAt
-                ? { sinceIso: overview.current.startedAt }
+              const taskWindow = stopContext.activeTaskStartedAt
+                ? { sinceIso: stopContext.activeTaskStartedAt }
                 : undefined
               const taskUsage = sumTranscriptUsage(stopContext.transcriptLines, taskWindow)
               if (stopContext.activeTaskId && taskUsage.tokensIn + taskUsage.tokensOut > 0) {
@@ -175,13 +186,13 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
                   taskUsage.tokensOut,
                   {
                     description: stopContext.activeTaskDescription,
-                    agent: 'claude',
+                    agent: runtime,
                     // Distinct source so this exact transcript-derived measurement
                     // never shares an event_key with the agent-agnostic manual
                     // report (prjct status --tokens-in, core/commands/primitives.ts)
                     // — both used to default to 'cli' and silently clobber each
                     // other via the token_usage upsert (ON CONFLICT(event_key)).
-                    source: 'claude-transcript',
+                    source: `${runtime}-transcript`,
                   }
                 )
                 // Per-model breakdown: one token_usage row per model this
@@ -202,8 +213,8 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
                       u.tokensOut,
                       {
                         model,
-                        agent: 'claude',
-                        source: `claude-transcript:${model}`,
+                        agent: runtime,
+                        source: `${runtime}-transcript:${model}`,
                       }
                     )
                   }
@@ -225,7 +236,8 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           goal: stopContext.activeTaskDescription,
           tokensIn: stopContext.transcriptUsage?.tokensIn,
           tokensOut: stopContext.transcriptUsage?.tokensOut,
-          agent: 'claude',
+          agent: runtime,
+          model,
         })
 
         // M1a: auto-capture substantive insights from the assistant's
@@ -272,6 +284,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           try {
             const cleanup = await runSessionCleanup(config.projectId)
             await recordCleanupReport(config.projectId, cleanup)
+            instructionFailureStorage.pruneRetained(config.projectId)
           } catch {
             /* never block session end on cleanup */
           }
@@ -291,20 +304,33 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
               input.session_id ?? null,
               {
                 preloadedLines: stopContext.transcriptLines,
+                runtime,
+                model,
               }
             )
+            for (const failure of friction.failures) {
+              try {
+                instructionFailureStorage.record(config.projectId, {
+                  source: 'friction-detector',
+                  runtime,
+                  model,
+                  sessionId: input.session_id ?? null,
+                  taskId: stopContext.activeTaskId ?? null,
+                  ...failure,
+                })
+              } catch {
+                /* ledger is additive; the memory signal remains authoritative */
+              }
+            }
             // AUTOMATIC negative reinforcement (no command): if the user
             // pushed back this session, demote the memories that were in
             // context for the active task. prjct learns from mistakes on its
             // own — the explicit `corrects:` tag is now an optional override,
             // not a requirement.
-            if (friction.signalsRecorded > 0) {
-              // Per-worktree: penalize memories surfaced for THIS workspace's
-              // task, not a sibling worktree's. Falls back to singular.
-              const { collectActiveTasks } = await import('../services/task-overview')
-              const overview = await collectActiveTasks(config.projectId, p)
-              const taskId = overview.current?.id
-              if (taskId) usefulnessService.penalizeSurfaced(config.projectId, taskId)
+            if (friction.signalsRecorded > 0 && stopContext.activeTaskId) {
+              // The task was resolved per-worktree above, so a sibling's
+              // surfaced memories are never penalized by this transcript.
+              usefulnessService.penalizeSurfaced(config.projectId, stopContext.activeTaskId)
             }
           } catch {
             /* same contract as transcript-learner — silent best-effort */
@@ -319,9 +345,30 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // best-effort contract as the friction detector above.
         if (input.transcript_path) {
           try {
-            await detectSkillMisses(p, input.transcript_path, input.session_id ?? null, {
-              preloadedLines: stopContext.transcriptLines,
-            })
+            const skillMisses = await detectSkillMisses(
+              p,
+              input.transcript_path,
+              input.session_id ?? null,
+              {
+                preloadedLines: stopContext.transcriptLines,
+                runtime,
+                model,
+              }
+            )
+            for (const failure of skillMisses.failures) {
+              try {
+                instructionFailureStorage.record(config.projectId, {
+                  source: 'skill-miss-detector',
+                  runtime,
+                  model,
+                  sessionId: input.session_id ?? null,
+                  taskId: stopContext.activeTaskId ?? null,
+                  ...failure,
+                })
+              } catch {
+                /* ledger is additive; the memory signal remains authoritative */
+              }
+            }
           } catch {
             /* silent best-effort — must never block session end */
           }
@@ -358,7 +405,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
               cycleId: stopContext.activeTaskId,
               tokensIn: stopContext.transcriptUsage?.tokensIn,
               tokensOut: stopContext.transcriptUsage?.tokensOut,
-              model: 'claude',
+              model,
             })
           } catch {
             /* never block session end on land synthesis */
@@ -372,7 +419,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
               cycleId: stopContext.activeTaskId,
               tokensIn: stopContext.transcriptUsage?.tokensIn,
               tokensOut: stopContext.transcriptUsage?.tokensOut,
-              model: 'claude',
+              model,
             })
           } catch {
             /* never block session end on judgment receipt */

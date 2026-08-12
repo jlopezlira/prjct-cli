@@ -18,7 +18,7 @@ export interface AgentIdentity {
   sessionId?: string
 }
 
-const KNOWN_AGENTS = new Set([
+export const KNOWN_AGENTS = new Set([
   'claude',
   'codex',
   'gemini',

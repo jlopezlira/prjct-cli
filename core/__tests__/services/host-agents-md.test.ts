@@ -1,6 +1,14 @@
 /**
- * Project AGENTS.md routing block — written by `prjct init` when Codex
- * is detected (or wizard-selected). Mirrors the CLAUDE.md contract:
+ * Project AGENTS.md — self-contained routing writer, written by `prjct init`
+ * (and every `prjct sync` once adopted). AGENTS.md carries the routing map
+ * INLINE (not just a pointer) — verified against Claude Code docs (2026-08):
+ * no cross-tool `@import`-equivalent standard exists for AGENTS.md consumers
+ * (Codex, Gemini, Cursor, etc.), so a bare "see PRJCT.md" pointer would
+ * depend on the model actively choosing to open another file to learn
+ * basic verbs — unreliable, and the literal bug this used to cause ("I say
+ * ship and the agent doesn't know what it means"). Verified per-project
+ * facts (stack/commands) stay a pointer to PRJCT.md — lower-stakes pull.
+ * Mirrors the CLAUDE.md contract:
  *   1. Missing AGENTS.md → created with the block.
  *   2. Existing AGENTS.md without markers → block appended, user content
  *      preserved (this repo's own handwritten AGENTS.md is the canary).
@@ -33,7 +41,7 @@ async function readAgentsMd(): Promise<string> {
 }
 
 describe('writeProjectAgentsMd', () => {
-  it('creates AGENTS.md when none exists', async () => {
+  it('creates AGENTS.md when none exists, self-contained with the routing map', async () => {
     const r = await writeProjectAgentsMd(fixture.dir)
     expect(r.action).toBe('created')
     const body = await readAgentsMd()
@@ -42,7 +50,9 @@ describe('writeProjectAgentsMd', () => {
     expect(body).toContain('## prjct')
     expect(body).toContain('prjct work --md')
     expect(body).toContain('This file holds no rules')
-    // Clean-repo doctrine: a pointer, never an inlined ruleset.
+    // Verified facts (stack/commands) stay a pointer — lower-stakes pull.
+    expect(body).toContain('PRJCT.md')
+    // Clean-repo doctrine: a routing map, never an inlined ruleset.
     expect(body).not.toContain('RAG-backed project memory harness')
   })
 
@@ -94,7 +104,6 @@ describe('writeProjectAgentsMd', () => {
     const body = await readAgentsMd()
     expect(body).toContain('This file holds no rules')
     // Names each organ + the one command to pull it — the map, not the rules.
-    // Surface compression: work+ship default; rest is pull-on-demand short names.
     expect(body).toContain('prjct work --md') // entrypoint
     expect(body).toContain('ship') // ship after user confirm
     expect(body).toMatch(/pull-on-demand|pull:/i)
@@ -103,5 +112,11 @@ describe('writeProjectAgentsMd', () => {
     // But the rules/protocol themselves are NOT inlined here — they live in prjct.
     expect(body).not.toContain('intent brief')
     expect(body).not.toContain('RAG-backed project memory harness')
+  })
+
+  it('stays well under the L0 routing byte budget even with the facts pointer appended', async () => {
+    await writeProjectAgentsMd(fixture.dir)
+    const body = await readAgentsMd()
+    expect(Buffer.byteLength(body, 'utf-8')).toBeLessThanOrEqual(500)
   })
 })

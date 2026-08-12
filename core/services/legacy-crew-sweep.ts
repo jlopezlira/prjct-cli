@@ -128,8 +128,15 @@ export interface LegacySweepResult {
   errors: Array<{ file: string; reason: string }>
 }
 
-/** Only file allowed under client `.prjct/`. */
-export const CLIENT_PRJCT_ALLOWLIST = ['prjct.config.json'] as const
+/**
+ * Entries allowed under client `.prjct/`. `prjct.config.json` is the only
+ * hand-editable file; `memory-export/` is a legitimate product feature
+ * (`prjct memory export|import`, memory-export.ts) — a git-shareable,
+ * intentionally-committed directory, not ghost/leftover state. Excluding it
+ * here previously meant the very next `prjct sync` after an export silently
+ * ingested it as generic ghost text then deleted it.
+ */
+export const CLIENT_PRJCT_ALLOWLIST = ['prjct.config.json', 'memory-export'] as const
 
 async function statMtimeMs(filePath: string): Promise<number | null> {
   try {

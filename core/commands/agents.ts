@@ -25,7 +25,10 @@ interface AgentsOptions extends MdOption {
 
 interface AgentRepairResult {
   success: true
+  prjctMd: string
   agentsMd: string
+  /** null when Claude wasn't detected/selected and no CLAUDE.md already existed. */
+  claudeMd: string | null
   ideRules: string[]
 }
 
@@ -52,10 +55,10 @@ export class AgentsCommands extends PrjctCommandsBase {
         return { success: true, surfaces: true }
       }
 
-      const fixes = options.fix ? await repairAgentSurfaces(projectPath, options) : null
+      const statuses = await detectAgentRuntimes(projectPath)
+      const fixes = options.fix ? await repairAgentSurfaces(projectPath, options, statuses) : null
       if (fixes && !isAgentRepairResult(fixes)) return fixes
 
-      const statuses = await detectAgentRuntimes(projectPath)
       const coverage = await probeHarnessCoverage(projectPath)
       if (options.md) {
         console.log(
@@ -83,16 +86,23 @@ export class AgentsCommands extends PrjctCommandsBase {
 
 async function repairAgentSurfaces(
   projectPath: string,
-  options: AgentsOptions
+  options: AgentsOptions,
+  statuses: AgentRuntimeStatus[]
 ): Promise<CommandResult | AgentRepairResult> {
   const guard = await requireProject(projectPath, options)
   if (!guard.ok) return guard.result
   // The explicit opt-in path: `prjct agents` is the only way prjct writes a
   // pointer into the repo (clean-repo doctrine). All automatic flows no-op.
-  const result = await writeProjectAgentSurfaces(projectPath, { explicit: true })
+  // Reuses the SAME runtime detection this command already computes for its
+  // compatibility table — CLAUDE.md is only written when Claude is actually
+  // detected on this machine/project (or already had one), never blindly.
+  const detected = statuses.filter((status) => status.detected).map((status) => status.runtime.id)
+  const result = await writeProjectAgentSurfaces(projectPath, { explicit: true, agents: detected })
   return {
     success: true,
+    prjctMd: result.prjctMd.action,
     agentsMd: result.agentsMd.action,
+    claudeMd: result.claudeMd?.action ?? null,
     ideRules: result.ideRules,
   }
 }
@@ -101,7 +111,11 @@ function isAgentRepairResult(
   result: CommandResult | AgentRepairResult
 ): result is AgentRepairResult {
   return (
-    result.success === true && typeof result.agentsMd === 'string' && Array.isArray(result.ideRules)
+    result.success === true &&
+    typeof result.prjctMd === 'string' &&
+    typeof result.agentsMd === 'string' &&
+    (result.claudeMd === null || typeof result.claudeMd === 'string') &&
+    Array.isArray(result.ideRules)
   )
 }
 
@@ -138,7 +152,9 @@ function formatMarkdown(
       '',
       '## Repair',
       '',
+      `- PRJCT.md: ${fixes.prjctMd}`,
       `- AGENTS.md: ${fixes.agentsMd}`,
+      `- CLAUDE.md: ${fixes.claudeMd ?? 'skipped (Claude not detected)'}`,
       `- IDE rule adapters: ${fixes.ideRules.length > 0 ? fixes.ideRules.join(', ') : 'none needed'}`
     )
   }
@@ -175,7 +191,7 @@ function formatText(
 
   if (fixes?.success) {
     lines.push(
-      `repair: AGENTS.md ${fixes.agentsMd}; adapters ${
+      `repair: PRJCT.md ${fixes.prjctMd}; AGENTS.md ${fixes.agentsMd}; CLAUDE.md ${fixes.claudeMd ?? 'skipped'}; adapters ${
         fixes.ideRules.length > 0 ? fixes.ideRules.join(', ') : 'none needed'
       }`,
       ''

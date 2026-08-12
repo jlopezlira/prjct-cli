@@ -250,10 +250,10 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
       } else {
         const { runContextTool } = await import('../tools/context')
         const result = await runContextTool(contextArgs, projectId, projectPath)
-        // tiers / artifacts prefer markdown for agents when --md is set
+        // tiers / artifacts / project prefer markdown for agents when --md is set
         if (
           mdMode &&
-          (result.tool === 'tiers' || result.tool === 'artifacts') &&
+          (result.tool === 'tiers' || result.tool === 'artifacts' || result.tool === 'project') &&
           result.result &&
           typeof result.result === 'object' &&
           'markdown' in result.result &&
@@ -532,18 +532,25 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     })()
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'harness') {
-    // score | learn-from | list | use <rig>
+    // score | instructions [window|set <id> <disposition>] | learn-from | list | use <rig>
     const subcommand = args[1] ?? 'list'
     const { HarnessCommands } = await import('../commands/harness')
     const cmd = new HarnessCommands()
     const mdMode = args.includes('--md')
     const result: { success: boolean; error?: string } = await (async () => {
       if (subcommand === 'score') return cmd.score(process.cwd(), { md: mdMode })
+      if (subcommand === 'instructions') {
+        if (args[2] === 'set') {
+          return cmd.instructionDisposition(args[3] ?? null, args[4] ?? null, process.cwd())
+        }
+        const window = args[2]?.startsWith('--') ? null : (args[2] ?? null)
+        return cmd.instructions(window, process.cwd(), { md: mdMode })
+      }
       if (subcommand === 'learn-from') return cmd.learnFrom(process.cwd(), { md: mdMode })
       if (subcommand === 'list') return cmd.list({ md: mdMode })
       if (subcommand === 'use') return cmd.use(args[2] ?? null, process.cwd(), { md: mdMode })
       console.error(
-        `Unknown harness subcommand: ${subcommand}. Use: score, learn-from, list, use <rig>.`
+        `Unknown harness subcommand: ${subcommand}. Use: score, instructions [24h|7d|14d|30d|set <id> <open|resolved|false-positive>], learn-from, list, use <rig>.`
       )
       return { success: false, error: `unknown subcommand: ${subcommand}` }
     })()

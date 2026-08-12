@@ -1,27 +1,28 @@
 /**
- * Project CLAUDE.md — routing block writer.
+ * Project CLAUDE.md — native-import pointer writer.
  *
- * Writes (or refreshes between markers) a small block at the project's
- * `CLAUDE.md` that tells Claude "this project uses prjct — refer to
- * the global skill, don't make the user type commands". The
- * read-merge-write skeleton lives in `routing-block.ts`, shared with
- * the AGENTS.md writer.
+ * Writes (or refreshes between markers) a one-line `@PRJCT.md` import at
+ * the project's `CLAUDE.md`, using Claude Code's native file-import syntax
+ * instead of duplicating the routing map + per-project facts that already
+ * live in `PRJCT.md` (see `prjct-md.ts`). The read-merge-write skeleton
+ * lives in `routing-block.ts`, shared with the AGENTS.md writer.
  */
 
 import {
-  MINIMAL_ROUTING_BODY,
   ROUTING_END_MARKER,
   ROUTING_START_MARKER,
   type RoutingWriteResult,
   writeRoutingBlock,
 } from './routing-block'
 
+export const CLAUDE_MD_IMPORT_STUB = '@PRJCT.md'
+
 const FULL_BLOCK = `${ROUTING_START_MARKER}
-${MINIMAL_ROUTING_BODY}
+${CLAUDE_MD_IMPORT_STUB}
 ${ROUTING_END_MARKER}
 `
 
-/** Write or refresh the prjct routing block at `<projectPath>/CLAUDE.md`. */
+/** Write or refresh the prjct pointer block at `<projectPath>/CLAUDE.md`. */
 export async function writeProjectClaudeMd(projectPath: string): Promise<RoutingWriteResult> {
   return writeRoutingBlock(projectPath, 'CLAUDE.md', FULL_BLOCK)
 }

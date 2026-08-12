@@ -28,6 +28,8 @@ interface SessionRow {
   ended_at: string | null
   summary: string | null
   files_touched: string | null
+  runtime: string
+  model: string
 }
 
 describe('agent session recorder', () => {
@@ -66,12 +68,13 @@ describe('agent session recorder', () => {
       tokensIn: 1200,
       tokensOut: 300,
       agent: 'claude',
+      model: 'claude-opus-5',
       filesTouched: ['core/commands/product.ts'],
     })
 
     const row = prjctDb.get<SessionRow>(
       fixture.projectId,
-      'SELECT id, task_id, ended_at, summary, files_touched FROM agent_sessions WHERE id = ?',
+      'SELECT id, task_id, ended_at, summary, files_touched, runtime, model FROM agent_sessions WHERE id = ?',
       'session-1'
     )
 
@@ -82,5 +85,7 @@ describe('agent session recorder', () => {
     expect(row?.summary).toContain('tokens_in=1200')
     expect(row?.summary).not.toContain('Fix attribution')
     expect(row?.files_touched).toContain('core/commands/product.ts')
+    expect(row?.runtime).toBe('claude')
+    expect(row?.model).toBe('claude-opus-5')
   })
 })

@@ -74,6 +74,14 @@ interface FrictionSignal {
 export interface FrictionResult {
   signalsRecorded: number
   signalsSkipped: number
+  failures: InstructionFailureCandidate[]
+}
+
+export interface InstructionFailureCandidate {
+  category: string
+  expectedBehavior: string
+  observedBehavior: string
+  relatedRuleId: string | null
 }
 
 /**
@@ -86,7 +94,7 @@ export async function detectFriction(
   projectPath: string,
   transcriptPath: string,
   sessionId: string | null,
-  opts: { preloadedLines?: TranscriptJsonlLine[] } = {}
+  opts: { preloadedLines?: TranscriptJsonlLine[]; runtime?: string; model?: string } = {}
 ): Promise<FrictionResult> {
   const lines: TranscriptLine[] | null = opts.preloadedLines
     ? (opts.preloadedLines as TranscriptLine[])
@@ -94,47 +102,58 @@ export async function detectFriction(
         .readFile(transcriptPath, 'utf-8')
         .then(parseJsonl)
         .catch(() => null)
-  if (!lines) return { signalsRecorded: 0, signalsSkipped: 0 }
+  if (!lines) return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
   const signals = extractSignals(lines)
   if (signals.length === 0) {
-    return { signalsRecorded: 0, signalsSkipped: 0 }
+    return { signalsRecorded: 0, signalsSkipped: 0, failures: [] }
   }
+  const failures = signals.slice(0, MAX_SIGNALS_PER_SESSION).map((signal) => ({
+    category: signal.category,
+    expectedBehavior: 'Follow the user constraint without requiring correction.',
+    observedBehavior: `The assistant response triggered user ${signal.category}.`,
+    relatedRuleId: null,
+  }))
 
   // Dedup against signals already in memory (hashing on excerpt).
   const existing = projectMemoryHashes(projectPath)
   const projectId = projectIdFromPath(projectPath) ?? undefined
-  return signals.slice(0, MAX_SIGNALS_PER_SESSION).reduce<Promise<FrictionResult>>(
-    async (pendingCounts, signal) => {
-      const counts = await pendingCounts
-      // `existing` holds the 12-char keys stored on prior signals (see
-      // projectMemoryHashes), so the comparison unit MUST be the same 12-char
-      // slice — comparing the full 64-char hash here silently never matched.
-      const dedupKey = hashSignal(signal.excerpt).slice(0, 12)
-      if (existing.has(dedupKey)) {
-        await maybePromoteStandingPreference(projectPath, projectId, signal).catch(() => {})
-        return { ...counts, signalsSkipped: counts.signalsSkipped + 1 }
-      }
-      try {
-        await projectMemory.remember(projectPath, {
-          type: 'improvement-signal',
-          content: formatSignal(signal),
-          tags: {
-            source: SOURCE_TAG,
-            category: signal.category,
-            ...(sessionId ? { session: sessionId } : {}),
-            key: dedupKey,
-          },
-          provenance: 'extracted',
-          projectId,
-        })
-        existing.add(dedupKey)
-        return { ...counts, signalsRecorded: counts.signalsRecorded + 1 }
-      } catch {
-        return { ...counts, signalsSkipped: counts.signalsSkipped + 1 }
-      }
-    },
-    Promise.resolve({ signalsRecorded: 0, signalsSkipped: 0 })
-  )
+  const counts = await signals
+    .slice(0, MAX_SIGNALS_PER_SESSION)
+    .reduce<Promise<Omit<FrictionResult, 'failures'>>>(
+      async (pendingCounts, signal) => {
+        const counts = await pendingCounts
+        // `existing` holds the 12-char keys stored on prior signals (see
+        // projectMemoryHashes), so the comparison unit MUST be the same 12-char
+        // slice — comparing the full 64-char hash here silently never matched.
+        const dedupKey = hashSignal(signal.excerpt).slice(0, 12)
+        if (existing.has(dedupKey)) {
+          await maybePromoteStandingPreference(projectPath, projectId, signal).catch(() => {})
+          return { ...counts, signalsSkipped: counts.signalsSkipped + 1 }
+        }
+        try {
+          await projectMemory.remember(projectPath, {
+            type: 'improvement-signal',
+            content: formatSignal(signal),
+            tags: {
+              source: SOURCE_TAG,
+              category: signal.category,
+              ...(opts.runtime ? { runtime: opts.runtime } : {}),
+              ...(opts.model ? { model: opts.model } : {}),
+              ...(sessionId ? { session: sessionId } : {}),
+              key: dedupKey,
+            },
+            provenance: 'extracted',
+            projectId,
+          })
+          existing.add(dedupKey)
+          return { ...counts, signalsRecorded: counts.signalsRecorded + 1 }
+        } catch {
+          return { ...counts, signalsSkipped: counts.signalsSkipped + 1 }
+        }
+      },
+      Promise.resolve({ signalsRecorded: 0, signalsSkipped: 0 })
+    )
+  return { ...counts, failures }
 }
 
 // Helpers — exported for tests via _internal.

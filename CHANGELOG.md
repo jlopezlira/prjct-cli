@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [3.87.0] - 2026-08-12
+
+### Added
+- efficiency
+
+## [3.86.0] - 2026-08-12
+
+### Added
+- efficiency
+
+## [3.85.0] - 2026-08-12
+
+### Added
+- Review AGENTS.md and CLAUDE.md surface optimization using canonical-file symlinks
+
 ## [3.84.0] - 2026-08-11
 
 ### Added

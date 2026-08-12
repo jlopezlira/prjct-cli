@@ -72,6 +72,17 @@ export async function runContextTool(
         }
       }
 
+      case 'project': {
+        // Live preview of PRJCT.md's "this project" section — verified-only
+        // stack + commands, no write. Serves repos that never opt into a
+        // written PRJCT.md (see prjct-md.ts's buildProjectFactsSection).
+        const { formatProjectFactsMd } = await import('../../services/prjct-md')
+        return {
+          tool: 'project',
+          result: { markdown: await formatProjectFactsMd(projectPath) },
+        }
+      }
+
       case 'artifacts': {
         // Safe artifact repo — judgment, ships, handoffs, checkpoints.
         const { listSafeArtifacts, formatSafeArtifactsJson, formatSafeArtifactsMd } = await import(
@@ -216,6 +227,10 @@ SUBTOOLS:
   tiers
     Context cache tiers L0–L3 contract + live L0 budget (skill/routing).
     Agents: never stuff L2/L3 into L0 — pull L2 on demand.
+
+  project
+    Live preview of verified per-project facts (stack + real test/lint/build
+    commands) — no write. What PRJCT.md's "this project" section contains.
 
   artifacts
     Safe artifact repo: judgment ledger, ship receipts, handoffs, checkpoints.

@@ -27,6 +27,20 @@ export const L0_SKILL_TOKENS_MAX = 1000
 export const L0_ROUTING_BYTES_MAX = 400
 /** Default MCP ListTools surface (core tier) — schema tokens every session. */
 export const MCP_TOOLS_CORE_MAX = 12
+/**
+ * PRJCT.md hub budget — routing map + verified-only per-project facts
+ * (stack line, real commands across every detected ecosystem). Measured,
+ * not guessed: this repo's own real body is 717B (5 verified commands +
+ * stack line); a pathological single-ecosystem fixture (6 commands, long
+ * framework names, 80-char command truncation applied) measures 1030B
+ * without a stack line. `buildPrjctMdBody` dedupes commands by kind (one
+ * representative command per kind, not one per ecosystem), so a polyglot
+ * repo mixing Node/Cargo/Go/Python still tops out at the same ≤6-command,
+ * 1030B worst case — verified directly, not assumed. 1400 leaves headroom
+ * over the measured worst case while staying well under the skill's
+ * 900-token L0 budget.
+ */
+export const PRJCT_MD_BODY_BYTES_MAX = 1400
 
 export type ContextTierId = 'L0' | 'L1' | 'L2' | 'L3'
 
@@ -49,8 +63,12 @@ export const CONTEXT_TIERS: readonly ContextTierSpec[] = [
     id: 'L0',
     name: 'always-on',
     load: 'every turn (skill + AGENTS/CLAUDE routing)',
-    contents: ['prjct skill body', 'minimal routing map (work/ship/pull verbs)'],
-    pull: 'installed skill + `AGENTS.md` / `CLAUDE.md` routing block',
+    contents: [
+      'prjct skill body',
+      'minimal routing map (work/ship/pull verbs)',
+      'PRJCT.md hub (routing map + verified per-project commands/stack)',
+    ],
+    pull: 'installed skill + `AGENTS.md` / `CLAUDE.md` pointer → `PRJCT.md`',
     antiPattern: 'Do NOT paste memory dumps, full specs, or search results into L0.',
   },
   {
@@ -121,6 +139,25 @@ export function measureL0Budget(): L0BudgetMeasurement {
     routingOk,
     ok: skillOk && routingOk,
   }
+}
+
+export interface PrjctMdBudgetMeasurement {
+  bytes: number
+  max: number
+  ok: boolean
+}
+
+/**
+ * Measure a project's live PRJCT.md footprint against its budget. Unlike
+ * `measureL0Budget()` (sync, parameterless, graded in harness-score.ts),
+ * this is inherently async and project-scoped — a real interface
+ * difference, not folded into that function's signature.
+ */
+export async function measurePrjctMdBudget(projectPath: string): Promise<PrjctMdBudgetMeasurement> {
+  const { buildPrjctMdBody } = await import('./prjct-md')
+  const body = await buildPrjctMdBody(projectPath)
+  const bytes = Buffer.byteLength(body, 'utf-8')
+  return { bytes, max: PRJCT_MD_BODY_BYTES_MAX, ok: bytes <= PRJCT_MD_BODY_BYTES_MAX }
 }
 
 export interface ContextTiersReport {

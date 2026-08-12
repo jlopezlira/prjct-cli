@@ -493,7 +493,19 @@ class SyncService {
       })
 
       await phase('install-agent-surfaces', async () => {
-        await writeProjectAgentSurfaces(this.projectPath)
+        // Never creates the FIRST PRJCT.md/AGENTS.md/CLAUDE.md (that still
+        // requires explicit `prjct agents doctor --fix` — clean-repo
+        // doctrine). But once a project has opted in, every sync now keeps
+        // that surface current and migrates any stale/legacy inline block
+        // to the pointer shape, so agents never read a drifted contract.
+        // CLAUDE.md specifically stays gated on actual detection (never
+        // forced on a project that doesn't use Claude) — re-detecting on
+        // every sync means it appears once Claude actually shows up on this
+        // machine/project, not just at whatever moment the surface was
+        // first adopted.
+        const { detectInstalledAgents } = await import('../workflows/onboarding/detection')
+        const agents = await detectInstalledAgents(this.projectPath).catch(() => [])
+        await writeProjectAgentSurfaces(this.projectPath, { refreshIfAdopted: true, agents })
       })
 
       // 11. Run verification checks (built-in + custom from config)
