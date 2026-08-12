@@ -23,6 +23,7 @@ import path from 'node:path'
 import { ShippingCommands, seedCodeShipRules } from '../../commands/shipping'
 import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
+import { customWorkflowStorage } from '../../storage/custom-workflow-storage'
 import { prjctDb } from '../../storage/database'
 import { shippedStorage } from '../../storage/shipped-storage'
 import { workflowRuleStorage } from '../../storage/workflow-rule-storage'
@@ -235,5 +236,153 @@ describe('ship() — workflow-first', () => {
     })
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/does not look like code/i)
+  })
+})
+
+describe('ship() — PR convention', () => {
+  const fixture: {
+    projectPath: string
+    projectId: string
+    cmd: ShippingCommands
+  } = { projectPath: '', projectId: '', cmd: undefined as unknown as ShippingCommands }
+
+  beforeEach(async () => {
+    ;({ projectPath: fixture.projectPath, projectId: fixture.projectId } = await freshProject())
+    fixture.cmd = new ShippingCommands()
+    await fs.writeFile(
+      path.join(fixture.projectPath, 'package.json'),
+      JSON.stringify({ name: 'codeproj', version: '0.5.0' })
+    )
+  })
+
+  afterEach(async () => {
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
+  })
+
+  test('a pre-set manual convention keeps seedCodeShipRules from adding pr:ensure', async () => {
+    initGit(fixture.projectPath)
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], {
+      cwd: fixture.projectPath,
+    })
+    customWorkflowStorage.updateWorkflow(fixture.projectId, 'ship', {
+      metadata: { prConvention: 'manual' },
+    })
+
+    await seedCodeShipRules(fixture.projectId, fixture.projectPath)
+
+    const actions = workflowRuleStorage
+      .getRulesForCommand(fixture.projectId, 'ship')
+      .map((r) => r.action)
+    expect(actions).toContain('git:push')
+    expect(actions).not.toContain('pr:ensure')
+  })
+
+  test('an undecided GitHub project defaults to auto and persists the decision', async () => {
+    initGit(fixture.projectPath)
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], {
+      cwd: fixture.projectPath,
+    })
+
+    await seedCodeShipRules(fixture.projectId, fixture.projectPath)
+
+    const actions = workflowRuleStorage
+      .getRulesForCommand(fixture.projectId, 'ship')
+      .map((r) => r.action)
+    expect(actions).toContain('pr:ensure')
+    expect(customWorkflowStorage.getWorkflow(fixture.projectId, 'ship')?.metadata).toEqual({
+      prConvention: 'auto',
+    })
+  })
+
+  test('a project seeded before pr:ensure existed gets asked once, then never again', async () => {
+    // Simulate a project whose ship steps predate this feature: gate +
+    // 4 steps, no pr:ensure, no stored prConvention — the exact shape
+    // this repo's own workflow_rules were in before this session.
+    initGit(fixture.projectPath, 'feat/legacy')
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'init', '-q'], {
+      cwd: fixture.projectPath,
+    })
+    const now = new Date().toISOString()
+    for (const [i, action] of [
+      'git branch --show-current | grep -vE "^(main|master)$"',
+      'version:bump',
+      'changelog:add',
+      'git:commit',
+      'git:push',
+    ].entries()) {
+      workflowRuleStorage.addRule(fixture.projectId, {
+        type: action.startsWith('git branch') ? 'gate' : 'step',
+        command: 'ship',
+        position: 'before',
+        action,
+        description: action,
+        enabled: true,
+        timeoutMs: 30000,
+        sortOrder: i + 1,
+        createdAt: now,
+      })
+    }
+
+    const asked = await fixture.cmd.ship('legacy release', fixture.projectPath, { md: true })
+    expect(asked.success).toBe(false)
+    const c = asked.clarification as { options: string[] } | undefined
+    expect(c?.options).toEqual(['pr-convention-auto', 'pr-convention-manual'])
+
+    // Answering persists the decision and adds pr:ensure — the changelog
+    // step already ran once above (before the gate re-blocks it); use
+    // --intent=pr-convention-manual so this test doesn't also need a
+    // configured remote for pr:ensure/git:push to succeed against.
+    await fixture.cmd.ship('legacy release', fixture.projectPath, {
+      md: true,
+      intent: 'pr-convention-manual',
+    })
+    expect(customWorkflowStorage.getWorkflow(fixture.projectId, 'ship')?.metadata).toEqual({
+      prConvention: 'manual',
+    })
+
+    // Re-invoking without an intent no longer asks the PR-convention
+    // question (only whatever gate/task-state applies next).
+    const again = await fixture.cmd.ship('legacy release', fixture.projectPath, { md: true })
+    const c2 = again.clarification as { options: string[] } | undefined
+    expect(c2?.options).not.toEqual(['pr-convention-auto', 'pr-convention-manual'])
+  })
+
+  test('--intent=pr-convention-auto persists auto and adds the pr:ensure step', async () => {
+    initGit(fixture.projectPath, 'feat/legacy')
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'init', '-q'], {
+      cwd: fixture.projectPath,
+    })
+    const now = new Date().toISOString()
+    for (const [i, action] of [
+      'version:bump',
+      'changelog:add',
+      'git:commit',
+      'git:push',
+    ].entries()) {
+      workflowRuleStorage.addRule(fixture.projectId, {
+        type: 'step',
+        command: 'ship',
+        position: 'before',
+        action,
+        description: action,
+        enabled: true,
+        timeoutMs: 30000,
+        sortOrder: i + 1,
+        createdAt: now,
+      })
+    }
+
+    await fixture.cmd.ship('legacy release', fixture.projectPath, {
+      md: true,
+      intent: 'pr-convention-auto',
+    })
+
+    expect(customWorkflowStorage.getWorkflow(fixture.projectId, 'ship')?.metadata).toEqual({
+      prConvention: 'auto',
+    })
+    const actions = workflowRuleStorage
+      .getRulesForCommand(fixture.projectId, 'ship')
+      .map((r) => r.action)
+    expect(actions).toContain('pr:ensure')
   })
 })

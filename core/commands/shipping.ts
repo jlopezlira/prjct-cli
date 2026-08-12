@@ -14,9 +14,11 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import configManager from '../infrastructure/config-manager'
+import { defaultPrConventionFor, detectPrConventionSignal } from '../services/pr-convention'
 import { syncService } from '../services/sync-service'
 import { completeActiveTask, resolveActiveTask } from '../services/task-service'
 import { getGitBranch } from '../session/git-helpers'
+import { customWorkflowStorage } from '../storage/custom-workflow-storage'
 import { prjctDb } from '../storage/database'
 import { shippedStorage } from '../storage/shipped-storage'
 import { workflowRuleStorage } from '../storage/workflow-rule-storage'
@@ -47,7 +49,12 @@ interface ShipMarker {
   startedAt: string
 }
 
-type ShipIntent = 'register-only' | 'seed-code-workflow' | 'proceed'
+type ShipIntent =
+  | 'register-only'
+  | 'seed-code-workflow'
+  | 'proceed'
+  | 'pr-convention-auto'
+  | 'pr-convention-manual'
 
 interface ShipOptions {
   skipHooks?: boolean
@@ -470,9 +477,26 @@ export class ShippingCommands extends PrjctCommandsBase {
       if (autoSeeded) {
         console.log('ℹ️  Auto-seeded code ship workflow (one-time migration)')
       }
-      const rules = autoSeeded
+      const rulesAfterAutoSeed = autoSeeded
         ? workflowRuleStorage.getRulesForCommand(projectId, 'ship')
         : rulesAfterExplicitSeed
+
+      // If the caller just answered the PR-convention backfill question
+      // (Case 3.5 below), persist it and — for 'auto' — add the missing
+      // pr:ensure step now, same "handle intent, then re-fetch" pattern
+      // as seed-code-workflow above.
+      const prConventionIntent =
+        options.intent === 'pr-convention-auto'
+          ? 'auto'
+          : options.intent === 'pr-convention-manual'
+            ? 'manual'
+            : null
+      if (prConventionIntent) {
+        applyPrConventionDecision(projectId, prConventionIntent, rulesAfterAutoSeed)
+      }
+      const rules = prConventionIntent
+        ? workflowRuleStorage.getRulesForCommand(projectId, 'ship')
+        : rulesAfterAutoSeed
 
       // Ambiguity gate. Only triggers when the caller did NOT pass an
       // explicit intent — callers that have already asked the user
@@ -758,9 +782,14 @@ export async function seedCodeShipRules(projectId: string, projectPath: string):
     // Shipping from a feature branch (the gate above already forbids main/
     // master) previously left the branch pushed with no PR ever opened or
     // updated — repeated ships silently piled up unmerged commits with no
-    // review surface. pr:ensure is idempotent and soft-fails (missing/
-    // unauthenticated gh never fails an otherwise-successful ship).
-    steps.push({ action: 'pr:ensure', description: 'Open or confirm the PR', timeoutMs: 30000 })
+    // review surface. Not every project wants this though (custom PR
+    // process, non-GitHub host, trunk-based/no-PR flow) — resolvePrConvention
+    // reads the stored per-project decision, or falls back to a detected
+    // default when nothing has been decided yet (no wizard/TTY here).
+    const convention = await resolvePrConvention(projectId, projectPath)
+    if (convention === 'auto') {
+      steps.push({ action: 'pr:ensure', description: 'Open or confirm the PR', timeoutMs: 30000 })
+    }
   }
 
   const newRules = [
@@ -783,6 +812,61 @@ export async function seedCodeShipRules(projectId: string, projectPath: string):
   }
 
   return newRules.length > 0
+}
+
+/**
+ * Read the project's stored PR convention (`custom_workflows.ship.metadata
+ * .prConvention`, set once by init's wizard prompt or a ship-time
+ * clarification). Undecided projects get a detected, non-interactive
+ * default persisted here so the decision only needs making once, from
+ * whichever path first calls this — init, auto-seed, or the ship-time
+ * backfill clarification below.
+ */
+async function resolvePrConvention(
+  projectId: string,
+  projectPath: string
+): Promise<'auto' | 'manual'> {
+  const workflow = customWorkflowStorage.getWorkflow(projectId, 'ship')
+  const stored = workflow?.metadata?.prConvention
+  if (stored === 'auto' || stored === 'manual') return stored
+
+  const signal = await detectPrConventionSignal(projectPath)
+  const convention = defaultPrConventionFor(signal)
+  customWorkflowStorage.updateWorkflow(projectId, 'ship', {
+    metadata: { ...(workflow?.metadata ?? {}), prConvention: convention },
+  })
+  return convention
+}
+
+/**
+ * Persist a human's answer to the PR-convention backfill question (Case
+ * 3.5) and, for 'auto', add the pr:ensure step that seedCodeShipRules
+ * would have added had this project decided the convention before its
+ * ship steps were first seeded.
+ */
+function applyPrConventionDecision(
+  projectId: string,
+  convention: 'auto' | 'manual',
+  rules: WorkflowRule[]
+): void {
+  const workflow = customWorkflowStorage.getWorkflow(projectId, 'ship')
+  customWorkflowStorage.updateWorkflow(projectId, 'ship', {
+    metadata: { ...(workflow?.metadata ?? {}), prConvention: convention },
+  })
+  if (convention === 'auto' && !rules.some((r) => r.action === 'pr:ensure')) {
+    const maxSort = rules.reduce((m, r) => Math.max(m, r.sortOrder ?? 0), 0)
+    workflowRuleStorage.addRule(projectId, {
+      type: 'step',
+      command: 'ship',
+      position: 'before',
+      action: 'pr:ensure',
+      description: 'Open or confirm the PR',
+      enabled: true,
+      timeoutMs: 30000,
+      sortOrder: maxSort + 1,
+      createdAt: new Date().toISOString(),
+    })
+  }
 }
 
 /**
@@ -828,6 +912,24 @@ async function buildClarification(
       question: `No active work cycle, and PR #${pr.number} ("${pr.title}") is OPEN for this branch. Continue ship anyway?`,
       options: ['proceed', 'abort'],
       state: { openPr: pr.number, branch: pr.branch },
+    }
+  }
+
+  // Case 3.5 — steps were seeded before pr:ensure existed (this project's
+  // own history: seedCodeShipRules only adds new default steps the first
+  // time it runs, so already-initialized projects never retroactively
+  // pick up later additions to the recipe). Ask once; the answer is
+  // persisted by applyPrConventionDecision so this never fires again.
+  if (
+    isGitRepo(projectPath) &&
+    rules.some((r) => r.action === 'git:push') &&
+    !rules.some((r) => r.action === 'pr:ensure') &&
+    !customWorkflowStorage.getWorkflow(projectId, 'ship')?.metadata?.prConvention
+  ) {
+    return {
+      question:
+        'This project ships without opening/updating a PR. Want ship to handle that automatically (`gh pr create`), or do you manage PRs yourself?',
+      options: ['pr-convention-auto', 'pr-convention-manual'],
     }
   }
 
