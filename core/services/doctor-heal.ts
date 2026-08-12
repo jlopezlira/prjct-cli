@@ -154,13 +154,13 @@ export async function applyDoctorHeal(
   // Computed once, reused by multi-runtime-wire and agent-surfaces below —
   // both need "which runtimes are actually present" and detectAgentRuntimes
   // does real filesystem probing, not worth calling twice in one heal pass.
-  let detectedRuntimeIds: string[] | null = null
+  const runtimeIdsCache: { value: string[] | null } = { value: null }
   async function detectedIds(): Promise<string[]> {
-    if (!detectedRuntimeIds) {
+    if (!runtimeIdsCache.value) {
       const runtimes = await detectAgentRuntimes(projectPath)
-      detectedRuntimeIds = runtimes.filter((r) => r.detected).map((r) => r.runtime.id)
+      runtimeIdsCache.value = runtimes.filter((r) => r.detected).map((r) => r.runtime.id)
     }
-    return detectedRuntimeIds
+    return runtimeIdsCache.value
   }
 
   for (const action of plan.actions) {

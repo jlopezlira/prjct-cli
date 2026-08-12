@@ -145,24 +145,24 @@ class InstructionFailureStorage {
     // underlying failure) — backfill 'unknown' with a real value here
     // instead of leaving the row permanently locked to whatever the first
     // occurrence happened to record.
-    let row = prjctDb.get<InstructionFailureRow>(
+    const existingRow = prjctDb.get<InstructionFailureRow>(
       projectId,
       'SELECT * FROM instruction_failures WHERE dedup_key = ?',
       dedupKey
     )
-    if (!row) throw new Error('Instruction failure insert did not produce a readable row')
-    const runtimeUpgrade = row.runtime === 'unknown' && input.runtime !== 'unknown'
-    const modelUpgrade = row.model === 'unknown' && input.model !== 'unknown'
-    if (runtimeUpgrade || modelUpgrade) {
-      const [updated] = prjctDb.query<InstructionFailureRow>(
-        projectId,
-        'UPDATE instruction_failures SET runtime = ?, model = ? WHERE id = ? RETURNING *',
-        runtimeUpgrade ? input.runtime : row.runtime,
-        modelUpgrade ? input.model : row.model,
-        row.id
-      )
-      row = updated ?? row
-    }
+    if (!existingRow) throw new Error('Instruction failure insert did not produce a readable row')
+    const runtimeUpgrade = existingRow.runtime === 'unknown' && input.runtime !== 'unknown'
+    const modelUpgrade = existingRow.model === 'unknown' && input.model !== 'unknown'
+    const row =
+      runtimeUpgrade || modelUpgrade
+        ? (prjctDb.query<InstructionFailureRow>(
+            projectId,
+            'UPDATE instruction_failures SET runtime = ?, model = ? WHERE id = ? RETURNING *',
+            runtimeUpgrade ? input.runtime : existingRow.runtime,
+            modelUpgrade ? input.model : existingRow.model,
+            existingRow.id
+          )[0] ?? existingRow)
+        : existingRow
     return { inserted: false, failure: rowToFailure(row) }
   }
 

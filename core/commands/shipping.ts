@@ -755,6 +755,12 @@ export async function seedCodeShipRules(projectId: string, projectPath: string):
   if (isGitRepo(projectPath)) {
     steps.push({ action: 'git:commit', description: 'Commit ship', timeoutMs: 15000 })
     steps.push({ action: 'git:push', description: 'Push to origin', timeoutMs: 30000 })
+    // Shipping from a feature branch (the gate above already forbids main/
+    // master) previously left the branch pushed with no PR ever opened or
+    // updated — repeated ships silently piled up unmerged commits with no
+    // review surface. pr:ensure is idempotent and soft-fails (missing/
+    // unauthenticated gh never fails an otherwise-successful ship).
+    steps.push({ action: 'pr:ensure', description: 'Open or confirm the PR', timeoutMs: 30000 })
   }
 
   const newRules = [

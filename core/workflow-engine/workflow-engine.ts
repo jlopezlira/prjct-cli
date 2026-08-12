@@ -58,6 +58,7 @@ const VERSION_BUMP_PREFIX = 'version:bump'
 const CHANGELOG_ADD_ACTION = 'changelog:add'
 const GIT_COMMIT_PREFIX = 'git:commit'
 const GIT_PUSH_ACTION = 'git:push'
+const PR_ENSURE_ACTION = 'pr:ensure'
 const VERIFY_ACTION_PREFIX = 'verify:'
 
 async function runStatusTransition(
@@ -350,6 +351,68 @@ async function runGitPush(projectPath: string): Promise<void> {
   }
 }
 
+/**
+ * Ensure a PR exists (or already exists) for the current branch after
+ * `git:push`. Every step before this one (bump/changelog/commit/push) is
+ * genuinely consequential if it fails — this one is bookkeeping. A ship
+ * that already landed the commit and pushed it must never be reported as
+ * failed just because `gh` is missing, unauthenticated, or rate-limited —
+ * so every failure path here is caught and reported as an instruction
+ * line, never thrown. Idempotent: skips cleanly when a PR already exists
+ * (the push above already updated it) so repeated ships on the same
+ * branch don't error on `gh pr create`'s own "already exists" failure.
+ */
+async function runPrEnsure(
+  projectPath: string,
+  runCtx: WorkflowRunContext,
+  result: WorkflowExecutionResult
+): Promise<void> {
+  try {
+    const currentBranch = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: projectPath,
+    }).then((r) => r.stdout.trim())
+    if (!currentBranch || currentBranch === 'main' || currentBranch === 'master') return
+
+    const ghAvailable = await execFileAsync('gh', ['--version'], { cwd: projectPath })
+      .then(() => true)
+      .catch(() => false)
+    if (!ghAvailable) {
+      result.instructions.push(
+        '# prjct: pr:ensure skipped — `gh` CLI not found. Install it or open the PR manually.'
+      )
+      return
+    }
+
+    const existingCount = await execFileAsync(
+      'gh',
+      ['pr', 'list', '--head', currentBranch, '--json', 'number', '--jq', 'length'],
+      { cwd: projectPath }
+    )
+      .then((r) => Number(r.stdout.trim()))
+      .catch(() => -1)
+    if (existingCount < 0) {
+      result.instructions.push(
+        '# prjct: pr:ensure could not check for an existing PR (gh not authenticated?) — skipped.'
+      )
+      return
+    }
+    if (existingCount > 0) return // Already has an open PR — the push above already updated it.
+
+    const title = expandTemplate(
+      runCtx.version ? 'feat: $FEATURE (v$VERSION)' : 'feat: $FEATURE',
+      runCtx
+    )
+    const created = await execFileAsync(
+      'gh',
+      ['pr', 'create', '--fill', ...(title ? ['--title', title] : [])],
+      { cwd: projectPath, timeout: 30000 }
+    ).then((r) => r.stdout.trim())
+    result.instructions.push(`# prjct: opened PR — ${created}`)
+  } catch (error) {
+    result.instructions.push(`# prjct: pr:ensure failed (non-blocking) — ${getErrorMessage(error)}`)
+  }
+}
+
 async function runRuleAction(
   rule: WorkflowRule,
   projectId: string,
@@ -401,6 +464,11 @@ async function runRuleAction(
 
   if (action === GIT_PUSH_ACTION) {
     await runGitPush(projectPath)
+    return
+  }
+
+  if (action === PR_ENSURE_ACTION) {
+    await runPrEnsure(projectPath, runCtx, result)
     return
   }
 
