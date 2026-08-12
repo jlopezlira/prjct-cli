@@ -1,7 +1,9 @@
 /**
- * Project CLAUDE.md routing block — written by `prjct init`.
+ * Project CLAUDE.md pointer block — written by `prjct init`.
  *
- * Pins the contract:
+ * CLAUDE.md carries only a one-line `@PRJCT.md` native import — the
+ * routing map + verified per-project facts live in PRJCT.md itself
+ * (see prjct-md.test.ts). Pins the contract:
  *   1. Missing CLAUDE.md → file is created with the block.
  *   2. Existing CLAUDE.md without markers → block appended,
  *      user content preserved.
@@ -42,10 +44,11 @@ describe('writeProjectClaudeMd', () => {
     const body = await readClaudeMd()
     expect(body).toContain(_routing.START_MARKER)
     expect(body).toContain(_routing.END_MARKER)
-    expect(body).toContain('## prjct')
-    expect(body).toContain('prjct work --md')
-    expect(body).toContain('This file holds no rules')
-    // Clean-repo doctrine: a pointer, never an inlined ruleset.
+    expect(body).toContain('@PRJCT.md')
+    // Clean-repo doctrine: a pointer, never an inlined ruleset — the
+    // routing map + facts live in PRJCT.md, not duplicated here.
+    expect(body).not.toContain('## prjct')
+    expect(body).not.toContain('prjct work --md')
     expect(body).not.toContain('RAG-backed project memory harness')
   })
 
@@ -83,8 +86,7 @@ trailing notes here
     // Old stale content is gone.
     expect(body).not.toContain('old stale routing instructions')
     // New block is in place.
-    expect(body).toContain('## prjct')
-    expect(body).toContain('prjct work --md')
+    expect(body).toContain('@PRJCT.md')
   })
 
   it('is idempotent — second run on a current file reports unchanged', async () => {

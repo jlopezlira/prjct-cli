@@ -1535,7 +1535,10 @@ export const COMMANDS: CommandMeta[] = [
       ['hooks', 'Inspect or reinstall the Claude Code hooks'],
       ['claude', 'Claude Code integration management (install/uninstall)'],
       ['crew', 'Run a crew (multi-subagent) workflow'],
-      ['harness', 'Harness scorecard + Body/rig adoption (score · learn-from · list · use)'],
+      [
+        'harness',
+        'Harness scorecard, instruction observability/disposition, and Body/rig adoption (score · instructions · learn-from · list · use)',
+      ],
       ['doctor', 'Diagnose the local prjct installation'],
       ['watch', 'Watch project files and react to changes'],
       ['version', 'Print the installed prjct version + provider status'],

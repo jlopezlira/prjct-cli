@@ -157,6 +157,14 @@ describe('e2e: CLI lifecycle (hermetic fake project)', () => {
     expect(r.stdout.toLowerCase()).toMatch(/review risk|no comparable|trivial|tier/)
   })
 
+  test('instruction observability report runs through the real CLI', async () => {
+    const r = await fixture.sb.cli(['harness', 'instructions', '7d', '--md'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('# Instruction guidance report (7d)')
+    expect(r.stdout).toContain('## Open cases')
+    expect(r.stdout).toContain('Session attribution:')
+  })
+
   test('generic command errors are printed, not silent', async () => {
     const r = await fixture.sb.cli(['config', 'definitelybad', '--md'])
     const out = (r.stdout + r.stderr).toLowerCase()

@@ -204,8 +204,17 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
     await seedDecision('Set sqlite pragma busy_timeout to 5000 on every connection')
     await writeTranscript('edited the sqlite pragma handling in the storage layer')
 
-    const r1 = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 'sess-1')
+    const r1 = await detectSkillMisses(fixture.dir, fixture.transcriptPath, 'sess-1', {
+      runtime: 'grok',
+      model: 'grok-code-fast',
+    })
     expect(r1.signalsRecorded).toBe(1)
+    expect(r1.failures[0]).toMatchObject({
+      category: 'skill-miss',
+      expectedBehavior: expect.stringMatching(/mem_/),
+      observedBehavior: 'Relevant project knowledge was not referenced in the session.',
+      relatedRuleId: expect.stringMatching(/^mem_/),
+    })
 
     const signals = (await import('../../memory/project-memory')).projectMemory.recall(
       fixture.projectId,
@@ -219,6 +228,8 @@ describe('skill-miss-detector — persistence + containment (DB)', () => {
     expect(signals[0]?.tags.kind).toBe('skill-miss')
     expect(signals[0]?.tags.category).toBe('skill-miss')
     expect(signals[0]?.tags.relates).toMatch(/^mem_/)
+    expect(signals[0]?.tags.runtime).toBe('grok')
+    expect(signals[0]?.tags.model).toBe('grok-code-fast')
     expect(signals[0]?.content).toContain('[skill-miss]')
 
     // Re-run on the same transcript → dedup, no second row.

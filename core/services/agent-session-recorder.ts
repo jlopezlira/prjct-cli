@@ -12,6 +12,7 @@ interface AgentSessionEndInput extends AgentSessionStartInput {
   tokensIn?: number
   tokensOut?: number
   agent?: string
+  model?: string
   filesTouched?: string[]
 }
 
@@ -71,15 +72,17 @@ export function recordAgentSessionEnd(input: AgentSessionEndInput): void {
     prjctDb.run(
       input.projectId,
       `INSERT INTO agent_sessions
-       (id, project_id, directory, task_id, goal, started_at, ended_at, summary, files_touched, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (id, project_id, directory, task_id, goal, started_at, ended_at, summary, files_touched, runtime, model, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          directory = COALESCE(excluded.directory, agent_sessions.directory),
          task_id = COALESCE(excluded.task_id, agent_sessions.task_id),
          goal = COALESCE(excluded.goal, agent_sessions.goal),
          ended_at = excluded.ended_at,
          summary = COALESCE(excluded.summary, agent_sessions.summary),
-         files_touched = COALESCE(excluded.files_touched, agent_sessions.files_touched)`,
+         files_touched = COALESCE(excluded.files_touched, agent_sessions.files_touched),
+         runtime = excluded.runtime,
+         model = excluded.model`,
       input.sessionId,
       input.projectId,
       cleanText(input.directory),
@@ -89,6 +92,8 @@ export function recordAgentSessionEnd(input: AgentSessionEndInput): void {
       now,
       summary(input),
       filesTouched,
+      cleanText(input.agent, 32) ?? 'unknown',
+      cleanText(input.model, 120) ?? 'unknown',
       now
     )
   } catch {

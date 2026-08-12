@@ -9,6 +9,10 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import configManager from '../infrastructure/config-manager'
+import {
+  type InstructionFailureDisposition,
+  InstructionFailureDispositionSchema,
+} from '../schemas/instruction-failure'
 import { probeHarnessCoverage, renderHarnessCoverageMd } from '../services/harness-coverage'
 import {
   buildInductionDispatch,
@@ -18,7 +22,13 @@ import {
   renderRigList,
 } from '../services/harness-rigs'
 import { computeHarnessScore, renderHarnessScoreMd } from '../services/harness-score'
+import {
+  buildInstructionFailureReport,
+  parseInstructionReportWindow,
+  renderInstructionFailureReportMd,
+} from '../services/instruction-failure-report'
 import { computeHarnessDelta, renderHarnessDeltaMd } from '../services/weak-frontier-demo'
+import { instructionFailureStorage } from '../storage/instruction-failure-storage'
 import { stateStorage } from '../storage/state-storage'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
@@ -26,6 +36,65 @@ import { getErrorMessage } from '../types/fs'
 import { PrjctCommandsBase } from './base'
 
 export class HarnessCommands extends PrjctCommandsBase {
+  /** `prjct harness instructions set <id> <disposition>` — close the feedback loop. */
+  async instructionDisposition(
+    id: string | null,
+    rawDisposition: string | null,
+    projectPath: string = process.cwd()
+  ): Promise<CommandResult> {
+    try {
+      if (!id || !rawDisposition) {
+        throw new Error(
+          'Usage: prjct harness instructions set <id> <open|resolved|false-positive>.'
+        )
+      }
+      const disposition = InstructionFailureDispositionSchema.parse(
+        rawDisposition === 'false-positive' ? 'false_positive' : rawDisposition
+      ) as InstructionFailureDisposition
+      const projectId = await configManager.getProjectId(projectPath)
+      if (!projectId) {
+        return { success: false, error: 'No prjct project found in the current directory.' }
+      }
+      if (!instructionFailureStorage.setDisposition(projectId, id, disposition)) {
+        return { success: false, error: `Instruction failure not found: ${id}` }
+      }
+      console.log(`Instruction failure ${id}: ${disposition.replace('_', '-')}`)
+      return { success: true, id, disposition }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  }
+
+  /** `prjct harness instructions [window]` — instruction observability ledger. */
+  async instructions(
+    rawWindow: string | null = null,
+    projectPath: string = process.cwd(),
+    options: MdOption = {}
+  ): Promise<CommandResult> {
+    try {
+      const window = parseInstructionReportWindow(rawWindow)
+      const projectId = await configManager.getProjectId(projectPath)
+      if (!projectId) {
+        return { success: false, error: 'No prjct project found in the current directory.' }
+      }
+      const report = buildInstructionFailureReport(projectId, window)
+      if (options.md) {
+        console.log(renderInstructionFailureReportMd(report))
+      } else {
+        console.log(
+          `Instruction failures (${window}): ${report.total}; attributed ${report.attributed} (${(
+            report.attributionRate * 100
+          ).toFixed(1)}%); open ${report.open}; false-trigger ${(
+            report.falseTriggerRate * 100
+          ).toFixed(1)}%`
+        )
+      }
+      return { success: true, ...report }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  }
+
   async score(projectPath: string = process.cwd(), options: MdOption = {}): Promise<CommandResult> {
     try {
       // Structural grade is machine-independent (CI/release). Live organic board

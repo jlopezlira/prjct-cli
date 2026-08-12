@@ -46,11 +46,19 @@ export class InstallCommands extends PrjctCommandsBase {
     try {
       const result = await installHooks()
       const config = await configManager.readConfig(projectPath).catch(() => null)
-      const projectSurfaces = config?.projectId
-        ? await writeProjectAgentSurfaces(projectPath)
-        : null
       const runtimes = await detectAgentRuntimes(projectPath)
       const detected = runtimes.filter((runtime) => runtime.detected)
+      // `prjct install` wires Claude Code hooks by definition — 'claude' is
+      // always relevant here even before detection would otherwise notice
+      // (installHooks() above is what CREATES ~/.claude/, so a detection
+      // call made before it would miss a first-time install).
+      const detectedAgentIds = [...new Set(['claude', ...detected.map((r) => r.runtime.id)])]
+      const projectSurfaces = config?.projectId
+        ? await writeProjectAgentSurfaces(projectPath, {
+            explicit: true,
+            agents: detectedAgentIds,
+          })
+        : null
       const codexDetected = detected.some((runtime) => runtime.runtime.id === 'codex')
       const codexConfig = codexDetected ? await ensureCodexMcpServer() : null
       // Always install Codex hooks when Codex is present; also install when
@@ -105,9 +113,10 @@ export class InstallCommands extends PrjctCommandsBase {
             ritual.md,
             `## Universal project surface`,
             projectSurfaces
-              ? `- AGENTS.md: ${projectSurfaces.agentsMd.action}`
+              ? `- PRJCT.md: ${projectSurfaces.prjctMd.action}`
               : `- skipped: not inside an initialized prjct project`,
-            ...(projectSurfaces?.claudeMd
+            ...(projectSurfaces ? [`- AGENTS.md: ${projectSurfaces.agentsMd.action}`] : []),
+            ...(projectSurfaces?.claudeMd && projectSurfaces.claudeMd.action !== 'unchanged'
               ? [`- CLAUDE.md adapter: ${projectSurfaces.claudeMd.action}`]
               : []),
             ...(projectSurfaces?.ideRules.length

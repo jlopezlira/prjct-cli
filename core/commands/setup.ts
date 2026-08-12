@@ -646,7 +646,9 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
       const { detectInstalledAgents } = await import('../workflows/onboarding/detection')
       const result = await writeProjectAgentSurfaces(projectPath, {
         agents: await detectInstalledAgents(projectPath),
+        explicit: true,
       })
+      if (result.prjctMd.action !== 'unchanged') console.log('✅ Project PRJCT.md ready')
       if (result.agentsMd.action !== 'unchanged') console.log('✅ Project AGENTS.md ready')
       if (result.claudeMd && result.claudeMd.action !== 'unchanged') {
         console.log('✅ Project CLAUDE.md ready')

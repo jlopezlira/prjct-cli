@@ -424,6 +424,9 @@ async function runScenarios(context: ScenarioContext): Promise<EvalScenario[]> {
     scenario('cloud-benchmark-readiness', 'Cloud benchmark readiness', () =>
       evalCloudBenchmarkReadiness(context.projectPath)
     ),
+    scenario('project-facts-freshness', 'Project facts freshness', () =>
+      evalProjectFactsFreshness(context.projectPath)
+    ),
   ])
 }
 
@@ -610,6 +613,69 @@ async function evalCloudBenchmarkReadiness(
               command: 'prjct cloud status',
             },
           ],
+  }
+}
+
+/**
+ * Manual-only, like every other scenario here — no automatic wiring into
+ * sync/install/hooks/daemon/CI. Missing PRJCT.md is a neutral warn (opt-in
+ * by design, clean-repo doctrine); when present, staleness can only mean
+ * the manifest changed since the last explicit `agents doctor --fix` — no
+ * CI-workflow-vs-command validation here, that's a separately-scoped
+ * feature (nothing in this codebase reads .github/workflows/*.yml today).
+ */
+async function evalProjectFactsFreshness(
+  projectPath: string
+): Promise<Omit<EvalScenario, 'id' | 'name' | 'durationMs'>> {
+  const prjctMdPath = path.join(projectPath, 'PRJCT.md')
+  const hasPrjctMd = await exists(prjctMdPath)
+  if (!hasPrjctMd) {
+    return {
+      status: 'warn',
+      score: 50,
+      metrics: { prjctMd: false },
+      actionables: [
+        {
+          severity: 'info',
+          title: 'PRJCT.md not opted into yet',
+          recommendation:
+            'Run `prjct agents doctor --fix` to generate the verified-facts hub (opt-in, clean-repo doctrine).',
+          command: 'prjct agents doctor --fix',
+        },
+      ],
+    }
+  }
+
+  const { buildPrjctMdBody } = await import('./prjct-md')
+  const [onDisk, fresh] = await Promise.all([
+    fs.readFile(prjctMdPath, 'utf-8').catch(() => ''),
+    buildPrjctMdBody(projectPath),
+  ])
+  const stale = !onDisk.includes(fresh)
+
+  return {
+    status: stale ? 'warn' : 'pass',
+    score: stale ? 40 : 100,
+    metrics: { prjctMd: true, stale },
+    actionables: stale
+      ? [
+          {
+            severity: 'warning',
+            title: 'PRJCT.md is stale',
+            recommendation:
+              'Re-run `prjct agents doctor --fix` to refresh verified commands/stack after a manifest change (package.json / Cargo.toml / go.mod / pyproject.toml).',
+            command: 'prjct agents doctor --fix',
+          },
+        ]
+      : [
+          {
+            severity: 'info',
+            title: 'PRJCT.md matches verified project facts',
+            recommendation:
+              'Keep `prjct agents doctor --fix` in release smoke checks to catch drift early.',
+            command: 'prjct agents doctor --fix',
+          },
+        ],
   }
 }
 

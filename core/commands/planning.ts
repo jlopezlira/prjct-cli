@@ -144,6 +144,7 @@ export class PlanningCommands extends PrjctCommandsBase {
 
           const surfaces = await writeProjectAgentSurfaces(projectPath, {
             agents: await this._agentSelections(wizardResult, projectPath),
+            explicit: true,
           }).catch(() => null)
 
           out.done('initialized')
@@ -159,6 +160,7 @@ export class PlanningCommands extends PrjctCommandsBase {
           await commandInstaller.installGlobalConfig()
           const surfaces = await writeProjectAgentSurfaces(projectPath, {
             agents: await this._agentSelections(wizardResult, projectPath),
+            explicit: true,
           }).catch(() => null)
           out.done('blank project - provide idea for architect mode')
           this._printNextSteps(wizardResult, surfaces ?? undefined)
@@ -180,6 +182,7 @@ export class PlanningCommands extends PrjctCommandsBase {
         await commandInstaller.installGlobalConfig()
         const surfaces = await writeProjectAgentSurfaces(projectPath, {
           agents: await this._agentSelections(wizardResult, projectPath),
+          explicit: true,
         }).catch(() => null)
 
         out.done('architect mode ready')
@@ -190,6 +193,7 @@ export class PlanningCommands extends PrjctCommandsBase {
       await commandInstaller.installGlobalConfig()
       const surfaces = await writeProjectAgentSurfaces(projectPath, {
         agents: await this._agentSelections(wizardResult, projectPath),
+        explicit: true,
       }).catch(() => null)
 
       out.done('initialized')

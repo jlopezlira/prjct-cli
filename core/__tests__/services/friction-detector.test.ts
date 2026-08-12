@@ -166,8 +166,25 @@ describe('friction-detector promote recurring pushback to feedback', () => {
     const file = path.join(fixture.projectPath, 't.jsonl')
     await fs.writeFile(file, transcript)
 
-    const first = await detectFriction(fixture.projectPath, file, 'sess-1')
+    const first = await detectFriction(fixture.projectPath, file, 'sess-1', {
+      runtime: 'codex',
+      model: 'gpt-5.6',
+    })
     expect(first.signalsRecorded).toBe(1)
+    expect(first.failures).toEqual([
+      {
+        category: 'negation',
+        expectedBehavior: 'Follow the user constraint without requiring correction.',
+        observedBehavior: 'The assistant response triggered user negation.',
+        relatedRuleId: null,
+      },
+    ])
+    const attributed = projectMemory.recall(fixture.projectId, {
+      types: ['improvement-signal'],
+      tags: { source: 'friction-detector' },
+    })[0]
+    expect(attributed?.tags.runtime).toBe('codex')
+    expect(attributed?.tags.model).toBe('gpt-5.6')
 
     const second = await detectFriction(fixture.projectPath, file, 'sess-2')
     expect(second.signalsRecorded).toBe(0)

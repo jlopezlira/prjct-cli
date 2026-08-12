@@ -22,6 +22,7 @@ import { intentGeometryVerdict } from './delivery-geometry'
 import { planDoctorHeal } from './doctor-heal'
 import { computeHarnessScore, WORLD_CLASS } from './harness-score'
 import { rankByFactors, scoreReadyFactors } from './impact-ready'
+import { INSTRUCTION_EVAL_THRESHOLDS, runInstructionEval } from './instruction-eval'
 import { buildOneBreathReport } from './one-breath-install'
 import {
   applyEvidenceTax,
@@ -142,6 +143,43 @@ export function runWeakModelBench(): WeakBenchReport {
     'intent A/B beats bare',
     harnessHits > bareHits,
     `harness ${harnessHits}/${INTENT_FIXTURES.length} vs bare ${bareHits}/${INTENT_FIXTURES.length} (${Math.round(bareRate * 100)}%)`
+  )
+
+  const instructionEval = runInstructionEval()
+  push(
+    'instruction replay evidence',
+    instructionEval.evidenceKind === 'deterministic-structural-replay' &&
+      instructionEval.liveModelEvidence === false &&
+      instructionEval.fixtureCount === 48,
+    `${instructionEval.fixtureCount} frozen sanitized cases (${instructionEval.productionSeamCases} production-seam, ${instructionEval.structuralContractCases} structural-contract) — deterministic structural evidence, not live-model evidence`
+  )
+  push(
+    'instruction replay adherence delta',
+    instructionEval.adherenceDeltaPp >= INSTRUCTION_EVAL_THRESHOLDS.adherenceDeltaPpMin,
+    `+${instructionEval.adherenceDeltaPp}pp (min +${INSTRUCTION_EVAL_THRESHOLDS.adherenceDeltaPpMin}pp)`
+  )
+  push(
+    'instruction replay runtime regressions',
+    instructionEval.maxRuntimeRegressionPp <= INSTRUCTION_EVAL_THRESHOLDS.runtimeRegressionPpMax,
+    `${Object.entries(instructionEval.byRuntime)
+      .map(([runtime, result]) => `${runtime}=${result.regressionPp}pp`)
+      .join(' · ')} (max ${INSTRUCTION_EVAL_THRESHOLDS.runtimeRegressionPpMax}pp)`
+  )
+  push(
+    'instruction replay false triggers',
+    instructionEval.falseTriggerRate < INSTRUCTION_EVAL_THRESHOLDS.falseTriggerRateMaxExclusive,
+    `${instructionEval.falsePositives}/${instructionEval.guidanceActivations} activations (${(
+      instructionEval.falseTriggerRate * 100
+    ).toFixed(1)}%, need <${INSTRUCTION_EVAL_THRESHOLDS.falseTriggerRateMaxExclusive * 100}%)`
+  )
+  push(
+    'instruction replay attribution',
+    instructionEval.attributionRate >= INSTRUCTION_EVAL_THRESHOLDS.attributionRateMin,
+    `${instructionEval.attributedCases}/${instructionEval.attributableCases} attributable cases (${(
+      instructionEval.attributionRate * 100
+    ).toFixed(
+      1
+    )}%, need ≥${INSTRUCTION_EVAL_THRESHOLDS.attributionRateMin * 100}%) through production runtime/model attribution`
   )
 
   const demo = buildDemoRows()
