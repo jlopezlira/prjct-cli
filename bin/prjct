@@ -194,8 +194,15 @@ run_with_node() {
 
 # Main execution
 main() {
-  # ALWAYS ensure setup first (self-healing)
-  ensure_setup
+  # Hooks fire per prompt / tool call / turn inside Claude Code — the hot
+  # path must not pay ensure_setup's stats/cp/sed on every event. The .cjs
+  # bin already skips setup for `hook` (bin/prjct.cjs setupSkipCommands);
+  # this keeps the POSIX shim consistent. Self-heal still runs on every
+  # non-hook invocation, so a stale statusline/skill gets repaired at most
+  # one manual command later.
+  if [ "$1" != "hook" ]; then
+    ensure_setup
+  fi
 
   # Prefer bun if available (faster, native TS support); otherwise fall back to
   # node. We deliberately do NOT auto-install bun: fetching an unpinned

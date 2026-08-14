@@ -82,7 +82,7 @@ export function recordAgentSessionEnd(input: AgentSessionEndInput): void {
          summary = COALESCE(excluded.summary, agent_sessions.summary),
          files_touched = COALESCE(excluded.files_touched, agent_sessions.files_touched),
          runtime = excluded.runtime,
-         model = excluded.model`,
+         model = CASE WHEN excluded.model = 'unknown' THEN agent_sessions.model ELSE excluded.model END`,
       input.sessionId,
       input.projectId,
       cleanText(input.directory),

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.88.0] - 2026-08-14
+
+### Added
+- fix Claude Code hook latency: 10s hook timeouts, skip shim setup on hook path, gate Stop transcript parsing behind 10-min cooldown
+
 ## [3.87.0] - 2026-08-12
 
 ### Added

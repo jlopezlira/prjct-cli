@@ -13,6 +13,16 @@
  * injects no user-visible message — see mem_220 for the anti-harness
  * rationale (we used to nag "N edits without a memory entry"; that
  * delegated capture to Claude instead of doing it ourselves).
+ *
+ * Turn-cadence vs session-cadence: Claude fires Stop after EVERY
+ * assistant turn, and reading/parsing the transcript is O(session size)
+ * — multi-MB JSONL by mid-session. Transcript-dependent work (token
+ * accounting, transcript mining, friction, skill-miss) therefore runs
+ * only behind the same 10-min `heavyStepsDue` cooldown as pattern
+ * detection/cleanup; a non-due Stop is a near-free no-op. In the warm
+ * daemon the afterEmit runs on the daemon's single thread, so this gate
+ * is also what keeps the latency-critical prompt/pre-edit hooks from
+ * queueing behind a full transcript parse.
  */
 
 import fs from 'node:fs/promises'
@@ -138,9 +148,16 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         if (!config?.projectId) return
         const runtime = resolveInstructionRuntime()
 
-        // Read + parse the transcript ONCE. Three consumers below
-        // (transcript-learner, friction-detector, skill-miss-detector) each
-        // used to re-read and re-tokenize the same multi-hundred-KB JSONL.
+        // Session-cadence gate FIRST: everything transcript-dependent below
+        // (read + parse of a multi-MB JSONL, mining, friction, skill-miss)
+        // is O(session size) and only needs minutes-scale freshness. A
+        // non-due Stop must be near-free.
+        const runHeavySteps = await heavyStepsDue(config.projectId)
+
+        // Read + parse the transcript ONCE, and only when heavy steps are
+        // due. Three consumers below (transcript-learner, friction-detector,
+        // skill-miss-detector) each used to re-read and re-tokenize the same
+        // multi-hundred-KB JSONL.
         const stopContext: {
           transcriptLines?: TranscriptJsonlLine[]
           transcriptUsage?: TranscriptUsage
@@ -148,19 +165,21 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           activeTaskDescription?: string
           activeTaskStartedAt?: string
         } = {}
-        if (input.transcript_path) {
+        if (runHeavySteps && input.transcript_path) {
           const raw = await fs.readFile(input.transcript_path, 'utf-8').catch(() => null)
           if (raw !== null) stopContext.transcriptLines = parseTranscriptJsonl(raw)
         }
         const model = identifyTranscriptModel(stopContext.transcriptLines ?? [])
-        try {
-          const { collectActiveTasks } = await import('../services/task-overview')
-          const overview = await collectActiveTasks(config.projectId, p)
-          stopContext.activeTaskId = overview.current?.id
-          stopContext.activeTaskDescription = overview.current?.description
-          stopContext.activeTaskStartedAt = overview.current?.startedAt
-        } catch {
-          /* task attribution is best-effort and independent from token usage */
+        if (runHeavySteps) {
+          try {
+            const { collectActiveTasks } = await import('../services/task-overview')
+            const overview = await collectActiveTasks(config.projectId, p)
+            stopContext.activeTaskId = overview.current?.id
+            stopContext.activeTaskDescription = overview.current?.description
+            stopContext.activeTaskStartedAt = overview.current?.startedAt
+          } catch {
+            /* task attribution is best-effort and independent from token usage */
+          }
         }
 
         // Measure the work cycle's token cost: sum the transcript usage and
@@ -242,7 +261,9 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
 
         // M1a: auto-capture substantive insights from the assistant's
         // transcript. Conservative heuristics, hashed-dedup, never blocks.
-        if (input.transcript_path) {
+        // Session-cadence: gated with the heavy steps (see above) so a
+        // per-turn Stop never pays the transcript scan.
+        if (runHeavySteps && input.transcript_path) {
           try {
             await ingestTranscript(p, input.transcript_path, input.session_id ?? null, {
               preloadedConfig: config,
@@ -256,8 +277,8 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
 
         // Session-cadence work behind the cooldown (see heavyStepsDue): these
         // steps are idempotent and their signal changes on the minutes scale,
-        // not per turn.
-        const runHeavySteps = await heavyStepsDue(config.projectId)
+        // not per turn. The gate was claimed at the top of afterEmit so the
+        // transcript read could share it.
 
         // M2: detect durable patterns (hot files for now) and persist them
         // as learning memory entries. Lookup-first protocol means Claude
@@ -295,8 +316,8 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // and persist them as `improvement-signal` memory entries. The
         // next session's Claude reads them via topical recall and
         // synthesises improvement ideas — no regex-based classification
-        // here, only signal extraction.
-        if (input.transcript_path) {
+        // here, only signal extraction. Session-cadence (heavy-step gate).
+        if (runHeavySteps && input.transcript_path) {
           try {
             const friction = await detectFriction(
               p,
@@ -342,8 +363,9 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // relevant to this session's work but never referenced. Persisted
         // as `improvement-signal` and surfaced under the existing block at
         // the next session start — advisory, never a gate. Same silent
-        // best-effort contract as the friction detector above.
-        if (input.transcript_path) {
+        // best-effort contract as the friction detector above. Session-cadence
+        // (heavy-step gate).
+        if (runHeavySteps && input.transcript_path) {
           try {
             const skillMisses = await detectSkillMisses(
               p,

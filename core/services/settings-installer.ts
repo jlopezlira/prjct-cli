@@ -29,6 +29,16 @@ function settingsPath(): string {
 
 const MANAGED_MARKER = '_prjctManaged'
 
+/**
+ * Per-hook timeout (seconds) written into every Claude Code entry. Claude
+ * waits SYNCHRONOUSLY on UserPromptSubmit/PreToolUse, and its default hook
+ * timeout (60s) is far above our hook SLO (p95 ≤ 800ms, see
+ * scripts/bench-hooks.mjs) — a wedged daemon or cold bundle would freeze
+ * the agent's tool loop for a full minute per event. Codex and Cursor
+ * entries already carry `timeout: 30`; Claude now gets a tighter bound.
+ */
+export const HOOK_TIMEOUT_SECONDS = 10
+
 /** Every hook we install — keep in one place so install/uninstall agree. */
 export const PRJCT_HOOKS = [
   { event: 'SessionStart', matcher: '', subcommand: 'session-start' },
@@ -181,6 +191,7 @@ function hookEntryFor(spec: HookSpec): HookEntry {
   const entry: HookEntry = {
     type: 'command',
     command: hookCommand(spec.subcommand),
+    timeout: HOOK_TIMEOUT_SECONDS,
     [MANAGED_MARKER]: true,
   }
   const ifClause = 'ifClause' in spec ? spec.ifClause : undefined
@@ -219,17 +230,21 @@ export async function install(): Promise<InstallResult> {
     // (e.g. Bash → pre-commit + pre-secrets; Edit|Write → pre-secrets + pre-edit).
     const existing = block.hooks.find((h) => isPrjctHook(h) && subcommandOf(h) === spec.subcommand)
     if (existing) {
-      // Refresh command + if clause in case the binary path or matcher changed.
+      // Refresh command + if clause + timeout in case the binary path,
+      // matcher or timeout policy changed (entries installed before the
+      // timeout was introduced carry none — they must be rewritten).
       const refreshed = hookEntryFor(spec)
       if (
         existing.command === refreshed.command &&
         existing.if === refreshed.if &&
+        existing.timeout === refreshed.timeout &&
         droppedLegacy === 0
       ) {
         present.push(spec)
       } else {
         existing.command = refreshed.command
         existing.if = refreshed.if
+        existing.timeout = refreshed.timeout
         written.push(spec)
       }
     } else {
