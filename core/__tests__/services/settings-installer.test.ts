@@ -10,7 +10,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { install, PRJCT_HOOKS, status, uninstall } from '../../services/settings-installer'
+import {
+  HOOK_TIMEOUT_SECONDS,
+  install,
+  PRJCT_HOOKS,
+  status,
+  uninstall,
+} from '../../services/settings-installer'
 
 const ORIGINAL_HOME = process.env.HOME
 
@@ -55,6 +61,48 @@ describe('settings-installer', () => {
     expect(second.hooksWritten).toBe(0)
     expect(second.alreadyPresent).toBe(PRJCT_HOOKS.length)
     expect(second.hooksPruned).toBe(0)
+  })
+
+  test('every installed hook entry carries the bounded timeout', async () => {
+    await install()
+    const parsed = JSON.parse(
+      await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
+    )
+    const managed = Object.values(parsed.hooks as Record<string, { hooks: unknown[] }[]>)
+      .flatMap((blocks) => blocks.flatMap((b) => b.hooks))
+      .filter((h) => (h as { _prjctManaged?: boolean })._prjctManaged === true)
+    expect(managed.length).toBe(PRJCT_HOOKS.length)
+    for (const hook of managed) {
+      expect((hook as { timeout?: number }).timeout).toBe(HOOK_TIMEOUT_SECONDS)
+    }
+  })
+
+  test('reinstall refreshes a managed entry that predates the timeout', async () => {
+    await install()
+    const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
+
+    // Simulate a settings file written before the timeout existed.
+    const parsed = JSON.parse(await fs.readFile(settingsPath, 'utf-8'))
+    for (const blocks of Object.values(parsed.hooks as Record<string, { hooks: unknown[] }[]>)) {
+      for (const block of blocks) {
+        for (const hook of block.hooks) {
+          delete (hook as { timeout?: number }).timeout
+        }
+      }
+    }
+    await fs.writeFile(settingsPath, JSON.stringify(parsed), 'utf-8')
+
+    const second = await install()
+    // Every entry was rewritten with the timeout, none newly added.
+    expect(second.hooksWritten).toBe(PRJCT_HOOKS.length)
+    const after = JSON.parse(await fs.readFile(settingsPath, 'utf-8'))
+    for (const blocks of Object.values(after.hooks as Record<string, { hooks: unknown[] }[]>)) {
+      for (const block of blocks) {
+        for (const hook of block.hooks) {
+          expect((hook as { timeout?: number }).timeout).toBe(HOOK_TIMEOUT_SECONDS)
+        }
+      }
+    }
   })
 
   test('install prunes a retired managed hook from existing settings', async () => {
