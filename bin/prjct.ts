@@ -1,3 +1,6 @@
+import { readSync } from 'node:fs'
+import { isatty } from 'node:tty'
+
 ;(globalThis as Record<string, unknown>).__perfStartNs = process.hrtime.bigint()
 
 // === DAEMON FAST PATH ===
@@ -62,22 +65,43 @@ if (_initialFastCommand === '__internal-ensure-daemon') {
   process.exit(0)
 }
 
-// Read all of stdin (the hook event JSON) as a string, with a timeout
-// safety net. Used only on the hook fast path to forward the event to the
-// daemon. Returns whatever arrived if stdin never closes.
-async function readAllStdin(timeoutMs: number): Promise<string> {
-  if (process.stdin.isTTY) return ''
-  const chunks: Buffer[] = []
-  const streamFinished = new Promise<void>((resolve) => {
-    process.stdin.once('end', resolve)
-    process.stdin.once('error', resolve)
-  })
-  process.stdin.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
-  await Promise.race([
-    streamFinished,
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-  ])
-  return Buffer.concat(chunks).toString('utf-8')
+// Sync-read all of stdin (the hook event JSON) via fs.readSync on fd 0
+// directly — never READS through `process.stdin`, whose stream wrapper
+// costs event-loop turnaround per hook. We still touch `process.stdin.fd`
+// once up front: on node (the production runtime) creating the wrapper
+// flips fd 0 non-blocking, so an open-but-empty pipe yields EAGAIN and the
+// timeoutMs deadline below is REAL — a host that opens stdin but never
+// closes degrades to whatever arrived instead of hanging until the host's
+// hook-timeout kill. On bun (dev-only) the fd stays blocking and the
+// deadline only governs EAGAIN retries. Retries sleep ~1ms via
+// Atomics.wait so a slow-to-flush host doesn't busy-spin. Used only on the
+// hook fast path to forward the event to the daemon. Mirrors
+// core/hooks/cold-entry.ts `readStdinSync`.
+function readStdinSync(timeoutMs: number): string {
+  if (isatty(0)) return ''
+  try {
+    void process.stdin.fd
+  } catch {
+    // stdin fd unavailable — readSync below fails and degrades to ''
+  }
+  const deadline = Date.now() + timeoutMs
+  const sleeper = new Int32Array(new SharedArrayBuffer(4))
+  const buf = Buffer.alloc(65536)
+  const parts: Buffer[] = []
+  for (;;) {
+    try {
+      const n = readSync(0, buf, 0, buf.length, null)
+      if (n === 0) break
+      parts.push(Buffer.from(buf.subarray(0, n)))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EAGAIN' && Date.now() < deadline) {
+        Atomics.wait(sleeper, 0, 0, 1)
+        continue
+      }
+      break
+    }
+  }
+  return Buffer.concat(parts).toString('utf-8')
 }
 
 // === HOOK FAST PATH (daemon-served) ===
@@ -97,7 +121,7 @@ if (_initialFastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
   const socketPath = DAEMON_PATHS.socket()
   if (isDaemonNamedPipe(socketPath) || fs.existsSync(socketPath)) {
     const subcommand = _initialFastArgs[1]
-    const stdinPayload = await readAllStdin(1000)
+    const stdinPayload = readStdinSync(1000)
     try {
       const { sendRequest } = await import('../core/daemon/client')
       const { HOOK_REQUEST_TIMEOUT_MS } = await import('../core/daemon/protocol')

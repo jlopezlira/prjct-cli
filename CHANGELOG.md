@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.89.0] - 2026-08-15
+
+### Added
+- cut hook latency 55-68%: native hook-fast binary with staged fallback, per-project daemon request lanes, SQLite read dedup, real stdin deadlines on hook paths
+
 ## [3.88.0] - 2026-08-14
 
 ### Added

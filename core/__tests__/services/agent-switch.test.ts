@@ -121,6 +121,37 @@ describe('handoff storage', () => {
     expect(reasons).toContain('first-list')
     expect(reasons).toContain('second-list')
   })
+
+  it('accept refuses an expired-but-unswept handoff', () => {
+    // Fresh project so the throttle map has no entry yet. The first
+    // listHandoffs sweeps (row still valid → nothing stamped) and populates
+    // the 60s throttle; the backdating below then simulates a row that
+    // expired INSIDE the throttle window, where only the accept UPDATE's
+    // own expires_at guard can prevent accepting a stale handoff.
+    const pid = `${fixture.pid}-expiry`
+    prjctDb.get(pid, 'SELECT 1')
+    const h = createHandoff({
+      projectId: pid,
+      taskId: 't-exp',
+      taskDescription: 'expires fast',
+      fromAgent: 'claude',
+      toAgent: 'codex',
+      reason: 'expiry-guard',
+    })
+    listHandoffs(pid, { status: 'pending' })
+    prjctDb.run(
+      pid,
+      'UPDATE task_handoffs SET expires_at = ? WHERE id = ?',
+      new Date(Date.now() - 3600_000).toISOString(),
+      h.id
+    )
+
+    const won = acceptHandoff(pid, h.id, 'codex/Copernicus')
+    expect(won).toBeNull()
+    // The sweep was throttled, so the row is still stamped 'pending' — the
+    // UPDATE's own expiry guard is what refused the accept.
+    expect(getHandoff(pid, h.id)?.status).toBe('pending')
+  })
 })
 
 describe('workspace occupancy pure decisions', () => {

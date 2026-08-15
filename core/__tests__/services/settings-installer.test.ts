@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -303,7 +304,18 @@ describe('settings-installer', () => {
     })
 
     test('the guard actually exits 0 when prjct is missing (live shell smoke test)', async () => {
-      await install()
+      // Force the portable `command -v` form regardless of local dist/ state.
+      // This test regression-covers THAT guard specifically (May 2026
+      // incident); the runtime+shim fast path added later tries an absolute
+      // path first and would exit 0 via a real execution instead of the
+      // guard, silently no longer testing the thing it asserts. The fast
+      // path itself is covered by the next test.
+      process.env.PRJCT_BIN = 'prjct'
+      try {
+        await install()
+      } finally {
+        delete process.env.PRJCT_BIN
+      }
       const raw = await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
       const parsed = JSON.parse(raw)
       // Pull the Stop hook command (the one that surfaced the bug).
@@ -322,6 +334,100 @@ describe('settings-installer', () => {
         }
       })()
       expect(exitCode).toBe(0)
+    })
+
+    test('resolves the runtime+shim fast path when the shim exists (skips the POSIX wrapper)', async () => {
+      // Perf: the portable `prjct hook X` form pays bin/prjct's symlink
+      // resolution + runtime detection (~10-15ms) on every hook event. When
+      // the shipped daemon shim is resolvable from this checkout (dist built),
+      // install writes `"<runtime>" "<shim>" hook X || <portable form>` —
+      // direct exec first, the command -v guard as the fallback.
+      await install()
+      const raw = await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
+      const parsed = JSON.parse(raw)
+      const stop = parsed.hooks.Stop.flatMap((b: { hooks: { command: string }[] }) => b.hooks)[0]!
+      const shimPath = path.resolve(__dirname, '..', '..', '..', 'dist', 'bin', 'prjct.mjs')
+      if (existsSync(shimPath)) {
+        expect(stop.command).toContain(`"${shimPath}" hook stop`)
+        expect(stop.command).toContain('|| { command -v prjct')
+        // The fast path must come FIRST — a leading `command -v` would mean
+        // the wrapper form won.
+        expect(stop.command.indexOf('hook stop')).toBeLessThan(
+          stop.command.indexOf('command -v prjct')
+        )
+        // Regression: shell &&/|| are left-associative, so an unbraced
+        // `A || B && C || exit 0` chain runs the fallback EVEN WHEN the fast
+        // path succeeds — the hook fired TWICE per event (two JSON lines on
+        // stdout, double daemon work). Run the installed command and assert
+        // a single emission.
+        const { execSync } = await import('node:child_process')
+        const out = execSync(stop.command, {
+          // PRJCT_NO_DAEMON=1: this runs the REAL compiled shim (not a
+          // mock). Without it, a reachable daemon absorbs the event and an
+          // unreachable one gets spawned-and-detached by the shim's cold
+          // path — either way a real background process outlives this test
+          // (afterEach only removes the temp HOME dir, not the process).
+          env: { ...process.env, PRJCT_NO_DAEMON: '1' },
+          input: '{}',
+          encoding: 'utf-8',
+        })
+        const lines = out.trim().split('\n').filter(Boolean)
+        expect(lines.length).toBe(1)
+        expect(() => JSON.parse(lines[0]!)).not.toThrow()
+      } else {
+        // No dist build (CI without artifacts) → portable form only.
+        expect(stop.command.startsWith('command -v prjct')).toBe(true)
+      }
+    })
+
+    test('resolves the native hook-fast binary first when this platform has one', async () => {
+      // native/hook-fast.c is compiled per-platform by build.js
+      // (buildNativeHookFast) into dist/bin/hook-fast-<platform>-<arch>.
+      // When present it must be the FIRST stage — it's the fastest path —
+      // ahead of even the bun direct-exec form, with the same braced
+      // fallback semantics.
+      await install()
+      const raw = await fs.readFile(path.join(fixture.home, '.claude', 'settings.json'), 'utf-8')
+      const parsed = JSON.parse(raw)
+      const stop = parsed.hooks.Stop.flatMap((b: { hooks: { command: string }[] }) => b.hooks)[0]!
+      const nativeBinPath = path.resolve(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        'dist',
+        'bin',
+        `hook-fast-${process.platform}-${process.arch}`
+      )
+      if (process.platform !== 'win32' && existsSync(nativeBinPath)) {
+        expect(stop.command).toContain(`"${nativeBinPath}" stop`)
+        const shimPath = path.resolve(__dirname, '..', '..', '..', 'dist', 'bin', 'prjct.mjs')
+        expect(stop.command.indexOf(`"${nativeBinPath}" stop`)).toBeLessThan(
+          stop.command.indexOf(`"${shimPath}" hook stop`)
+        )
+        // PRJCT_NO_DAEMON=1 must reach the native stage too (it has no other
+        // way to know the caller wants the daemon disabled) — verified by
+        // running the real installed command and asserting single, valid
+        // JSON output with no leaked daemon (same contract as the bun-only
+        // test above, now exercised with the native binary in the chain).
+        const { execSync } = await import('node:child_process')
+        const out = execSync(stop.command, {
+          env: { ...process.env, PRJCT_NO_DAEMON: '1' },
+          input: '{}',
+          encoding: 'utf-8',
+        })
+        const lines = out.trim().split('\n').filter(Boolean)
+        expect(lines.length).toBe(1)
+        expect(() => JSON.parse(lines[0]!)).not.toThrow()
+      } else {
+        // No native binary for this platform (no C toolchain at build
+        // time, or Windows) — the bun form must still be the leading stage.
+        const shimPath = path.resolve(__dirname, '..', '..', '..', 'dist', 'bin', 'prjct.mjs')
+        if (existsSync(shimPath)) {
+          expect(stop.command.startsWith(`"`)).toBe(true)
+          expect(stop.command.indexOf('hook-fast-')).toBe(-1)
+        }
+      }
     })
 
     test('PRJCT_BIN env override is honored', async () => {

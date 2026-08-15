@@ -174,15 +174,30 @@ export function getHandoff(projectId: string, id: string): TaskHandoff | null {
   return row ? toHandoff(row) : null
 }
 
-/** Expire stale pending rows (lazy, on read paths). */
+/**
+ * Throttle state for expireStaleHandoffs: last sweep time per project.
+ * listHandoffs runs on every prompt hook (via formatPendingHandoffCue) in
+ * every project — most of which never use handoffs at all — so sweeping on
+ * every single call was a write transaction per prompt for a condition
+ * that's true almost never. The `pending` read filter below is what keeps
+ * results correct between sweeps; this throttle only delays the bookkeeping
+ * UPDATE, never the visible data.
+ */
+const staleHandoffSweepedAt = new Map<string, number>()
+const STALE_HANDOFF_SWEEP_INTERVAL_MS = 60 * 1000
+
+/** Expire stale pending rows (lazy, on read paths, throttled per project). */
 export function expireStaleHandoffs(projectId: string): number {
-  const now = getTimestamp()
+  const nowMs = Date.now()
+  const last = staleHandoffSweepedAt.get(projectId) ?? 0
+  if (nowMs - last < STALE_HANDOFF_SWEEP_INTERVAL_MS) return 0
+  staleHandoffSweepedAt.set(projectId, nowMs)
   try {
     prjctDb.run(
       projectId,
       `UPDATE task_handoffs SET status = 'expired'
        WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ?`,
-      now
+      getTimestamp()
     )
   } catch {
     return 0
@@ -201,6 +216,15 @@ export function listHandoffs(
   if (opts.status) {
     clauses.push('status = ?')
     params.push(opts.status)
+    // expireStaleHandoffs is throttled (see its docstring) — a row can be
+    // logically expired but not yet re-stamped by the UPDATE. Filter
+    // "pending" reads by expires_at directly so throttling can never
+    // surface an already-expired handoff as pending; other statuses are
+    // exact-match only (accepted/cancelled/expired don't self-expire).
+    if (opts.status === 'pending') {
+      clauses.push('(expires_at IS NULL OR expires_at >= ?)')
+      params.push(getTimestamp())
+    }
   }
   if (opts.toAgent) {
     clauses.push('to_agent = ?')
@@ -221,8 +245,10 @@ export function listPendingForAgent(projectId: string, toAgent: string): TaskHan
 }
 
 /**
- * Race-free accept: succeeds only if still pending.
+ * Race-free accept: succeeds only if still pending AND not expired.
  * Returns the handoff when this caller won; null if lost or missing.
+ * The expiry guard lives in the UPDATE itself (not the throttled sweep),
+ * so an expired-but-not-yet-swept row can never be accepted.
  */
 export function acceptHandoff(
   projectId: string,
@@ -235,11 +261,13 @@ export function acceptHandoff(
     projectId,
     `UPDATE task_handoffs
      SET status = 'accepted', accepted_at = ?, accepted_by = ?
-     WHERE (id = ? OR id LIKE ?) AND status = 'pending'`,
+     WHERE (id = ? OR id LIKE ?) AND status = 'pending'
+       AND (expires_at IS NULL OR expires_at >= ?)`,
     now,
     acceptedBy,
     id,
-    `${id}%`
+    `${id}%`,
+    now
   )
   const row = prjctDb.get<HandoffRow>(
     projectId,

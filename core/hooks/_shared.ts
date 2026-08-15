@@ -13,6 +13,8 @@
  *   - Keyword matcher — simple substring + regex over prompt text.
  */
 
+import { readSync } from 'node:fs'
+import { isatty } from 'node:tty'
 import { deburr } from '../utils/deburr'
 
 interface HookOutput {
@@ -184,23 +186,49 @@ function mapClaudeEventToCursor(event: string): string {
   }
 }
 
-export async function readStdinSafe<T = Record<string, unknown>>(): Promise<T> {
-  if (process.stdin.isTTY) return {} as T
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = []
-    process.stdin.on('data', (c: Buffer) => chunks.push(c))
-    process.stdin.on('end', () => {
-      try {
-        const raw = Buffer.concat(chunks).toString('utf-8').trim()
-        if (!raw) return resolve({} as T)
-        resolve(JSON.parse(raw) as T)
-      } catch {
-        resolve({} as T)
+/**
+ * Sync-read stdin via fs.readSync on fd 0 directly — never READS through
+ * `process.stdin`, whose stream wrapper costs event-loop turnaround per
+ * hook. We still touch `process.stdin.fd` once up front: on node (the
+ * production runtime) creating the wrapper flips fd 0 non-blocking, so an
+ * open-but-empty pipe yields EAGAIN and the 200ms deadline below is REAL —
+ * a host that opens stdin but never closes degrades to whatever arrived
+ * instead of hanging until the host's hook-timeout kill. On bun (dev-only)
+ * the fd stays blocking and the deadline only governs EAGAIN retries; the
+ * host-side hook timeout remains the backstop there. Retries sleep ~1ms
+ * via Atomics.wait so a slow-to-flush host doesn't busy-spin.
+ */
+export function readStdinSafe<T = Record<string, unknown>>(): T {
+  if (isatty(0)) return {} as T
+  try {
+    void process.stdin.fd
+  } catch {
+    // stdin fd unavailable — readSync below fails and degrades to {}
+  }
+  const deadline = Date.now() + 200
+  const sleeper = new Int32Array(new SharedArrayBuffer(4))
+  const buf = Buffer.alloc(65536)
+  const parts: Buffer[] = []
+  for (;;) {
+    try {
+      const n = readSync(0, buf, 0, buf.length, null)
+      if (n === 0) break
+      parts.push(Buffer.from(buf.subarray(0, n)))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EAGAIN' && Date.now() < deadline) {
+        Atomics.wait(sleeper, 0, 0, 1)
+        continue
       }
-    })
-    process.stdin.on('error', () => resolve({} as T))
-    setTimeout(() => resolve({} as T), 200)
-  })
+      break
+    }
+  }
+  try {
+    const raw = Buffer.concat(parts).toString('utf-8').trim()
+    if (!raw) return {} as T
+    return JSON.parse(raw) as T
+  } catch {
+    return {} as T
+  }
 }
 
 /**
