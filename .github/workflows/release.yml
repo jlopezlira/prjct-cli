@@ -91,11 +91,17 @@ jobs:
         # no daemon socket exists (fresh runner): fall-through exit 89 with
         # NOTHING on stdout — the next stage in the hook chain then handles
         # the event. Any other code/output means a broken binary.
+        # set +e is MANDATORY around the capture: GHA runs bash with
+        # -e -o pipefail, and the binary's EXPECTED exit 89 would otherwise
+        # abort the script before CODE is even read (v3.90.0 release run
+        # died on exactly this — the binary was fine, the test was wrong).
         shell: bash
         run: |
           BIN="dist/bin/hook-fast-$(node -p process.platform)-$(node -p process.arch)"
+          set +e
           OUT=$(echo '{}' | "./$BIN" prompt 2>/dev/null)
           CODE=$?
+          set -e
           echo "$BIN → exit $CODE, stdout: '$OUT'"
           if [ "$CODE" != "89" ] || [ -n "$OUT" ]; then
             echo "::error::hook-fast smoke failed — expected exit 89 with empty stdout"

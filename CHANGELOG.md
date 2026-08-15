@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.91.0] - 2026-08-15
+
+### Added
+- fix hook-fast-native smoke test: wrap expected exit-89 capture in set +e under GHA bash -e -o pipefail
+
 ## [3.90.0] - 2026-08-15
 
 ### Added
