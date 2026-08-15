@@ -98,6 +98,31 @@ describe('spec relational projection (C6)', () => {
     expect(pending).toBe(1) // security hasn't passed → gate not met
   })
 
+  it('projection failure rolls back the content blob write (dual-write atomicity)', () => {
+    const spec = specStorage.create(fixture.projectId, {
+      title: 'Atomicity spec',
+      content: { ...emptySpecContent('original goal'), selected_reviewers: ['architecture'] },
+    })
+    expect(count('spec_selected_reviewer', spec.id)).toBe(1)
+
+    // Sabotage the projection target so projectSpecRelational throws inside
+    // the write transaction.
+    prjctDb.run(fixture.projectId, 'DROP TABLE spec_review')
+
+    // The write path does not throw (best-effort projection), but the blob
+    // UPDATE must have rolled back WITH the failed projection — the two
+    // stores can no longer diverge.
+    const updated = specStorage.updateContent(fixture.projectId, spec.id, {
+      ...emptySpecContent('updated goal'),
+      selected_reviewers: ['architecture'],
+    })
+    expect(updated?.content.goal).toBe('original goal')
+    const stored = specStorage.get(fixture.projectId, spec.id)
+    expect(stored?.content.goal).toBe('original goal')
+    // Gate rows from the original create are untouched as well.
+    expect(count('spec_selected_reviewer', spec.id)).toBe(1)
+  })
+
   it('applyRemote (sync-pull) projects the gate for a genuinely NEW spec', () => {
     // Regression: a spec pulled from another machine, already fully reviewed
     // there, used to land its content blob but leave spec_review/

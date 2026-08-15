@@ -2,10 +2,12 @@
  * Specs entity handler.
  *
  * Specs are SDD documents (migration 16, `specs` table). Apply is ADDITIVE:
- * `specStorage.applyRemote` inserts a spec missing locally and leaves an
- * existing one untouched (local data is never modified by sync), writes WITHOUT
- * re-publishing (no echo), and preserves the remote timestamps. Delete is a
- * NO-OP — a remote delete never removes a local record.
+ * `specStorage.applyRemote` inserts a spec missing locally; on conflict it
+ * merges via delta-log union when BOTH bodies carry deltas (Phase 1), and
+ * otherwise leaves the local row untouched (legacy bodies are sacred). Writes
+ * happen WITHOUT re-publishing on the insert path (no echo) and preserve the
+ * remote timestamps. Delete is a NO-OP — a remote delete never removes a
+ * local record.
  */
 
 import { specStorage } from '../../storage/spec-storage'

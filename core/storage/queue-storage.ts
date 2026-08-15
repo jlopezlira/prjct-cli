@@ -233,10 +233,10 @@ class QueueStorage extends StorageManager<QueueJson> {
 
   /**
    * Remove every task whose `featureId` matches. Returns rows-deleted.
-   * Used by breakdownSpecToTasks partial-recovery: a crashed breakdown
-   * leaves orphan queue rows tagged with `featureId = spec.id`; recovery
-   * wipes them before re-running the loop. NOT `linkedSpecId` — that
-   * field is reserved for `prjct work --spec` invocations.
+   * NOT `linkedSpecId` — that field is reserved for `prjct work --spec`
+   * invocations. breakdownSpecToTasks no longer calls this: its recovery
+   * reconciles by adoption instead of wiping (orphans stay visible in
+   * the queue). Kept as storage-level API.
    * See spec a50b32d1 AC #13.
    */
   async deleteByFeatureId(projectId: string, featureId: string): Promise<number> {

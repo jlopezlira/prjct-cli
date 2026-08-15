@@ -25,11 +25,13 @@ export const SPEC_SUBVERBS = new Set([
   'list',
   'show',
   'update',
+  'apply-delta',
   'set-status',
   'record-review',
   'link-task',
   'ship',
   'audit',
+  'validate',
   'breakdown',
   'inventory',
 ])
@@ -82,6 +84,13 @@ export async function routeSpec(
         md,
         json: options.json ? String(options.json) : undefined,
       })
+    case 'apply-delta':
+      // `--md` doubles as the inline-delta payload for this subverb (string),
+      // so it is forwarded raw instead of reduced to the output-mode boolean.
+      return commands.specApplyDelta(rest, cwd, {
+        md: options.md,
+        file: options.file ? String(options.file) : undefined,
+      })
     case 'set-status':
       return commands.specSetStatus(rest, cwd, {
         md,
@@ -108,7 +117,10 @@ export async function routeSpec(
       return commands.specAudit(rest, cwd, {
         md,
         lenses: options.lenses ? String(options.lenses) : undefined,
+        strict: options.strict === true,
       })
+    case 'validate':
+      return commands.specValidate(rest, cwd, { md, strict: options.strict === true })
     case 'breakdown':
       return commands.specBreakdown(rest, cwd, { md, force: options.force === true })
     case 'inventory':

@@ -1,12 +1,14 @@
 /**
  * breakdownSpecToTasks — partial-recovery via `tasks_created_at` marker
- * + wipe-by-featureId.
+ * + reconcile-by-adoption.
  *
  * The contract under test (spec a50b32d1 AC #13):
  *   - Marker set ⇒ early return (no double-create on re-entry).
  *   - Marker null AND linked_tasks non-empty ⇒ partial-breakdown detected;
- *     wipe queue rows by featureId, clear linked_tasks, re-run the full
- *     loop. Final state: all ACs as tasks, marker set, no duplicates.
+ *     recovery RECONCILES: each AC adopts the existing queue row with
+ *     matching body (featureId = spec.id) — id and completion state
+ *     intact — and only ACs without a surviving row are created. Final
+ *     state: all ACs as tasks, marker set, no duplicates.
  *   - Marker null AND linked_tasks empty ⇒ fresh breakdown.
  *
  * Convergence proof: marker is set ONLY after the full loop completes,
@@ -110,10 +112,10 @@ describe('breakdownSpecToTasks partial-recovery', () => {
     expect(queued.filter((t) => t.featureId === spec.id)).toHaveLength(2)
   })
 
-  test('partial breakdown (marker null + linked_tasks non-empty) is recovered via wipe-by-featureId', async () => {
+  test('partial breakdown (marker null + linked_tasks non-empty) is recovered via adoption', async () => {
     // Simulate a crash MID-LOOP: we'll create the spec, run a full
-    // breakdown, then manually clear the marker AND add an extra
-    // orphan queue row to imitate the partial state.
+    // breakdown, then manually clear the marker AND truncate linked_tasks
+    // to imitate the partial state.
     const spec = await specService.create(fixture.projectPath, {
       title: 'partial-breakdown',
       content: {
@@ -127,8 +129,8 @@ describe('breakdownSpecToTasks partial-recovery', () => {
     expect(first.taskIds).toHaveLength(5)
 
     // Force partial-state shape: marker=null AND linked_tasks
-    // intentionally truncated to 2 of 5 (the crash window) AND queue
-    // still carries 3 leftover rows the recovery must wipe.
+    // intentionally truncated to 2 of 5 (the crash window). The 5 queue
+    // rows survive and must be ADOPTED, not wiped + recreated.
     const baseline = specStorage.get(fixture.projectId, spec.id)!
     specStorage.updateContent(fixture.projectId, spec.id, {
       ...baseline.content,
@@ -137,7 +139,7 @@ describe('breakdownSpecToTasks partial-recovery', () => {
     })
 
     // Sanity: queue still has 5 rows tagged with this featureId before
-    // the recovery wipe.
+    // the recovery.
     const before = await queueStorage.getTasks(fixture.projectId)
     expect(before.filter((t) => t.featureId === spec.id)).toHaveLength(5)
 
@@ -146,8 +148,11 @@ describe('breakdownSpecToTasks partial-recovery', () => {
     expect(second.recoveredFromPartial).toBe(true)
     expect(second.taskIds).toHaveLength(5)
 
+    // Adoption, not recreation: the same task ids come back, in AC order.
+    expect(second.taskIds).toEqual(first.taskIds)
+
     // After recovery: queue carries exactly 5 (no duplicates from the
-    // pre-wipe rows), spec.linked_tasks is full, marker is set.
+    // pre-recovery rows), spec.linked_tasks is full again, marker is set.
     const after = specStorage.get(fixture.projectId, spec.id)!
     expect(after.content.tasks_created_at).not.toBeNull()
     expect(after.content.linked_tasks).toHaveLength(5)

@@ -38,6 +38,52 @@ const SpecRiskSchema = z.object({
 })
 export type SpecRisk = z.infer<typeof SpecRiskSchema>
 
+/**
+ * A GIVEN/WHEN/THEN scenario under a requirement (Phase 1 / spec deltas).
+ * Each clause is a list so `AND` continuation bullets have somewhere to land.
+ */
+export const SpecScenarioSchema = z.object({
+  name: z.string().min(1),
+  given: z.array(z.string()).default([]),
+  when: z.array(z.string()).default([]),
+  // biome-ignore lint/suspicious/noThenProperty: GIVEN/WHEN/THEN domain language; never awaited
+  then: z.array(z.string()).default([]),
+})
+export type SpecScenario = z.infer<typeof SpecScenarioSchema>
+
+/**
+ * One requirement operation inside a delta. `slug` is the stable identity
+ * (derived from `name`); `statement` is the SHALL text that materializes
+ * into `acceptance_criteria`.
+ */
+export const DeltaRequirementSchema = z.object({
+  slug: z.string().min(1),
+  name: z.string().min(1),
+  statement: z.string().min(1),
+  scenarios: z.array(SpecScenarioSchema).default([]),
+})
+export type DeltaRequirement = z.infer<typeof DeltaRequirementSchema>
+
+/**
+ * Structured summary of a parsed delta — the full operation set, so the
+ * sync merge can deterministically re-materialize requirements from the
+ * union of two delta logs. `removed` carries slugs only.
+ */
+export const DeltaOpsSchema = z.object({
+  added: z.array(DeltaRequirementSchema).default([]),
+  modified: z.array(DeltaRequirementSchema).default([]),
+  removed: z.array(z.string().min(1)).default([]),
+})
+export type DeltaOps = z.infer<typeof DeltaOpsSchema>
+
+export const DeltaEntrySchema = z.object({
+  /** Content-hash id by default — same delta text ⇒ same id on every machine. */
+  id: z.string().min(1),
+  ts: z.string(),
+  ops: DeltaOpsSchema,
+})
+export type DeltaEntry = z.infer<typeof DeltaEntrySchema>
+
 export const SpecContentSchema = z.object({
   goal: z.string().min(1),
   eli10: z.string().default(''),
@@ -60,8 +106,9 @@ export const SpecContentSchema = z.object({
   notes: z.string().default(''),
   // Set ONLY after breakdownSpecToTasks completes its full loop. Acts as a
   // completion marker for idempotency + partial-recovery: null + non-empty
-  // linked_tasks ⇒ partial breakdown; recovery wipes queue rows by featureId
-  // and re-runs the loop. Existing specs read as null via Zod's default fill
+  // linked_tasks ⇒ partial breakdown; recovery reconciles by adopting queue
+  // rows whose body matches an AC (featureId = spec.id) and creating only
+  // the missing ones. Existing specs read as null via Zod's default fill
   // (no DB migration needed; specs.content is a JSON blob).
   tasks_created_at: z.string().nullable().default(null),
   /**
@@ -70,6 +117,11 @@ export const SpecContentSchema = z.object({
    * null = legacy / not yet audited under candidate-bound admission.
    */
   audit_candidate_hash: z.string().nullable().default(null),
+  // Phase 1 / spec deltas: GIVEN/WHEN/THEN scenarios keyed by requirement
+  // slug, and the append-only delta log that materialized them. Both default
+  // empty so legacy rows parse with zero DB migration (content is a JSON blob).
+  scenarios: z.record(z.string(), z.array(SpecScenarioSchema)).default({}),
+  delta_log: z.array(DeltaEntrySchema).default([]),
 })
 
 export type SpecContent = z.infer<typeof SpecContentSchema>

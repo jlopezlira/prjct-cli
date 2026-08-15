@@ -5,11 +5,13 @@
  *   prjct spec list [--status <s>]          # ranked by created_at
  *   prjct spec show <id>                    # render one (--md for vault format)
  *   prjct spec update <id> --json '{...}'   # PATCH content (shallow merge, Zod-validated)
+ *   prjct spec apply-delta <id> (--file <path> | --md '<delta>')  # canonical requirement/AC edits
  *   prjct spec set-status <id> <status>     # draft|reviewed|in_progress|shipped|archived
  *   prjct spec record-review <id> <reviewer> <pass|fail> --notes "..."
  *   prjct spec link-task <id> <task-id>
  *   prjct spec ship <id> [--pr <n>]
- *   prjct spec audit <id>                   # emits subagent dispatch prompt
+ *   prjct spec audit <id> [--strict]        # emits subagent dispatch prompt
+ *   prjct spec validate <id> [--strict]     # structural validation (Phase 2)
  *
  * The CLI persists state. Claude does the structured drafting (asking the
  * forcing questions, populating acceptance_criteria) and the audit
@@ -17,13 +19,18 @@
  * body's intent map.
  */
 
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import configManager from '../infrastructure/config-manager'
 import { renderAuditDispatch, selectReviewers } from '../services/spec-audit-dispatch'
+import { renderSpecMarkdown, type SpecTaskState } from '../services/spec-markdown'
 import { specService } from '../services/spec-service'
+import { formatValidationLines, validateSpec } from '../services/spec-validate'
 import { indexStorage } from '../storage/index-storage'
+import { queueStorage } from '../storage/queue-storage'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
-import { SPEC_STATUSES, type SpecContent, SpecContentSchema, type SpecStatus } from '../types/spec'
+import { SPEC_STATUSES, type SpecContent, type SpecStatus } from '../types/spec'
 import { failHard, failWith } from '../utils/md-aware'
 import out from '../utils/output'
 import { PrjctCommandsBase } from './base'
@@ -153,7 +160,18 @@ export class SpecCommands extends PrjctCommandsBase {
       if (!spec) return failWith(`spec not found: ${id}`)
 
       if (options.md) {
-        console.log(renderSpecMarkdown(spec))
+        // Queue state for the `## Tasks` checklist — keyed by AC text
+        // (queue task `body`), restricted to rows of this spec.
+        const showProjectId = await configManager.getProjectId(projectPath).catch(() => null)
+        const taskStates = new Map<string, SpecTaskState>()
+        if (showProjectId) {
+          for (const t of await queueStorage.getTasks(showProjectId)) {
+            if (t.featureId === spec.id && t.body != null) {
+              taskStates.set(t.body, { id: t.id, completed: t.completed })
+            }
+          }
+        }
+        console.log(renderSpecMarkdown(spec, taskStates))
       } else {
         console.log(`# ${spec.title}`)
         console.log(`status: ${spec.status}`)
@@ -227,16 +245,118 @@ export class SpecCommands extends PrjctCommandsBase {
       const existing = await specService.get(projectPath, id)
       if (!existing) return failWith(`spec not found: ${id}`)
 
-      const merged: SpecContent = SpecContentSchema.parse({
-        ...existing.content,
-        ...(patch as Record<string, unknown>),
-      })
-      const updated = await specService.update(projectPath, id, merged)
+      const updated = await specService.patch(projectPath, id, patch as Partial<SpecContent>)
       if (!updated) return failWith(`spec not found: ${id}`)
 
       if (options.md) console.log(`✓ spec updated: ${updated.title}`)
       else out.done(`spec updated: ${updated.title}`)
       return { success: true, specId: updated.id }
+    } catch (error) {
+      return failHard(getErrorMessage(error))
+    }
+  }
+
+  /**
+   * Apply an OpenSpec-subset delta (`## ADDED/MODIFIED/REMOVED Requirements`)
+   * — the canonical path for requirement/AC changes. The delta markdown comes
+   * from `--file <path>` or inline via `--md '<delta>'` (for this subverb
+   * `--md` carries a payload; bare `--md` still selects markdown output).
+   * Idempotent by delta id; MODIFIED/REMOVED target existing requirement
+   * slugs. Body edits invalidate reviews and demote reviewed → draft.
+   */
+  async applyDelta(
+    id: string | null = null,
+    projectPath: string = process.cwd(),
+    options: { md?: boolean | string; file?: string } = {}
+  ): Promise<CommandResult> {
+    try {
+      if (!id) {
+        return failWith(
+          "Usage: prjct spec apply-delta <id> (--file <path> | --md '<delta markdown>')"
+        )
+      }
+      const inline = typeof options.md === 'string' ? options.md.trim() : ''
+      const file = options.file?.trim() ?? ''
+      if (!inline && !file) return failWith("provide --file <path> or --md '<delta markdown>'")
+      if (inline && file) return failWith('pass either --file or --md, not both')
+
+      const initResult = await this.ensureProjectInit(projectPath)
+      if (!initResult.success) return initResult
+
+      const markdown = file ? await fs.readFile(path.resolve(projectPath, file), 'utf8') : inline
+
+      const updated = await specService.applyDelta(projectPath, id, markdown)
+      if (!updated) return failWith(`spec not found: ${id}`)
+
+      const msg = `✓ delta applied: ${updated.title} (${updated.content.delta_log.length} delta(s) logged)`
+      if (options.md === true) console.log(msg)
+      else out.done(msg)
+      return { success: true, specId: updated.id }
+    } catch (error) {
+      return failHard(getErrorMessage(error))
+    }
+  }
+
+  /**
+   * `prjct spec validate <id> [--strict]` — structural validation of the
+   * stored spec (Phase 2; rules + severities documented in
+   * services/spec-validate.ts).
+   *
+   * Exit semantics: ERRORS fail the command in every mode; warnings are
+   * advisory EXCEPT under `--strict`, which turns them into failures — the
+   * established convention (`prjct guard --strict` does the same).
+   */
+  async validate(
+    id: string | null = null,
+    projectPath: string = process.cwd(),
+    options: SpecCmdOptions & { strict?: boolean } = {}
+  ): Promise<CommandResult> {
+    try {
+      if (!id) return failWith('Usage: prjct spec validate <id> [--strict]')
+      const initResult = await this.ensureProjectInit(projectPath)
+      if (!initResult.success) return initResult
+
+      const spec = await specService.get(projectPath, id)
+      if (!spec) return failWith(`spec not found: ${id}`)
+
+      const strict = options.strict === true
+      const validation = validateSpec(spec, { projectPath })
+      const failed = validation.errors.length > 0 || (strict && validation.warnings.length > 0)
+
+      if (options.md) {
+        console.log(`# spec validate — ${spec.title}`)
+        console.log('')
+        console.log(`spec id: \`${spec.id}\` · mode: ${strict ? 'strict' : 'advisory'}`)
+        console.log('')
+        if (validation.errors.length === 0 && validation.warnings.length === 0) {
+          console.log('_No findings — structure OK._')
+        } else {
+          console.log('## Findings')
+          for (const line of formatValidationLines(validation)) console.log(line)
+        }
+        console.log('')
+        console.log(failed ? '**verdict: FAIL**' : '**verdict: PASS**')
+      } else {
+        for (const e of validation.errors) out.fail(e)
+        for (const w of validation.warnings) out.warn(w)
+        if (validation.errors.length === 0 && validation.warnings.length === 0) {
+          out.done('spec structure OK')
+        }
+      }
+
+      if (failed) {
+        return {
+          success: false,
+          error: `spec validation failed: ${validation.errors.length} error(s), ${validation.warnings.length} warning(s)${strict ? ' (strict: warnings count as failures)' : ''}`,
+          specId: id,
+        }
+      }
+      return {
+        success: true,
+        specId: id,
+        errors: validation.errors.length,
+        warnings: validation.warnings.length,
+      }
     } catch (error) {
       return failHard(getErrorMessage(error))
     }
@@ -381,15 +501,38 @@ export class SpecCommands extends PrjctCommandsBase {
   async audit(
     id: string | null = null,
     projectPath: string = process.cwd(),
-    options: SpecCmdOptions & { lenses?: string } = {}
+    options: SpecCmdOptions & { lenses?: string; strict?: boolean } = {}
   ): Promise<CommandResult> {
     try {
-      if (!id) return failWith('Usage: prjct spec audit <id> [--lenses a,b,c]')
+      if (!id) return failWith('Usage: prjct spec audit <id> [--lenses a,b,c] [--strict]')
       const initResult = await this.ensureProjectInit(projectPath)
       if (!initResult.success) return initResult
 
       const spec = await specService.get(projectPath, id)
       if (!spec) return failWith(`spec not found: ${id}`)
+
+      // Phase 2: structural validation BEFORE the dispatch. ERRORS block the
+      // dispatch under `--strict` or SDD mode=strict; otherwise every finding
+      // prints as an advisory block above the dispatch. Warnings never block.
+      const validation = validateSpec(spec, { projectPath })
+      if (validation.errors.length > 0 || validation.warnings.length > 0) {
+        const { effectiveSddMode } = await import('./sdd')
+        const auditCfg = await configManager.readConfig(projectPath).catch(() => null)
+        const strictGate = options.strict === true || effectiveSddMode(auditCfg) === 'strict'
+        const blocked = strictGate && validation.errors.length > 0
+        console.log(
+          blocked
+            ? '## spec validation — dispatch BLOCKED (strict)\n'
+            : '## spec validation (advisory)\n'
+        )
+        for (const line of formatValidationLines(validation)) console.log(line)
+        console.log('')
+        if (blocked) {
+          return failWith(
+            `spec validation: ${validation.errors.length} error(s) block the audit dispatch in strict mode — fix the spec (see \`prjct spec validate ${id}\`) or drop strict gating`
+          )
+        }
+      }
 
       // Dynamic lenses: `--lenses` overrides; otherwise prjct computes a
       // deterministic baseline from the spec. Persist the chosen set so the
@@ -569,56 +712,4 @@ function parseFlagTags(raw: string | undefined): Record<string, string> {
     if (idx > 0) tags[pair.slice(0, idx)] = pair.slice(idx + 1)
   }
   return tags
-}
-
-function renderSpecMarkdown(spec: {
-  id: string
-  title: string
-  status: string
-  content: SpecContent
-  createdAt: string
-  updatedAt: string
-}): string {
-  const c = spec.content
-  const lines = [
-    `# ${spec.title}`,
-    '',
-    `**id:** \`${spec.id}\` · **status:** ${spec.status} · **created:** ${spec.createdAt}`,
-    '',
-    '## Goal',
-    c.goal,
-  ]
-  if (c.eli10) lines.push('', '## ELI10', c.eli10)
-  if (c.stakes) lines.push('', '## Stakes', c.stakes)
-  if (c.acceptance_criteria.length > 0) {
-    lines.push('', '## Acceptance criteria')
-    for (const ac of c.acceptance_criteria) lines.push(`- [ ] ${ac}`)
-  }
-  if (c.scope.length > 0) {
-    lines.push('', '## Scope')
-    for (const s of c.scope) lines.push(`- ${s}`)
-  }
-  if (c.out_of_scope.length > 0) {
-    lines.push('', '## Out of scope')
-    for (const s2 of c.out_of_scope) lines.push(`- ${s2}`)
-  }
-  if (c.risks.length > 0) {
-    lines.push('', '## Risks')
-    for (const r of c.risks) lines.push(`- **${r.risk}** — ${r.mitigation}`)
-  }
-  if (c.test_plan.length > 0) {
-    lines.push('', '## Test plan')
-    for (const t of c.test_plan) lines.push(`- ${t}`)
-  }
-  if (c.reviews && Object.keys(c.reviews).length > 0) {
-    lines.push('', '## Reviews')
-    for (const [reviewer, r] of Object.entries(c.reviews)) {
-      lines.push(`- **${reviewer}:** ${r.verdict} — ${r.notes} _(${r.ts})_`)
-    }
-  }
-  if (c.linked_tasks.length > 0) {
-    lines.push('', '## Linked tasks', ...c.linked_tasks.map((t) => `- ${t}`))
-  }
-  if (c.notes) lines.push('', '## Notes', c.notes)
-  return lines.join('\n')
 }
