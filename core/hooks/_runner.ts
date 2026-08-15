@@ -108,7 +108,7 @@ export async function runHook<I = Record<string, unknown>>(
 
   // Process (cold) path — unchanged.
   await safeRun(async () => {
-    const input = await readStdinSafe<I>()
+    const input = readStdinSafe<I>()
     const decision = opts.decide ? await opts.decide(input, projectPath) : null
     if (decision) {
       emit(buildDenyOutput(opts.event, decision.deny))

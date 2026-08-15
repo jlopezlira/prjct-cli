@@ -100,6 +100,68 @@ describe('RequestLanes', () => {
     expect(order).toEqual(['state-1-start', 'read-mostly', 'state-1-end', 'state-2'])
   })
 
+  test('hook-state ordering is per key — different keys never block each other', async () => {
+    const lanes = new RequestLanes()
+    const gateA = Promise.withResolvers<void>()
+    const order: string[] = []
+
+    // Project A's first hook-state call blocks on gateA.
+    const aFirst = lanes.run(
+      'hook-state',
+      async () => {
+        order.push('a-1-start')
+        await gateA.promise
+        order.push('a-1-end')
+      },
+      '/projects/a'
+    )
+    // Project A's second call must queue behind the first (same key).
+    const aSecond = lanes.run(
+      'hook-state',
+      async () => {
+        order.push('a-2')
+      },
+      '/projects/a'
+    )
+    // Project B shares the daemon but is a different key — must run
+    // immediately, not wait on project A's in-flight/queued work.
+    const b = lanes.run(
+      'hook-state',
+      async () => {
+        order.push('b')
+      },
+      '/projects/b'
+    )
+
+    await b
+    expect(order).toEqual(['a-1-start', 'b'])
+
+    gateA.resolve()
+    await Promise.all([aFirst, aSecond])
+    expect(order).toEqual(['a-1-start', 'b', 'a-1-end', 'a-2'])
+  })
+
+  test('hook-state calls with no key share one lane (backward-compat default)', async () => {
+    const lanes = new RequestLanes()
+    const gate = Promise.withResolvers<void>()
+    const order: string[] = []
+
+    const first = lanes.run('hook-state', async () => {
+      order.push('first-start')
+      await gate.promise
+      order.push('first-end')
+    })
+    const second = lanes.run('hook-state', async () => {
+      order.push('second')
+    })
+
+    await Promise.resolve()
+    expect(order).toEqual(['first-start'])
+    gate.resolve()
+    await Promise.all([first, second])
+    expect(order).toEqual(['first-start', 'first-end', 'second'])
+  })
+
   test('a rejected lane job does not kill the chain', async () => {
     const lanes = new RequestLanes()
     await expect(

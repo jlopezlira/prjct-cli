@@ -48,8 +48,16 @@ import {
 } from './staleness'
 import { decideListenFailure } from './startup-lock'
 
-/** Run WAL checkpoint every N requests to reclaim disk space */
-const WAL_CHECKPOINT_INTERVAL = 50
+/**
+ * Run WAL checkpoints on a timer, not per-request. `PRAGMA wal_checkpoint
+ * (PASSIVE)` never blocks on locks, but it's still synchronous work — the
+ * old `commandsServed % 50 === 0` trigger ran it inline inside
+ * handleRequestInner, so whichever hook happened to be request #50/#100
+ * paid an unpredictable extra few ms before its own response could start.
+ * A timer moves that cost off the request path entirely, mirroring
+ * `updateTimer` below.
+ */
+const WAL_CHECKPOINT_INTERVAL_MS = 15 * 1000
 
 /**
  * Min interval between global-install version-drift checks. The mtime check is
@@ -73,6 +81,7 @@ interface DaemonRuntime {
   ownVersion: string | null
   lastDriftCheckMs: number
   updateTimer: ReturnType<typeof setInterval> | null
+  walCheckpointTimer: ReturnType<typeof setInterval> | null
   shuttingDown: boolean
 }
 
@@ -83,6 +92,7 @@ const runtime: DaemonRuntime = {
   ownVersion: null,
   lastDriftCheckMs: 0,
   updateTimer: null,
+  walCheckpointTimer: null,
   shuttingDown: false,
 }
 
@@ -186,6 +196,16 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
     }, UPDATE_CHECK_INTERVAL_MS)
     runtime.updateTimer.unref?.()
   }
+
+  // Off the request path — see WAL_CHECKPOINT_INTERVAL_MS's docstring.
+  runtime.walCheckpointTimer = setInterval(() => {
+    try {
+      prjctDb.checkpointAll()
+    } catch {
+      /* best-effort — next tick retries */
+    }
+  }, WAL_CHECKPOINT_INTERVAL_MS)
+  runtime.walCheckpointTimer.unref?.()
 
   // Pre-load modules (this is the whole point — do it once)
   runtime.commands = new PrjctCommands()
@@ -488,16 +508,16 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
     state.activeRequests++
     try {
       // Hooks never share the command lane (commands patch global console).
-      // Prompt/Stop preserve turn-state order; every other read-mostly hook
-      // uses bounded concurrency so a slow hook cannot head-of-line-block a
-      // PreToolUse response.
+      // Prompt/Stop preserve turn-state order PER cwd (see request-lanes.ts);
+      // every other read-mostly hook uses bounded concurrency so a slow hook
+      // cannot head-of-line-block a PreToolUse response.
       const lane =
         request.command !== 'hook'
           ? 'command'
           : request.args[0] === 'prompt' || request.args[0] === 'stop'
             ? 'hook-state'
             : 'hook'
-      return await daemonRequestLanes.run(lane, () => handleRequestInner(request))
+      return await daemonRequestLanes.run(lane, () => handleRequestInner(request), request.cwd)
     } finally {
       state.activeRequests--
       if (state.restartPending && state.activeRequests === 0) {
@@ -527,9 +547,8 @@ async function handleRequestInner(request: DaemonRequest): Promise<DaemonRespons
   state.commandsServed++
   state.lastActivity = Date.now()
 
-  if (state.commandsServed % WAL_CHECKPOINT_INTERVAL === 0) {
-    prjctDb.checkpointAll()
-  }
+  // WAL checkpointing runs on walCheckpointTimer (off the request path) —
+  // see WAL_CHECKPOINT_INTERVAL_MS's docstring.
 
   // NOTE: stale-code / version-drift detection happens in markStaleIfNeeded()
   // BEFORE serving (see handleRequest) — never here, or the triggering request
@@ -766,6 +785,10 @@ async function shutdown(exitCode: number, opts: { respawn?: boolean } = {}): Pro
   if (runtime.updateTimer) {
     clearInterval(runtime.updateTimer)
     runtime.updateTimer = null
+  }
+  if (runtime.walCheckpointTimer) {
+    clearInterval(runtime.walCheckpointTimer)
+    runtime.walCheckpointTimer = null
   }
 
   try {

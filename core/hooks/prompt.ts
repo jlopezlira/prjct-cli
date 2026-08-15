@@ -116,6 +116,11 @@ export async function buildProjectState(
   const config = preloaded !== undefined ? preloaded : await configManager.readConfig(projectPath)
   if (!config?.projectId) return null
 
+  // Kick the secondary probes (queue / ship / inbox / handoff / git) FIRST so
+  // their forks overlap the active-work block instead of queueing behind it —
+  // a cold `git status` fork is the slowest single probe here (~20-40ms).
+  const secondaryPromise = collectSecondarySignals(config, projectPath)
+
   const lines: string[] = ['# prjct: project state']
   // Active work — most useful single fact. Resolved PER worktree so a parallel
   // agent sees its own work, not a sibling's. Falls back to singular outside a
@@ -132,11 +137,12 @@ export async function buildProjectState(
           '  ↳ Before session end: `prjct land` · hand-off `prjct remember context "Session close: …"`'
         )
       }
-      // Read-only turn state. The increment moved to afterEmit so SQLite never
-      // sits between the prompt event and the host-visible response.
-      const { turns, loopVerdict, currentTask } = await (async () => {
+      // Read-only turn state. Reuses collectActiveTasks' already-fetched
+      // mainTaskRaw instead of a second stateStorage.getCurrentTask fetch —
+      // same doc, same daemon-mode SQLite read, just once instead of twice.
+      const { turns, loopVerdict, currentTask } = (() => {
         try {
-          const task = await stateStorage.getCurrentTask(config.projectId)
+          const task = overview.mainTaskRaw
           return {
             turns: task?.turnCount ?? 0,
             currentTask: task,
@@ -227,8 +233,30 @@ export async function buildProjectState(
     /* best-effort */
   }
 
-  // Parallel secondary signals (queue / ship / inbox / handoff / git) — was serial.
-  const secondary = await Promise.all([
+  // Parallel secondary signals (queue / ship / inbox / handoff / git) —
+  // started before the active-work block so the git fork overlaps it.
+  const secondary = await secondaryPromise
+
+  for (const line of secondary) {
+    if (line) {
+      lines.push(line)
+    }
+  }
+
+  if (lines.length === 1) return null
+  return lines.join('\n')
+}
+
+/**
+ * Secondary state probes, all independent: pending handoff cue, queued
+ * tasks, git branch/tree snapshot, last ship, memory inbox count. Each is
+ * fail-soft (null on any error) so one broken probe never sinks the block.
+ */
+function collectSecondarySignals(
+  config: LocalConfig,
+  projectPath: string
+): Promise<Array<string | null>> {
+  return Promise.all([
     (async (): Promise<string | null> => {
       try {
         const { formatPendingHandoffCue } = await import('../services/agent-switch')
@@ -285,15 +313,6 @@ export async function buildProjectState(
       }
     })(),
   ])
-
-  for (const line of secondary) {
-    if (line) {
-      lines.push(line)
-    }
-  }
-
-  if (lines.length === 1) return null
-  return lines.join('\n')
 }
 
 /**
@@ -466,7 +485,15 @@ async function captureGit(projectPath: string): Promise<GitSnapshot> {
   }
 
   const diskPath = gitSnapshotPath(projectPath)
-  if (!gitSnapshotTestState.skipDiskSnapshotOnce) {
+  // Disk only helps the FIRST touch of this path in this process (e.g. right
+  // after a daemon restart, handed off from whichever process wrote it last).
+  // Once an in-memory entry exists, its disk twin was written with the same
+  // expiresAt at the same refresh — so if memory just expired, disk is
+  // exactly as expired; re-reading+parsing it on every ~15s refresh through
+  // a session is a guaranteed-miss disk round-trip. Gate on `!cached`, not
+  // "memory check failed", so a live process never re-touches disk once it
+  // has served this path at all.
+  if (!cached && !gitSnapshotTestState.skipDiskSnapshotOnce) {
     const disk = await fs
       .readFile(diskPath, 'utf-8')
       .then((raw) => JSON.parse(raw) as GitSnapshotCacheEntry)
@@ -484,7 +511,10 @@ async function captureGit(projectPath: string): Promise<GitSnapshot> {
   if (gitSnapshotCache.size > 32) gitSnapshotCache.clear()
   const entry = { snapshot, expiresAt: Date.now() + GIT_SNAPSHOT_TTL_MS, indexMtimeMs }
   gitSnapshotCache.set(projectPath, entry)
-  await fs
+  // Fire-and-forget: this write only helps a DIFFERENT process (cross-process
+  // handoff on cold start / restart) — it can never help the in-memory return
+  // below, so awaiting it just adds disk I/O to this request's critical path.
+  void fs
     .mkdir(path.dirname(diskPath), { recursive: true })
     .then(() => fs.writeFile(diskPath, JSON.stringify(entry)))
     .catch(() => undefined)

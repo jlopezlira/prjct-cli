@@ -8,7 +8,7 @@
  * the per-workspace state observable instead of silently singular.
  */
 
-import type { TaskHarness } from '../schemas/state'
+import type { CurrentTask, TaskHarness } from '../schemas/state'
 import { stateStorage } from '../storage/state-storage'
 import { getTaskPipelineState, type TaskPipelineState } from '../storage/task-pipeline-storage'
 import { deriveWorkspace, MAIN_WORKSPACE_ID } from './workspace-id'
@@ -36,6 +36,16 @@ export interface TaskOverview {
   current: ActiveTaskView | null
   /** Every active task across the project, current-first. */
   all: ActiveTaskView[]
+  /**
+   * The main worktree's full task record (turnCount, tokens, owner…) —
+   * `current` is the narrower cross-consumer projection. Callers that need
+   * fields outside `ActiveTaskView` (e.g. buildProjectState) should read
+   * this instead of issuing their own follow-up `getCurrentTask` fetch.
+   * Set whenever a main-worktree task exists, regardless of which
+   * workspace the caller is in (the snapshot already fetched it, so
+   * exposing it costs nothing); null only when the main worktree is idle.
+   */
+  mainTaskRaw: CurrentTask | null
 }
 
 function labelFor(workspaceId: string, branch?: string): { shortId: string; label: string } {
@@ -56,8 +66,13 @@ export async function collectActiveTasks(
   const ws = await deriveWorkspace(projectPath)
   const views: ActiveTaskView[] = []
 
+  // One read for both — see getTaskSnapshot's docstring: getCurrentTask +
+  // getActiveTasks each independently hit SQLite (daemon bypasses the doc
+  // cache), so calling both back to back was 2 fetches of the same doc.
+  const snapshot = await stateStorage.getTaskSnapshot(projectId)
+
   // Main worktree task (singular currentTask), surfaced as the `main` workspace.
-  const mainTask = await stateStorage.getCurrentTask(projectId)
+  const mainTask = snapshot.currentTask
   if (mainTask) {
     const { shortId, label } = labelFor(MAIN_WORKSPACE_ID, mainTask.branch)
     views.push({
@@ -77,7 +92,7 @@ export async function collectActiveTasks(
 
   // Child-worktree tasks (activeTasks[]). Defensive: skip any stray entry
   // tagged as the main workspace so it can never double-count with currentTask.
-  for (const t of await stateStorage.getActiveTasks(projectId)) {
+  for (const t of snapshot.activeTasks) {
     if (t.workspaceId === MAIN_WORKSPACE_ID) continue
     const { shortId, label } = labelFor(t.workspaceId, t.branch)
     views.push({
@@ -97,7 +112,7 @@ export async function collectActiveTasks(
 
   views.sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent))
   const current = views.find((v) => v.isCurrent) ?? null
-  return { current, all: views }
+  return { current, all: views, mainTaskRaw: mainTask }
 }
 
 /** One-line plain-text rendering of a task with its workspace marker. */

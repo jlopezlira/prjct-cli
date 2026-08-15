@@ -104,6 +104,22 @@ class StateStorage extends StorageManager<StateJson> {
   }
 
   /**
+   * currentTask + activeTasks in ONE read. `getCurrentTask` and
+   * `getActiveTasks` are separate public methods for backward-compat call
+   * sites that only need one, but both independently call `read()` — inside
+   * the daemon that's a full SQLite getDoc + JSON.parse each (the 5s cache
+   * is bypassed there, see `read()`'s comment). A caller needing both (e.g.
+   * the prompt-hook's `collectActiveTasks`) should use this instead of
+   * calling both getters back to back.
+   */
+  async getTaskSnapshot(
+    projectId: string
+  ): Promise<{ currentTask: CurrentTask | null; activeTasks: WorkspaceTask[] }> {
+    const state = await this.read(projectId)
+    return { currentTask: state.currentTask, activeTasks: state.activeTasks || [] }
+  }
+
+  /**
    * Loop control: bump the active cycle's turn counter by one and return the new
    * value (0 when there is no active cycle). Called once per turn from the
    * UserPromptSubmit hook so the state block can escalate a stuck loop. A new

@@ -10,7 +10,7 @@
  * @version 3.0.0
  */
 
-const { execSync } = require('node:child_process')
+const { execFileSync, execSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 
@@ -108,16 +108,23 @@ const __dirname = __pathDirname(__filename);`,
     },
   })
 
-  // 1a-hooks. Dedicated COLD-hook bundle (~136KB vs the ~936KB core).
-  // The shim's cold-hook fallback imports THIS instead of prjct-core.mjs, so a
-  // freshly-spawned hook parses only its real dependency closure (the 10 hook
-  // runners share almost all their deps) instead of the whole CLI. This is the
-  // dominant cost the hot-path benchmark measures (scripts/bench-hooks.mjs).
-  console.log('  → dist/bin/prjct-hooks.mjs (cold-hook bundle)')
+  // 1a-hooks. Dedicated COLD-hook bundle, code-split so a cold hook parses
+  // only its own closure. Without splitting, esbuild inlines the registry's
+  // dynamic imports into ONE file, so `prjct hook notification` was parsing
+  // the union of every hook's deps (~1MB: commands, sync, workflow-engine…)
+  // on a freshly-spawned process. With splitting each hook module + its
+  // unique deps become lazily-loaded chunks — notification parses ~30KB,
+  // prompt ~its real closure, and the leak chains (session-start →
+  // task-service → commands/shipping) stop taxing unrelated hooks.
+  console.log('  → dist/bin/prjct-hooks.mjs (cold-hook bundle, split)')
   await esbuild.build({
     entryPoints: [path.join(ROOT, 'core/hooks/cold-entry.ts')],
-    outfile: path.join(DIST, 'bin', 'prjct-hooks.mjs'),
+    outdir: path.join(DIST, 'bin'),
+    entryNames: 'prjct-hooks',
+    chunkNames: 'hook-chunks/[name]-[hash]',
+    outExtension: { '.js': '.mjs' },
     bundle: true,
+    splitting: true,
     platform: 'node',
     target: 'node18',
     format: 'esm',
@@ -142,6 +149,19 @@ const __dirname = __pathDirname(__filename);`,
   const shimSource = generateDaemonShim()
   fs.writeFileSync(path.join(DIST, 'bin', 'prjct.mjs'), shimSource)
   fs.chmodSync(path.join(DIST, 'bin', 'prjct.mjs'), 0o755)
+
+  // 1c. Native hook-fast binaries — best-effort, additive. See
+  // native/hook-fast.c's docstring: settings-installer.ts tries these
+  // FIRST for a matching platform+arch, but the bun shim above remains the
+  // guaranteed fallback (missing binary, wrong platform, or any runtime
+  // failure all fall through to it). A build machine without a C
+  // toolchain just ships without this extra layer — never a build failure.
+  const nativeBuilt = buildNativeHookFast()
+  if (nativeBuilt.length > 0) {
+    console.log(`  → dist/bin/hook-fast-{${nativeBuilt.join(',')}} (native fast path)`)
+  } else {
+    console.log('  → hook-fast native binary skipped (no C toolchain for any target)')
+  }
 
   // 2. Daemon entry point (ESM, minified — spawned as background process)
   console.log('  → dist/daemon/entry.mjs')
@@ -248,6 +268,58 @@ function deriveShimSkipSet() {
 }
 
 /**
+ * Compile native/hook-fast.c for every platform+arch this build machine
+ * can reach, into dist/bin/hook-fast-<platform>-<arch> (matching Node's
+ * own process.platform/process.arch strings, so settings-installer.ts can
+ * compute the expected filename with zero lookup table). POSIX only —
+ * Windows named pipes need a different implementation, not attempted here.
+ *
+ * Strategy: native `cc` for the machine's own platform+arch (always
+ * available if this build machine has ANY C toolchain), plus opportunistic
+ * cross-compilation for anything else reachable from here (macOS can
+ * target the other Apple arch via clang's -arch flag; Linux targets via
+ * `zig cc` when zig happens to be installed). Every attempt is wrapped so a
+ * missing compiler/target is silently skipped — this must never fail the
+ * JS/TS build. A platform this build produces no binary for just keeps
+ * using the bun shim, identical to today.
+ *
+ * @returns {string[]} platform-arch labels that compiled successfully.
+ */
+function buildNativeHookFast() {
+  const src = path.join(ROOT, 'native', 'hook-fast.c')
+  if (!fs.existsSync(src)) return []
+  const outDir = path.join(DIST, 'bin')
+  const built = new Set()
+
+  const tryCompile = (label, compiler, args) => {
+    if (built.has(label)) return
+    const out = path.join(outDir, `hook-fast-${label}`)
+    try {
+      execFileSync(compiler, [...args, '-O2', '-o', out, src], { stdio: 'pipe' })
+      fs.chmodSync(out, 0o755)
+      built.add(label)
+    } catch {
+      // No compiler / no support for this target on this build machine —
+      // fine, that platform ships without the native fast path.
+    }
+  }
+
+  if (process.platform === 'darwin') {
+    tryCompile('darwin-arm64', 'cc', ['-arch', 'arm64'])
+    tryCompile('darwin-x64', 'cc', ['-arch', 'x86_64'])
+  } else if (process.platform === 'linux') {
+    tryCompile(`linux-${process.arch}`, 'cc', [])
+  }
+  // Opportunistic Linux cross-compilation via zig (musl = fully static, no
+  // glibc-version dependence on the eventual target machine) — only fills
+  // in whatever the native branch above didn't already cover.
+  tryCompile('linux-x64', 'zig', ['cc', '-target', 'x86_64-linux-musl'])
+  tryCompile('linux-arm64', 'zig', ['cc', '-target', 'aarch64-linux-musl'])
+
+  return [...built]
+}
+
+/**
  * Generate the daemon shim — a tiny (<3KB) CLI entry point that:
  * 1. Checks if daemon socket exists (fs.existsSync)
  * 2. If yes: connects, sends command, prints output, exits
@@ -280,11 +352,19 @@ function generateDaemonShim() {
   // execute via dist/bin/prjct.mjs). Any future change to the fallback
   // policy MUST update both this string and bin/prjct.ts + protocol.ts.
   return `#!/usr/bin/env node
-import{connect}from"node:net";import{existsSync}from"node:fs";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{join,resolve}from"node:path";import{spawn}from"node:child_process";
+import{connect}from"node:net";import{existsSync,readSync}from"node:fs";import{isatty}from"node:tty";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{join,resolve}from"node:path";import{spawn}from"node:child_process";
 const cliHome=process.env.PRJCT_CLI_HOME?resolve(process.env.PRJCT_CLI_HOME):join(homedir(),".prjct-cli");
 const namedPipe=process.platform==="win32";
 const sockPath=namedPipe?"\\\\.\\pipe\\prjct-"+createHash("sha1").update(resolve(cliHome)).digest("hex").slice(0,16)+"-daemon":join(cliHome,"run","daemon.sock");
 const hasEndpoint=()=>namedPipe||existsSync(sockPath);
+// Sync-read stdin via fs.readSync on fd 0 directly — never READS through
+// process.stdin, whose stream wrapper costs event-loop turnaround per hook.
+// Touching process.stdin.fd once up front flips fd 0 non-blocking (this
+// shim always runs on node), so an open-but-empty pipe yields EAGAIN and
+// the deadline is REAL: a host that opens stdin but never closes degrades
+// to whatever arrived instead of hanging until the host's hook-timeout
+// kill. EAGAIN retries sleep ~1ms via Atomics.wait to avoid a busy-spin.
+function readStdinSync(ms){if(isatty(0))return"";try{void process.stdin.fd}catch{}const dl=Date.now()+ms;const slp=new Int32Array(new SharedArrayBuffer(4));const buf=Buffer.alloc(65536);const parts=[];for(;;){try{const n=readSync(0,buf,0,buf.length,null);if(n===0)break;parts.push(Buffer.from(buf.subarray(0,n)))}catch(e){if(e&&e.code==="EAGAIN"&&Date.now()<dl){Atomics.wait(slp,0,0,1);continue}break}}return Buffer.concat(parts).toString("utf8")}
 const args=process.argv.slice(2);
 const cmd=args.find(a=>!a.startsWith("-"));
 const skip=new Set(${JSON.stringify(deriveShimSkipSet())});
@@ -309,7 +389,14 @@ function sendHook(sub,data){
 if(cmd==="hook"){
   if(process.env.PRJCT_NO_DAEMON!=="1"&&hasEndpoint()){
     const sub=args[1];
-    if(process.stdin.isTTY){sendHook(sub,"")}else{const chunks=[];process.stdin.on("data",c=>chunks.push(c));const send=()=>sendHook(sub,Buffer.concat(chunks).toString("utf8"));process.stdin.on("end",send);process.stdin.on("error",send);setTimeout(send,1000)}
+    // Sync stdin read: event-accumulating a pipe costs ~15-20ms of event-loop
+    // turnaround per hook in bun/node; hosts write the event JSON and close
+    // stdin immediately, so a sync read returns at once. Fail-soft: an
+    // unrecoverable read error yields whatever was read so far (the hook
+    // treats a blank result as {}). The host-side hook timeout
+    // (settings-installer HOOK_TIMEOUT_SECONDS) remains the backstop for a
+    // pathological host that never closes stdin.
+    sendHook(sub,readStdinSync(1000));
   }else{
     // Cold path (daemon disabled/unreachable): run the hook from the dedicated
     // hooks bundle, NOT the full core. cold-entry emits host JSON then detaches
