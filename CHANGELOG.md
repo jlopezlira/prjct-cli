@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.90.0] - 2026-08-15
+
+### Added
+- ship hook-fast native binaries for every platform: CI matrix compiles darwin arm64/x64 + linux x64 on real runners, release downloads and hard-verifies all targets before publish
+
 ## [3.89.0] - 2026-08-15
 
 ### Added

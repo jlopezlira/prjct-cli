@@ -60,6 +60,54 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # Native hook-fast binaries must be compiled ON their target platform —
+  # the ubuntu release runner can only produce linux-x64, so without this
+  # matrix the published tarball silently lacked darwin binaries (v3.89.0
+  # shipped that way). Cheap: checkout + node + cc, no npm install / bun.
+  hook-fast-native:
+    name: hook-fast native (${{ matrix.label }})
+    needs: debounce
+    if: needs.debounce.outputs.proceed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, label: darwin }
+          - { os: ubuntu-latest, label: linux }
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile hook-fast
+        # --native-only skips esbuild/bundles: just cc the C source for every
+        # target this runner can reach (macOS → arm64 + x64 via clang -arch,
+        # ubuntu → x64). Fails the job if nothing compiled.
+        run: node scripts/build.js --native-only
+
+      - name: Smoke test (no daemon → exit 89, empty stdout)
+        # The binary must actually run on its target and punt cleanly when
+        # no daemon socket exists (fresh runner): fall-through exit 89 with
+        # NOTHING on stdout — the next stage in the hook chain then handles
+        # the event. Any other code/output means a broken binary.
+        shell: bash
+        run: |
+          BIN="dist/bin/hook-fast-$(node -p process.platform)-$(node -p process.arch)"
+          OUT=$(echo '{}' | "./$BIN" prompt 2>/dev/null)
+          CODE=$?
+          echo "$BIN → exit $CODE, stdout: '$OUT'"
+          if [ "$CODE" != "89" ] || [ -n "$OUT" ]; then
+            echo "::error::hook-fast smoke failed — expected exit 89 with empty stdout"
+            exit 1
+          fi
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: hook-fast-${{ matrix.label }}
+          path: dist/bin/hook-fast-*
+
   # Run CI checks first
   ci:
     name: CI Checks
@@ -141,7 +189,7 @@ jobs:
 
   release:
     name: Release
-    needs: ci
+    needs: [ci, hook-fast-native]
     if: needs.ci.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     environment: Production
@@ -395,6 +443,34 @@ jobs:
 
       - name: Build release
         run: npm run build
+
+      - name: Download hook-fast native binaries
+        # The full build above only compiles this runner's own platform
+        # (linux-x64); the hook-fast-native matrix job built the darwin
+        # binaries on macOS. Merge all of them into dist/bin/ so the npm
+        # tarball and the GitHub release tarball carry every target.
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hook-fast-*
+          path: dist/bin
+          merge-multiple: true
+
+      - name: Verify all hook-fast targets present
+        # upload/download-artifact does not guarantee the exec bit survives
+        # — chmod first, then gate hard: publishing without every platform's
+        # binary is exactly the silent degradation this pipeline exists to
+        # prevent (v3.89.0 shipped darwin-less without anyone noticing).
+        run: |
+          chmod +x dist/bin/hook-fast-*
+          MISSING=0
+          for f in hook-fast-darwin-arm64 hook-fast-darwin-x64 hook-fast-linux-x64; do
+            if [ ! -x "dist/bin/$f" ]; then
+              echo "::error::dist/bin/$f missing — native build/upload failed"
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" = "0" ] || exit 1
+          ls -lh dist/bin/hook-fast-*
 
       - name: Commit and tag
         if: ${{ !inputs.dry_run && steps.version.outputs.recovery != 'true' }}
