@@ -10,21 +10,22 @@
  * marker on SpecContent:
  *
  *   - Marker set     → already broken down, skip.
- *   - Marker null +
- *     linked_tasks
- *     non-empty      → PARTIAL breakdown (previous attempt crashed mid-
- *                      flight). Wipe queue rows by featureId, clear
- *                      linked_tasks, then re-run the full loop. The
- *                      partial state cannot be transactional because
- *                      queueStorage writes queue.json via StorageManager
- *                      (async file I/O + event publishes, incompatible
- *                      with sync SQLite tx). Recovery is convergent: the
+ *   - Marker null    → (re)breakdown, converging by RECONCILE: for each
+ *                      AC, adopt the existing queue row with
+ *                      `featureId = spec.id` and `body === ac` when one
+ *                      exists (re-linked if needed, never recreated),
+ *                      otherwise create a fresh task. Orphaned rows
+ *                      (edited/removed AC text) are LEFT in the queue —
+ *                      visible, user-disposable, never silently deleted.
+ *                      Reconcile preserves the completion state of
+ *                      surviving tasks and closes the wipe-and-rerun
+ *                      orphan/duplicate window (the spec row + marker
+ *                      live in `specs`, queue rows in `queue_tasks`, and
+ *                      the loop publishes events between writes, so the
+ *                      two stores cannot share a transaction). The
  *                      marker is set ONLY after the loop completes, so
  *                      any crash leaves marker=null and the next caller
- *                      re-enters the recovery branch.
- *   - Marker null +
- *     linked_tasks
- *     empty          → fresh breakdown.
+ *                      re-enters and converges by adoption.
  *
  * See spec a50b32d1 AC #13.
  */
@@ -35,7 +36,11 @@ import type { Spec, SpecContent } from '../types/spec'
 import { getTimestamp } from '../utils/date-helper'
 
 export interface BreakdownResult {
-  /** Task ids newly created. Empty when breakdown is a no-op. */
+  /**
+   * Task ids now linked to the spec, in AC order — adopted survivors
+   * first-class alongside newly created ones. Empty when breakdown is a
+   * no-op.
+   */
   taskIds: string[]
   /** Why we skipped (only present when taskIds is empty). */
   skippedReason?: 'no_acceptance_criteria' | 'already_broken_down'
@@ -59,35 +64,47 @@ export async function breakdownSpecToTasks(
   }
 
   // Partial-recovery detection: marker null but linked_tasks non-empty
-  // means a previous attempt crashed mid-loop. Wipe + restart from scratch.
+  // means a previous attempt crashed mid-loop. Converge by adoption below.
   const recoveredFromPartial = spec.content.linked_tasks.length > 0
-  if (recoveredFromPartial) {
-    await queueStorage.deleteByFeatureId(projectId, spec.id)
-    const cleared: SpecContent = {
-      ...spec.content,
-      linked_tasks: [],
-    }
-    specStorage.updateContent(projectId, spec.id, cleared)
-  }
 
-  const newTasks = await queueStorage.addTasks(
-    projectId,
-    acs.map((ac) => ({
-      description: truncateForDescription(ac),
-      body: ac,
-      priority: 'medium' as const,
-      type: 'feature' as const,
-      section: 'backlog' as const,
-      featureId: spec.id,
-      groupId: spec.id,
-      groupName: spec.title,
-    }))
-  )
+  // Reconcile against existing queue rows: an AC whose full text exactly
+  // matches a surviving row's `body` (same featureId) ADOPTS that row —
+  // preserving its id and completion state — instead of recreating it.
+  // Each row is adopted at most once so duplicate AC texts still get
+  // distinct tasks. Rows no AC matches stay in the queue untouched.
+  const existing = (await queueStorage.getTasks(projectId)).filter((t) => t.featureId === spec.id)
+  const adoptedIds = new Set<string>()
+  const matches = acs.map((ac) => {
+    const hit = existing.find((t) => t.body === ac && !adoptedIds.has(t.id))
+    if (hit) adoptedIds.add(hit.id)
+    return hit ?? null
+  })
+
+  const missing = acs.map((ac, i) => ({ ac, i })).filter(({ i }) => matches[i] === null)
+  const created =
+    missing.length > 0
+      ? await queueStorage.addTasks(
+          projectId,
+          missing.map(({ ac }) => ({
+            description: truncateForDescription(ac),
+            body: ac,
+            priority: 'medium' as const,
+            type: 'feature' as const,
+            section: 'backlog' as const,
+            featureId: spec.id,
+            groupId: spec.id,
+            groupName: spec.title,
+          }))
+        )
+      : []
+  const createdIdByIndex = new Map(missing.map(({ i }, k) => [i, created[k].id]))
+  const taskIds = acs.map((_, i) => matches[i]?.id ?? (createdIdByIndex.get(i) as string))
 
   // Persist the link both directions so spec.content.linked_tasks reflects
-  // the new task ids and the vault renders them under "Linked tasks".
-  for (const task of newTasks) {
-    specStorage.linkTask(projectId, spec.id, task.id)
+  // the task ids and the vault renders them under "Linked tasks". linkTask
+  // is idempotent: adopted rows keep their link, truncated links heal.
+  for (const taskId of taskIds) {
+    specStorage.linkTask(projectId, spec.id, taskId)
   }
 
   // Completion marker — set ONLY after the full loop succeeds. A crash
@@ -103,22 +120,23 @@ export async function breakdownSpecToTasks(
 
   // Mirror to memory event stream so `prjct context memory spec` and the
   // user's session both surface the breakdown event.
+  const adoptedCount = taskIds.length - created.length
   await projectMemory.remember(projectPath, {
     type: 'spec',
-    content: `Auto-breakdown: ${newTasks.length} tasks created from ${spec.title}${
-      recoveredFromPartial ? ' (recovered from partial)' : ''
-    }`,
+    content: `Auto-breakdown: ${created.length} tasks created${
+      adoptedCount > 0 ? `, ${adoptedCount} adopted` : ''
+    } from ${spec.title}${recoveredFromPartial ? ' (recovered from partial)' : ''}`,
     tags: {
       spec_id: spec.id,
       event: 'auto_breakdown',
-      task_count: String(newTasks.length),
+      task_count: String(taskIds.length),
       ...(recoveredFromPartial ? { recovered: 'partial' } : {}),
     },
     source: spec.id,
   })
 
   return {
-    taskIds: newTasks.map((t) => t.id),
+    taskIds,
     ...(recoveredFromPartial ? { recoveredFromPartial: true } : {}),
   }
 }

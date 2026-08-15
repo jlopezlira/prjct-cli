@@ -7,6 +7,7 @@
  */
 
 import { generateUUID } from '../schemas/schemas'
+import { allDeltaStatements, materializeDeltas, mergeDeltaLogs } from '../services/spec-delta'
 import { publishCRUDSync } from '../sync/publish-helper'
 import {
   SPEC_STATUSES,
@@ -16,8 +17,31 @@ import {
   type SpecStatus,
 } from '../types/spec'
 import { getTimestamp } from '../utils/date-helper'
+import log from '../utils/logger'
 import prjctDb from './database'
 import type { SqliteBindings } from './database/sqlite-compat'
+
+/**
+ * Tagged wrapper for relational-projection failures. The write paths wrap
+ * the `specs` blob write + projection in ONE transaction and swallow ONLY
+ * this error class (debug-gated log, no throw — the projection stays
+ * best-effort); any other error (a genuine blob-write failure) still
+ * propagates. The throw out of the transaction body is what rolls the blob
+ * write back, closing the dual-write divergence window.
+ */
+class SpecProjectionError extends Error {
+  constructor(
+    readonly specId: string,
+    cause: unknown
+  ) {
+    super(
+      `spec relational projection failed for ${specId} (content write rolled back): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`
+    )
+    this.name = 'SpecProjectionError'
+  }
+}
 
 interface SpecRow {
   id: string
@@ -69,8 +93,12 @@ function projectSpecRelational(projectId: string, id: string, content: SpecConte
         lens
       )
     }
-  } catch {
+  } catch (error) {
     // Best-effort projection — the content blob stays the source of truth.
+    // Re-throw tagged so the enclosing transaction rolls the blob write back
+    // too (dual-write atomicity) and the write path can swallow ONLY this
+    // failure class.
+    throw new SpecProjectionError(id, error)
   }
 }
 
@@ -115,18 +143,32 @@ class SpecStorage {
     const now = getTimestamp()
     const validatedContent = SpecContentSchema.parse(args.content)
 
-    prjctDb.run(
-      projectId,
-      `INSERT INTO specs (id, title, status, content, tags, created_at, updated_at)
-       VALUES (?, ?, 'draft', ?, ?, ?, ?)`,
-      id,
-      args.title,
-      JSON.stringify(validatedContent),
-      args.tags ? JSON.stringify(args.tags) : null,
-      now,
-      now
-    )
-    projectSpecRelational(projectId, id, validatedContent)
+    // Blob INSERT + relational gate projection commit atomically: a
+    // projection failure rolls the blob write back (no divergence window),
+    // is logged (debug-gated) and swallowed — the projection stays
+    // best-effort. Genuine blob-write errors still throw.
+    try {
+      prjctDb.transaction(projectId, () => {
+        prjctDb.run(
+          projectId,
+          `INSERT INTO specs (id, title, status, content, tags, created_at, updated_at)
+           VALUES (?, ?, 'draft', ?, ?, ?, ?)`,
+          id,
+          args.title,
+          JSON.stringify(validatedContent),
+          args.tags ? JSON.stringify(args.tags) : null,
+          now,
+          now
+        )
+        projectSpecRelational(projectId, id, validatedContent)
+      })
+    } catch (error) {
+      if (error instanceof SpecProjectionError) {
+        log.warn(error.message)
+      } else {
+        throw error
+      }
+    }
 
     const spec: Spec = {
       id,
@@ -181,14 +223,25 @@ class SpecStorage {
   updateContent(projectId: string, id: string, content: SpecContent): Spec | null {
     const validated = SpecContentSchema.parse(content)
     const now = this.nextUpdatedAt(projectId, id)
-    prjctDb.run(
-      projectId,
-      'UPDATE specs SET content = ?, updated_at = ? WHERE id = ?',
-      JSON.stringify(validated),
-      now,
-      id
-    )
-    projectSpecRelational(projectId, id, validated)
+    // Blob UPDATE + relational gate projection commit atomically (see create).
+    try {
+      prjctDb.transaction(projectId, () => {
+        prjctDb.run(
+          projectId,
+          'UPDATE specs SET content = ?, updated_at = ? WHERE id = ?',
+          JSON.stringify(validated),
+          now,
+          id
+        )
+        projectSpecRelational(projectId, id, validated)
+      })
+    } catch (error) {
+      if (error instanceof SpecProjectionError) {
+        log.warn(error.message)
+      } else {
+        throw error
+      }
+    }
     const spec = this.get(projectId, id)
     if (spec) this.publishSync(projectId, spec)
     return spec
@@ -212,17 +265,34 @@ class SpecStorage {
   ): boolean {
     const validated = SpecContentSchema.parse(content)
     const now = this.nextUpdatedAt(projectId, id)
-    const result = prjctDb.run(
-      projectId,
-      'UPDATE specs SET content = ?, updated_at = ? WHERE id = ? AND updated_at = ?',
-      JSON.stringify(validated),
-      now,
-      id,
-      expectedUpdatedAt
-    )
-    const ok = result.changes === 1
+    // Blob UPDATE + relational gate projection commit atomically (see
+    // create). A projection failure rolls the blob UPDATE back and is
+    // reported as `false` — nothing committed, so the CAS caller's
+    // re-read-and-retry loop does exactly the right thing.
+    const ok = ((): boolean => {
+      try {
+        return prjctDb.transaction(projectId, () => {
+          const result = prjctDb.run(
+            projectId,
+            'UPDATE specs SET content = ?, updated_at = ? WHERE id = ? AND updated_at = ?',
+            JSON.stringify(validated),
+            now,
+            id,
+            expectedUpdatedAt
+          )
+          const matched = result.changes === 1
+          if (matched) projectSpecRelational(projectId, id, validated)
+          return matched
+        })
+      } catch (error) {
+        if (error instanceof SpecProjectionError) {
+          log.warn(error.message)
+          return false
+        }
+        throw error
+      }
+    })()
     if (ok) {
-      projectSpecRelational(projectId, id, validated)
       const spec = this.get(projectId, id)
       if (spec) this.publishSync(projectId, spec)
     }
@@ -306,11 +376,12 @@ class SpecStorage {
   }
 
   /**
-   * Apply a spec pulled from the cloud — ADDITIVE ONLY. Inserts a spec that
-   * doesn't exist locally yet; if the id already exists locally it is left
-   * UNTOUCHED. Local data is sacred: sync never modifies or deletes a local
-   * record, it only fills in what's missing. Does NOT re-publish (no echo) and
-   * preserves the remote timestamps. Used by the sync apply handler only.
+   * Apply a spec pulled from the cloud — ADDITIVE ONLY for legacy bodies.
+   * Inserts a spec that doesn't exist locally yet; on id conflict, merges
+   * ONLY when both sides carry a non-empty delta_log (see mergeRemoteContent);
+   * otherwise the local row is left UNTOUCHED. Does NOT re-publish on the
+   * insert path (no echo) and preserves the remote timestamps. Used by the
+   * sync apply handler only.
    */
   applyRemote(
     projectId: string,
@@ -364,7 +435,65 @@ class SpecStorage {
         // Malformed/legacy remote content — the blob still landed; the
         // relational gate projection is best-effort, not a hard dependency.
       }
+      return
     }
+    this.mergeRemoteContent(projectId, spec.id, content, spec.updated_at)
+  }
+
+  /**
+   * Delta-union convergence (Phase 1 / spec deltas). On an applyRemote
+   * conflict where BOTH bodies carry a non-empty delta_log, merge instead of
+   * DO NOTHING:
+   *   - delta_log = union of both logs by entry id, sorted by (ts, id);
+   *   - acceptance_criteria / scenarios = deterministic re-materialization
+   *     from the merged log (same set ⇒ identical output on both machines),
+   *     with hand-written ACs the deltas never touched preserved ahead of it;
+   *   - scalar fields (goal, notes, …) = last-writer-wins by updated_at;
+   *   - reviews stay conservative: any real merge clears the local gate
+   *     state (mirroring the body-drift rule in specService.update); only a
+   *     no-op union keeps it.
+   * Either side lacking a delta_log (legacy) keeps the additive-only
+   * DO NOTHING behavior. Persisted via casUpdate; a lost CAS race just
+   * defers convergence to the next sync round.
+   */
+  private mergeRemoteContent(
+    projectId: string,
+    id: string,
+    remoteContentJson: string,
+    remoteUpdatedAt?: string
+  ): void {
+    const local = this.get(projectId, id)
+    if (!local) return
+    const remote = (() => {
+      try {
+        return SpecContentSchema.parse(JSON.parse(remoteContentJson))
+      } catch {
+        return null
+      }
+    })()
+    if (!remote) return
+    if (local.content.delta_log.length === 0 || remote.delta_log.length === 0) return
+
+    const mergedLog = mergeDeltaLogs(local.content.delta_log, remote.delta_log)
+    const base = (remoteUpdatedAt ?? '') > local.updatedAt ? remote : local.content
+    const historical = allDeltaStatements(mergedLog)
+    const preserved = base.acceptance_criteria.filter((ac) => !historical.has(ac))
+    const materialized = materializeDeltas(mergedLog)
+    const noOpUnion =
+      mergedLog.length === local.content.delta_log.length &&
+      mergedLog.length === remote.delta_log.length
+    const next: SpecContent = {
+      ...base,
+      acceptance_criteria: [...preserved, ...materialized.acceptance_criteria],
+      scenarios: materialized.scenarios,
+      delta_log: mergedLog,
+      reviews: noOpUnion ? local.content.reviews : {},
+      selected_reviewers: noOpUnion ? local.content.selected_reviewers : [],
+      audit_candidate_hash: noOpUnion ? local.content.audit_candidate_hash : null,
+    }
+    // Already converged — nothing to write, nothing to echo.
+    if (JSON.stringify(next) === JSON.stringify(local.content)) return
+    this.casUpdate(projectId, id, next, local.updatedAt)
   }
 
   count(projectId: string): { total: number; draft: number; shipped: number } {

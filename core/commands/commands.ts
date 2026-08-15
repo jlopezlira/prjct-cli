@@ -539,6 +539,14 @@ class PrjctCommands {
     return (await this.specCmdsG()).update(id, projectPath, options)
   }
 
+  async specApplyDelta(
+    id: string | null = null,
+    projectPath: string = process.cwd(),
+    options: { md?: boolean | string; file?: string } = {}
+  ): Promise<CommandResult> {
+    return (await this.specCmdsG()).applyDelta(id, projectPath, options)
+  }
+
   async specSetStatus(
     id: string | null = null,
     projectPath: string = process.cwd(),
@@ -574,9 +582,17 @@ class PrjctCommands {
   async specAudit(
     id: string | null = null,
     projectPath: string = process.cwd(),
-    options: { md?: boolean; lenses?: string } = {}
+    options: { md?: boolean; lenses?: string; strict?: boolean } = {}
   ): Promise<CommandResult> {
     return (await this.specCmdsG()).audit(id, projectPath, options)
+  }
+
+  async specValidate(
+    id: string | null = null,
+    projectPath: string = process.cwd(),
+    options: { md?: boolean; strict?: boolean } = {}
+  ): Promise<CommandResult> {
+    return (await this.specCmdsG()).validate(id, projectPath, options)
   }
 
   async specBreakdown(

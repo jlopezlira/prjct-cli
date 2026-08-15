@@ -30,6 +30,7 @@ import type { SpecContent } from '../types/spec'
 import type { DomainDefinition } from '../types/storage/extended'
 import { resolveDispatchMechanism } from './agent-dispatch'
 import { domainLensRubric, GENERIC_RUBRIC, LENS_CATALOG } from './review-lenses'
+import { parseScopePaths } from './spec-validate'
 
 /**
  * Canonical digest of the reviewable body of a spec (C1).
@@ -45,6 +46,9 @@ export function computeAuditCandidateHash(content: SpecContent): string {
     out_of_scope: content.out_of_scope,
     risks: content.risks,
     test_plan: content.test_plan,
+    // Phase 1 / spec deltas: scenario edits drift the candidate exactly like
+    // AC edits — a changed GIVEN/WHEN/THEN invalidates recorded reviews.
+    scenarios: content.scenarios,
   }
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }
@@ -101,7 +105,7 @@ export function selectReviewers(content: SpecContent, domains: DomainDefinition[
   // A function lens of the same name wins (no shadowing); the architecture floor
   // is untouched. Empty `domains` ⇒ byte-identical to the function-only baseline.
   if (domains.length > 0) {
-    const scopePaths = extractScopePaths(content.scope)
+    const scopePaths = parseScopePaths(content.scope)
     for (const d of domains) {
       if (LENS_CATALOG[d.name]) continue
       if (domainMatchesSpec(d, hay, scopePaths)) lenses.add(d.name)
@@ -179,21 +183,6 @@ export function reviewsGatePassedRelational(projectId: string, specId: string): 
 }
 
 /**
- * Pull file/dir paths from spec.scope entries (entries are typically
- * "core/sync/sync-manager.ts — desc" — peel off the path-like prefix).
- * Cap to 12 to stay within reviewer-tool budgets.
- */
-function extractScopePaths(scope: string[]): string[] {
-  const out: string[] = []
-  for (const entry of scope) {
-    const m = entry.match(/[a-zA-Z0-9_./-]+\.[a-zA-Z]+/) ?? entry.match(/[a-zA-Z0-9_./-]+\//)
-    if (m && !out.includes(m[0])) out.push(m[0])
-    if (out.length >= 12) break
-  }
-  return out
-}
-
-/**
  * The dispatch prompt emitted by `prjct spec audit`. Claude reads this, runs
  * one Agent call per selected lens IN PARALLEL (one tool-use block each, same
  * message), then writes each verdict back via `prjct spec record-review`.
@@ -212,7 +201,7 @@ export async function renderAuditDispatch(
   const dispatch = await resolveDispatchMechanism(projectProvider)
   const chosen = lenses && lenses.length > 0 ? lenses : selectReviewers(content, domains)
   const domainMap = new Map(domains.map((d) => [d.name, d]))
-  const scopePaths = extractScopePaths(content.scope)
+  const scopePaths = parseScopePaths(content.scope)
   const scopeBlock =
     scopePaths.length > 0
       ? `\n\n## Codebase paths to read (from spec.scope)\n${scopePaths.map((p) => `- \`${p}\``).join('\n')}\n\nEach reviewer SHOULD use the Read tool on these paths (cap 10 per reviewer) to ground the verdict in the actual code. Cite specific symbols / files / line numbers in notes when applicable.`

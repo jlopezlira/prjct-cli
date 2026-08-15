@@ -26,6 +26,7 @@ import path from 'node:path'
 import { specStorage } from '../storage/spec-storage'
 import type { Spec } from '../types/spec'
 import { execFileAsync } from '../utils/exec'
+import { parseScopePath } from './spec-validate'
 
 const DRIFT_LOC_THRESHOLD = 5
 const COSMETIC_COMMIT_RE = /^(chore|style|format|fmt|docs|typo)(\(|:|!)/i
@@ -163,10 +164,10 @@ function inferModule(spec: Spec): string | null {
   const first = spec.content.scope[0]
   if (!first) return null
   // scope items are often "core/sync/sync-manager.ts — desc" — peel
-  // off the path-like prefix.
-  const m = first.match(/([a-zA-Z0-9_./-]+\/[a-zA-Z0-9_-]+)/)
-  if (!m) return null
-  const segments = m[1].split('/').slice(0, 2)
+  // off the path-like prefix (shared helper, see spec-validate.ts).
+  const peeled = parseScopePath(first)
+  if (!peeled) return null
+  const segments = peeled.split('/').filter(Boolean).slice(0, 2)
   return segments.length === 2 ? segments.join('/') : null
 }
 

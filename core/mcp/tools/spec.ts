@@ -15,15 +15,13 @@
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { renderAuditDispatch, selectReviewers } from '../../services/spec-audit-dispatch'
+import { renderSpecMarkdown, type SpecTaskState } from '../../services/spec-markdown'
 import { specService } from '../../services/spec-service'
+import { formatValidationLines, validateSpec } from '../../services/spec-validate'
 import { indexStorage } from '../../storage/index-storage'
+import { queueStorage } from '../../storage/queue-storage'
 import { specStorage } from '../../storage/spec-storage'
-import {
-  SPEC_STATUSES,
-  type SpecContent,
-  SpecContentSchema,
-  type SpecStatus,
-} from '../../types/spec'
+import { SPEC_STATUSES, type SpecContent, type SpecStatus } from '../../types/spec'
 import { optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
 import { safeMcpCall } from './error-handler'
 
@@ -168,8 +166,19 @@ export function registerSpecTools(server: McpServer) {
       if (!spec) {
         return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
       }
+      // Queue state for the `## Tasks` checklist, same lookup the CLI
+      // `spec show --md` runs — keeps both surfaces byte-identical.
+      const projectId = await resolveProjectId(args.projectPath).catch(() => null)
+      const taskStates = new Map<string, SpecTaskState>()
+      if (projectId) {
+        for (const t of await queueStorage.getTasks(projectId)) {
+          if (t.featureId === spec.id && t.body != null) {
+            taskStates.set(t.body, { id: t.id, completed: t.completed })
+          }
+        }
+      }
       return {
-        content: [{ type: 'text', text: renderSpecMarkdown(spec) }],
+        content: [{ type: 'text', text: renderSpecMarkdown(spec, taskStates) }],
       }
     })
   )
@@ -178,13 +187,13 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_update',
     {
       description:
-        "Replace a spec's structured content. Pass the FULL content object (this is a replace, not a merge) — when filling in acceptance_criteria for the first time, fetch with `prjct_spec_get` first and merge in your changes.",
+        "Patch a spec's structured content. Pass ONLY the fields you want to change — this is a shallow merge over the existing content (fields you provide replace, fields you omit are preserved). For requirement / acceptance-criteria changes, prefer `prjct_spec_apply_delta` — it is the canonical path (requirement-level, idempotent, sync-convergent); use this patch for scalar fields (goal, eli10, stakes, notes, scope, risks, test_plan). Note: editing any body field (goal, acceptance_criteria, scope, risks, …) invalidates recorded reviews and demotes a reviewed spec back to draft.",
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id'),
         content: z
           .object({
-            goal: z.string(),
+            goal: z.string().optional(),
             eli10: z.string().optional(),
             stakes: z.string().optional(),
             acceptance_criteria: z.array(z.string()).optional(),
@@ -195,21 +204,18 @@ export function registerSpecTools(server: McpServer) {
             notes: z.string().optional(),
             linked_tasks: z.array(z.string()).optional(),
           })
-          .describe('Full SpecContent shape — Zod-validated server-side'),
+          .describe(
+            'Partial SpecContent — only the fields to change; omitted fields are preserved'
+          ),
       }),
     },
     safeMcpCall(
       'prjct_spec_update',
-      async (args: {
-        projectPath: string
-        id: string
-        content: Partial<SpecContent> & { goal: string }
-      }) => {
-        const validated = SpecContentSchema.parse(args.content)
-        const updated = await specService.update(
+      async (args: { projectPath: string; id: string; content: Partial<SpecContent> }) => {
+        const updated = await specService.patch(
           resolveProjectPath(args.projectPath),
           args.id,
-          validated as SpecContent
+          args.content
         )
         if (!updated) {
           return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
@@ -219,6 +225,74 @@ export function registerSpecTools(server: McpServer) {
         }
       }
     )
+  )
+
+  s.registerTool(
+    'prjct_spec_apply_delta',
+    {
+      description:
+        "CANONICAL path for changing a spec's requirements / acceptance criteria — prefer this over `prjct_spec_update` for any requirement-level change. Pass an OpenSpec-style delta in markdown: `## ADDED Requirements` / `## MODIFIED Requirements` / `## REMOVED Requirements` sections, each holding `### Requirement: <name>` followed by its SHALL statement and optional `#### Scenario: <name>` blocks with `- **GIVEN** …` / `- **WHEN** …` / `- **THEN** …` bullets. Requirement names map to stable slugs; MODIFIED/REMOVED target an existing slug; re-applying the same delta is a no-op (idempotent by content-hash id). Applying a delta invalidates recorded reviews and demotes a reviewed spec back to draft.",
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id'),
+        delta: z
+          .string()
+          .describe(
+            'Delta markdown with ADDED/MODIFIED/REMOVED Requirements sections (OpenSpec subset)'
+          ),
+      }),
+    },
+    safeMcpCall(
+      'prjct_spec_apply_delta',
+      async (args: { projectPath: string; id: string; delta: string }) => {
+        const updated = await specService.applyDelta(
+          resolveProjectPath(args.projectPath),
+          args.id,
+          args.delta
+        )
+        if (!updated) {
+          return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✓ delta applied: ${updated.title} (${updated.content.delta_log.length} delta(s) logged)`,
+            },
+          ],
+        }
+      }
+    )
+  )
+
+  s.registerTool(
+    'prjct_spec_validate',
+    {
+      description:
+        "Validate a spec's stored structure BEFORE `prjct_spec_audit` / implementation. Errors (delta-model requirement without a SHALL-style statement or without GIVEN/WHEN/THEN scenarios; delta_log REMOVED targeting a requirement that never existed) block the audit dispatch under SDD strict mode. Warnings (legacy free-text acceptance criteria, scope paths that don't resolve in the project) are advisory. Pure read — never mutates the spec.",
+      inputSchema: z.object({
+        projectPath: optionalProjectPath,
+        id: z.string().describe('Spec id'),
+      }),
+    },
+    safeMcpCall('prjct_spec_validate', async (args: { projectPath: string; id: string }) => {
+      const projectPath = resolveProjectPath(args.projectPath)
+      const spec = await specService.get(projectPath, args.id)
+      if (!spec) {
+        return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
+      }
+      const v = validateSpec(spec, { projectPath })
+      const lines = [
+        `# spec validate — ${spec.title}`,
+        '',
+        ...(v.errors.length === 0 && v.warnings.length === 0
+          ? ['_No findings — structure OK._']
+          : formatValidationLines(v)),
+        '',
+        `verdict: ${v.errors.length === 0 ? 'PASS' : 'FAIL'} (${v.errors.length} error(s), ${v.warnings.length} warning(s))`,
+      ]
+      return { content: [{ type: 'text', text: lines.join('\n') }] }
+    })
   )
 
   s.registerTool(
@@ -393,56 +467,4 @@ export function registerSpecTools(server: McpServer) {
       }
     )
   )
-}
-
-function renderSpecMarkdown(spec: {
-  id: string
-  title: string
-  status: string
-  content: SpecContent
-  createdAt: string
-  updatedAt: string
-}): string {
-  const c = spec.content
-  const lines = [
-    `# ${spec.title}`,
-    '',
-    `**id:** \`${spec.id}\` · **status:** ${spec.status} · **created:** ${spec.createdAt}`,
-    '',
-    '## Goal',
-    c.goal,
-  ]
-  if (c.eli10) lines.push('', '## ELI10', c.eli10)
-  if (c.stakes) lines.push('', '## Stakes', c.stakes)
-  if (c.acceptance_criteria.length > 0) {
-    lines.push('', '## Acceptance criteria')
-    for (const ac of c.acceptance_criteria) lines.push(`- [ ] ${ac}`)
-  }
-  if (c.scope.length > 0) {
-    lines.push('', '## Scope')
-    for (const s of c.scope) lines.push(`- ${s}`)
-  }
-  if (c.out_of_scope.length > 0) {
-    lines.push('', '## Out of scope')
-    for (const s2 of c.out_of_scope) lines.push(`- ${s2}`)
-  }
-  if (c.risks.length > 0) {
-    lines.push('', '## Risks')
-    for (const r of c.risks) lines.push(`- **${r.risk}** — ${r.mitigation}`)
-  }
-  if (c.test_plan.length > 0) {
-    lines.push('', '## Test plan')
-    for (const t of c.test_plan) lines.push(`- ${t}`)
-  }
-  if (c.reviews && Object.keys(c.reviews).length > 0) {
-    lines.push('', '## Reviews')
-    for (const [reviewer, r] of Object.entries(c.reviews)) {
-      lines.push(`- **${reviewer}:** ${r.verdict} — ${r.notes} _(${r.ts})_`)
-    }
-  }
-  if (c.linked_tasks.length > 0) {
-    lines.push('', '## Linked tasks', ...c.linked_tasks.map((t) => `- ${t}`))
-  }
-  if (c.notes) lines.push('', '## Notes', c.notes)
-  return lines.join('\n')
 }

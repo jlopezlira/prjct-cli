@@ -24,6 +24,7 @@ import {
 import { getTimestamp } from '../utils/date-helper'
 import { execFileAsync } from '../utils/exec'
 import { computeAuditCandidateHash, reviewsGatePassedRelational } from './spec-audit-dispatch'
+import { applyDelta as applyDeltaToContent } from './spec-delta'
 
 /**
  * Read git HEAD sha at `projectPath`. Returns null when not a git repo
@@ -148,6 +149,43 @@ class SpecService {
       })
     }
     return next
+  }
+
+  /**
+   * Shallow-merge PATCH over the current content: fields present in
+   * `partial` replace, fields omitted are preserved. Delegates to `update`
+   * so body-drift / review-clearing / demotion invariants run in exactly
+   * one place. This is the single merge implementation — both the CLI
+   * (`prjct spec update --json`) and the MCP `prjct_spec_update` tool
+   * route through here.
+   */
+  async patch(
+    projectPath: string,
+    id: string,
+    partial: Partial<SpecContent>
+  ): Promise<Spec | null> {
+    const projectId = await this.requireProjectId(projectPath)
+    const prev = specStorage.get(projectId, id)
+    if (!prev) return null
+    const merged = SpecContentSchema.parse({ ...prev.content, ...partial })
+    return this.update(projectPath, id, merged)
+  }
+
+  /**
+   * Delta-based update — the CANONICAL path for requirement/AC changes
+   * (Phase 1 / spec deltas). Parses the OpenSpec-subset markdown, applies it
+   * onto the current content (idempotent by delta id), then delegates to
+   * `update` so body-drift detection, review clearing and demotion run in
+   * exactly one place.
+   */
+  async applyDelta(projectPath: string, id: string, deltaMarkdown: string): Promise<Spec | null> {
+    const projectId = await this.requireProjectId(projectPath)
+    const prev = specStorage.get(projectId, id)
+    if (!prev) return null
+    const next = applyDeltaToContent(prev.content, deltaMarkdown)
+    // Idempotent re-apply: the pure applier returns the input unchanged.
+    if (next === prev.content) return prev
+    return this.update(projectPath, id, next)
   }
 
   async update(projectPath: string, id: string, content: SpecContent): Promise<Spec | null> {
