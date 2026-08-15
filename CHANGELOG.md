@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.92.0] - 2026-08-15
+
+### Added
+- spec delta validate markdown
+
 ## [3.91.0] - 2026-08-15
 
 ### Added
