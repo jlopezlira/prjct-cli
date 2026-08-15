@@ -545,10 +545,29 @@ function printSummary() {
 
 /**
  * Main
+ *
+ * `--native-only`: compile ONLY the hook-fast C binaries (no esbuild, no
+ * bundles, no clean) — the release workflow's per-OS matrix job uses this
+ * to produce each platform's binaries on a runner with no npm install /
+ * bun (just node + cc). Without it, a full `npm run build` on ubuntu can
+ * only ever embed linux-x64, so the published tarball silently lacked
+ * darwin binaries (shipped v3.89.0 that way).
  */
 async function main() {
   console.log('prjct-cli build script v3.0')
   console.log('==========================\n')
+
+  if (process.argv.includes('--native-only')) {
+    fs.mkdirSync(path.join(DIST, 'bin'), { recursive: true })
+    const nativeBuilt = buildNativeHookFast()
+    if (nativeBuilt.length > 0) {
+      console.log(`  → dist/bin/hook-fast-{${nativeBuilt.join(',')}}`)
+    } else {
+      console.error('✗ --native-only: no hook-fast binary compiled (no C toolchain?)')
+      process.exit(1)
+    }
+    return
+  }
 
   if (!ensureEsbuild()) {
     process.exit(1)
