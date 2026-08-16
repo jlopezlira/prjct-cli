@@ -205,6 +205,32 @@ export async function hasMcpServer(
   return Boolean(config.mcpServers?.[serverName])
 }
 
+/**
+ * Remove a server entry from an `mcpServers` JSON config, leaving any
+ * user-defined servers untouched. When `onlyIfMatches` is given, the entry is
+ * removed only if it deep-equals that config — protecting a user-owned server
+ * that happens to share the name of a prjct-managed preset. Missing file or
+ * missing entry is a no-op (`changed: false`).
+ */
+export async function removeMcpServer(
+  serverName: string,
+  configPath = getClaudeMcpConfigPath(),
+  onlyIfMatches?: MCPServerConfig
+): Promise<{ path: string; changed: boolean }> {
+  const config = await readMcpConfig(configPath)
+  const servers = config.mcpServers
+  const existing = servers?.[serverName]
+  if (!servers || !existing) return { path: configPath, changed: false }
+  if (onlyIfMatches && JSON.stringify(existing) !== JSON.stringify(onlyIfMatches)) {
+    return { path: configPath, changed: false }
+  }
+
+  delete servers[serverName]
+  if (Object.keys(servers).length === 0) delete config.mcpServers
+  await writeMcpConfig(config, configPath)
+  return { path: configPath, changed: true }
+}
+
 // Shared provider-config write helpers (Codex, Grok, …) — marker-delimited
 // TOML block upsert + changed-aware write tail, factored out of the
 // per-provider config writers so the byte-identical logic lives once.

@@ -377,7 +377,7 @@ function isSafeRetry(e){const c=e&&e.code||"",m=e&&e.message||"";return c==="ECO
 const hookCompletion=new AbortController();
 function sendHook(sub,data){
   if(hookCompletion.signal.aborted)return;hookCompletion.abort();
-  const msg=JSON.stringify({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data})+"\\n";
+  const msg=JSON.stringify({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data,...(process.env.PRJCT_HOOK_HOST?{hookHost:process.env.PRJCT_HOOK_HOST}:{})})+"\\n";
   const sock=connect(sockPath);const chunks=[],completion=new AbortController();
   const soft=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();process.stdout.write("{}\\n");process.exit(0)}};
   const t=setTimeout(soft,800);

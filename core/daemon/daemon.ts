@@ -19,6 +19,7 @@ import { PrjctCommands } from '../commands/commands'
 import { resetGroupLoaders } from '../commands/register'
 import { commandRegistry } from '../commands/registry'
 import type { HookIo } from '../hooks/_runner'
+import { hookHostFrom } from '../hooks/_shared'
 import { getHookRunner } from '../hooks/registry'
 import configManager from '../infrastructure/config-manager'
 import { performanceTracker } from '../infrastructure/performance-tracker'
@@ -647,6 +648,7 @@ async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse
   const captured: string[] = []
   const io: HookIo = {
     input,
+    hookHost: hookHostFrom(request.hookHost),
     sink: (chunk) => {
       captured.push(chunk)
     },

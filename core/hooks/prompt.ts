@@ -50,8 +50,16 @@ import { execFileAsync } from '../utils/exec'
 import { fileExists } from '../utils/file-helper'
 import { type HookIo, runHook } from './_runner'
 import { extractKeywords, safeTruncate } from './_shared'
+import { buildSessionContext, consumeKimiSessionInjection } from './session-start'
 
 const STATE_BUDGET = 1500
+/**
+ * First-prompt budget under Kimi: the SessionStart payload (persona +
+ * cold-start digest, ~2.1k chars worst case) rides the first UserPromptSubmit
+ * because Kimi never surfaces SessionStart stdout — so that one payload gets
+ * the digest budget on top of the per-turn state budget.
+ */
+const KIMI_FIRST_PROMPT_BUDGET = STATE_BUDGET + 2100
 /**
  * Turns on a single cycle before the state block escalates from "stay on goal"
  * to "stop looping". Set above a normal multi-step cycle so it only fires on a
@@ -99,6 +107,7 @@ const promptPayloadHashes = new Map<string, string>()
 
 interface HookInput {
   prompt?: string
+  session_id?: string
 }
 
 /**
@@ -404,10 +413,14 @@ export function buildSelectiveGuidance(
   }
 }
 
-function appendPromptSection(payload: string, section: string | null | undefined): string | null {
+function appendPromptSection(
+  payload: string,
+  section: string | null | undefined,
+  budget = STATE_BUDGET
+): string | null {
   if (!section) return payload
   const candidate = payload ? `${payload}\n\n${section}` : section
-  return candidate.length <= STATE_BUDGET ? candidate : null
+  return candidate.length <= budget ? candidate : null
 }
 
 function buildTopicalCueResult(projectId: string, prompt: string): TopicalCueResult | null {
@@ -626,7 +639,8 @@ interface PromptGuidanceComputation {
 function computePromptGuidance(
   projectId: string,
   prompt: string,
-  state: string
+  state: string,
+  budget = STATE_BUDGET
 ): PromptGuidanceComputation {
   const cueResult = buildTopicalCueResult(projectId, prompt)
   const files = buildIndexedFileCue(projectId, prompt)
@@ -635,8 +649,8 @@ function computePromptGuidance(
   const prioritized = [cueResult?.cue, delivery, guidance?.text, files]
     .filter((section): section is string => Boolean(section))
     .reduce<string>(
-      (payload, section) => appendPromptSection(payload, section) ?? payload,
-      safeTruncate(state, STATE_BUDGET)
+      (payload, section) => appendPromptSection(payload, section, budget) ?? payload,
+      safeTruncate(state, budget)
     )
   const guidanceIncluded = Boolean(guidance?.text && prioritized.includes(guidance.text))
   const deliveryIncluded = Boolean(delivery && prioritized.includes(delivery))
@@ -653,7 +667,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
     {
       event: 'UserPromptSubmit',
       projectPath,
-      build: async (input, p) => {
+      build: async (input, p, host) => {
         const prompt = (input.prompt ?? '').trim()
         if (!prompt) return null
         const config = await configManager.readConfig(p)
@@ -667,15 +681,31 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         // matched on stopwords/noise and burned the context window with
         // entries the turn never needed.
         const state = await buildProjectState(p, config)
-        if (!state) return null
+        // Kimi: SessionStart stdout never reaches the model, so the persona /
+        // cold-start digest parked by the session-start hook is injected HERE,
+        // on the session's first prompt only (stamp consumed = deduped).
+        const kimiInjection =
+          host === 'kimi'
+            ? await consumeKimiSessionInjection(config.projectId, input.session_id).catch(
+                () => null
+              )
+            : null
+        const sessionContext = kimiInjection
+          ? await buildSessionContext(p, config, { digest: kimiInjection === 'digest' }).catch(
+              () => null
+            )
+          : null
+        if (!state && !sessionContext) return null
+        const base = [sessionContext, state].filter(Boolean).join('\n\n')
+        const budget = sessionContext ? KIMI_FIRST_PROMPT_BUDGET : STATE_BUDGET
         // Narrow push exceptions: one preventive cue plus selective delivery
         // and authored guidance. State leads; all sections share one budget.
         const { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
-          computePromptGuidance(config.projectId, prompt, state)
+          computePromptGuidance(config.projectId, prompt, base, budget)
         promptAfterEmit.set(input as object, {
           projectId: config.projectId,
           projectPath: p,
-          bumpTurn: state.includes('Active work cycle:'),
+          bumpTurn: Boolean(state?.includes('Active work cycle:')),
           surfacedIds: [
             ...(cueResult ? [cueResult.memoryId] : []),
             ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),

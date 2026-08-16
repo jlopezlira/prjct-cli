@@ -48,7 +48,9 @@ import { ingestTranscript } from '../services/transcript-learner'
 import { usefulnessService } from '../services/usefulness'
 import { recordTaskTokenUsage } from '../services/work-cost-service'
 import { instructionFailureStorage } from '../storage/instruction-failure-storage'
+import { resolveKimiTranscriptPath } from '../utils/kimi-session'
 import { type HookIo, runHook } from './_runner'
+import { currentHookHost } from './_shared'
 
 interface HookInput {
   transcript_path?: string
@@ -148,6 +150,15 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         if (!config?.projectId) return
         const runtime = resolveInstructionRuntime()
 
+        // Kimi's Stop payload has no `transcript_path`; resolve the session's
+        // wire.jsonl from `session_id` instead. Fail-soft: undefined just
+        // skips every transcript-dependent step below.
+        const transcriptPath =
+          input.transcript_path ??
+          (currentHookHost() === 'kimi' && input.session_id
+            ? await resolveKimiTranscriptPath(input.session_id).catch(() => undefined)
+            : undefined)
+
         // Session-cadence gate FIRST: everything transcript-dependent below
         // (read + parse of a multi-MB JSONL, mining, friction, skill-miss)
         // is O(session size) and only needs minutes-scale freshness. A
@@ -165,8 +176,8 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           activeTaskDescription?: string
           activeTaskStartedAt?: string
         } = {}
-        if (runHeavySteps && input.transcript_path) {
-          const raw = await fs.readFile(input.transcript_path, 'utf-8').catch(() => null)
+        if (runHeavySteps && transcriptPath) {
+          const raw = await fs.readFile(transcriptPath, 'utf-8').catch(() => null)
           if (raw !== null) stopContext.transcriptLines = parseTranscriptJsonl(raw)
         }
         const model = identifyTranscriptModel(stopContext.transcriptLines ?? [])
@@ -263,9 +274,9 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // transcript. Conservative heuristics, hashed-dedup, never blocks.
         // Session-cadence: gated with the heavy steps (see above) so a
         // per-turn Stop never pays the transcript scan.
-        if (runHeavySteps && input.transcript_path) {
+        if (runHeavySteps && transcriptPath) {
           try {
-            await ingestTranscript(p, input.transcript_path, input.session_id ?? null, {
+            await ingestTranscript(p, transcriptPath, input.session_id ?? null, {
               preloadedConfig: config,
               preloadedLines: stopContext.transcriptLines,
             })
@@ -317,18 +328,13 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // next session's Claude reads them via topical recall and
         // synthesises improvement ideas — no regex-based classification
         // here, only signal extraction. Session-cadence (heavy-step gate).
-        if (runHeavySteps && input.transcript_path) {
+        if (runHeavySteps && transcriptPath) {
           try {
-            const friction = await detectFriction(
-              p,
-              input.transcript_path,
-              input.session_id ?? null,
-              {
-                preloadedLines: stopContext.transcriptLines,
-                runtime,
-                model,
-              }
-            )
+            const friction = await detectFriction(p, transcriptPath, input.session_id ?? null, {
+              preloadedLines: stopContext.transcriptLines,
+              runtime,
+              model,
+            })
             for (const failure of friction.failures) {
               try {
                 instructionFailureStorage.record(config.projectId, {
@@ -365,11 +371,11 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // the next session start — advisory, never a gate. Same silent
         // best-effort contract as the friction detector above. Session-cadence
         // (heavy-step gate).
-        if (runHeavySteps && input.transcript_path) {
+        if (runHeavySteps && transcriptPath) {
           try {
             const skillMisses = await detectSkillMisses(
               p,
-              input.transcript_path,
+              transcriptPath,
               input.session_id ?? null,
               {
                 preloadedLines: stopContext.transcriptLines,

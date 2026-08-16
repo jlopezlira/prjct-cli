@@ -17,9 +17,23 @@ describe('harness surfaces matrix', () => {
       'pi',
       'cursor',
       'cline',
+      'kimi-cli',
     ] as const) {
       expect(ids).toContain(id)
     }
+  })
+
+  it('documents Kimi Code CLI as fully native (hooks TOML + claude-json MCP + shared skill)', () => {
+    const kimi = getHarnessSurface('kimi-cli')
+    expect(kimi).toBeDefined()
+    expect(kimi!.hooks.prjct).toBe('native')
+    expect(kimi!.mcp.prjct).toBe('native')
+    expect(kimi!.skills.prjct).toBe('native')
+    expect(kimi!.hooks.configPaths[0]).toContain('.kimi-code/config.toml')
+    expect(kimi!.hooks.events).toContain('PreToolUse')
+    expect(kimi!.hooks.events).not.toContain('CwdChanged')
+    expect(kimi!.mcp.configPaths[0]).toContain('.kimi-code/mcp.json')
+    expect(kimi!.skills.paths.some((p) => p.includes('.agents/skills'))).toBe(true)
   })
 
   it('documents OpenCode MCP as native and Pi skill as native (no MCP)', () => {

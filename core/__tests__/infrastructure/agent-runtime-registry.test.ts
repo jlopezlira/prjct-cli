@@ -44,13 +44,18 @@ describe('agent runtime registry', () => {
     }
   })
 
-  it('exposes a writable MCP target for Kimi CLI (~/.kimi/mcp.json)', () => {
+  it('exposes a writable MCP target for Kimi Code CLI (~/.kimi-code/mcp.json)', () => {
     const kimi = getAgentRuntime('kimi-cli')
 
+    expect(kimi.displayName).toBe('Kimi Code CLI')
     expect(kimi.supports.mcp).toBe(true)
+    expect(kimi.supports.hooks).toBe(true)
+    expect(kimi.supports.skills).toBe(true)
+    expect(kimi.detectsBy?.homeDirs?.[0]).toBe('.kimi-code')
+    expect(kimi.detectsBy?.homeDirs).toContain('.kimi')
     const writable = (kimi.mcpTargets ?? []).filter((target) => target.writable)
     expect(writable.length).toBeGreaterThan(0)
-    expect(writable[0]?.pathHint).toContain('.kimi/mcp.json')
+    expect(writable[0]?.pathHint).toContain('.kimi-code/mcp.json')
   })
 
   it('exposes a writable OpenCode MCP target and full support for Pi skill path', () => {
@@ -122,6 +127,7 @@ describe('agent runtime registry', () => {
       expect(byId.get('gemini')?.supportLevel).toBe('full')
       expect(byId.get('opencode')?.supportLevel).toBe('full')
       expect(byId.get('cline')?.supportLevel).toBe('full')
+      expect(byId.get('kimi-cli')?.supportLevel).toBe('full')
     } finally {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
     }

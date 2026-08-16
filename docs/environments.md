@@ -111,7 +111,31 @@ A Codex sandbox is a non-interactive, non-TTY environment, so prjct produces the
   the branding header/footer — ideal for feeding command output straight back to
   the model.
 
-## 3. Output adaptation — the three tiers
+## 3. Kimi Code CLI detection
+
+Implemented in `core/infrastructure/ai-provider.ts` (`detectKimi()`) and the
+runtime registry. prjct treats Kimi Code CLI as installed when the **`kimi` CLI
+binary is on PATH** or the **`~/.kimi-code/`** config directory exists (the
+legacy `~/.kimi/` directory still counts as a fallback signal, but new wiring
+never targets it).
+
+Kimi specifics prjct relies on:
+
+- **Context file:** `AGENTS.md` (portable routing block).
+- **MCP:** `~/.kimi-code/mcp.json`, standard `mcpServers` JSON (same shape as
+  Claude); `prjct install` upserts the `prjct` and `context7` servers there.
+- **Hooks:** `[[hooks]]` entries in `~/.kimi-code/config.toml` (only
+  `event`/`matcher`/`command`/`timeout` allowed per entry); prjct's entries are
+  marked with an adjacent `# prjct-managed` comment. Hooks receive snake_case
+  JSON on stdin and read prjct's `PRJCT_HOOK_HOST=kimi` output adaptation:
+  plain stdout text is appended to context, denies use the
+  `hookSpecificOutput.permissionDecision` JSON contract.
+- **Skills:** the compact skill installs to the shared user tier
+  `~/.agents/skills/prjct/SKILL.md` (a canonical Kimi scan directory).
+- **Output:** same non-interactive static profile as any agent host; `--md`
+  works identically.
+
+## 4. Output adaptation — the three tiers
 
 Detection feeds three independent output decisions. None require configuration.
 

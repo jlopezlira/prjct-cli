@@ -73,10 +73,12 @@ function num(value: unknown): number {
 /**
  * Pull an {in,out} usage pair from a single usage object, tolerant of every
  * major provider's field naming so prjct's token accounting is agent-agnostic
- * (Claude, OpenAI/Codex, Gemini), not Claude-only:
+ * (Claude, OpenAI/Codex, Gemini, Kimi), not Claude-only:
  *   - Claude   : input_tokens / output_tokens (+ cache_creation/read as input)
  *   - OpenAI   : prompt_tokens / completion_tokens (Chat); input_tokens/output_tokens (Responses)
  *   - Gemini   : promptTokenCount / candidatesTokenCount
+ *   - Kimi     : inputOther / output (+ inputCacheCreation as new input,
+ *                inputCacheRead as the cumulative cached prefix)
  * Cache reads/creations count as input — real billed input the cycle incurred.
  */
 function usagePairFrom(usage: Record<string, unknown>): TranscriptUsage & { cacheRead: number } {
@@ -85,13 +87,19 @@ function usagePairFrom(usage: Record<string, unknown>): TranscriptUsage & { cach
     num(usage.input_tokens) +
     num(usage.cache_creation_input_tokens) +
     num(usage.prompt_tokens) +
-    num(usage.promptTokenCount)
+    num(usage.promptTokenCount) +
+    num(usage.inputOther) +
+    num(usage.inputCacheCreation)
   const tokensOut =
-    num(usage.output_tokens) + num(usage.completion_tokens) + num(usage.candidatesTokenCount)
+    num(usage.output_tokens) +
+    num(usage.completion_tokens) +
+    num(usage.candidatesTokenCount) +
+    num(usage.output)
   // cache_read is the cumulative cached prefix RE-REPORTED every turn; summing
   // it across turns inflates tokensIn quadratically (reviewed audit, spec
   // 4b5bc99e). Return it separately so the caller takes the last/max, not a sum.
-  const cacheRead = num(usage.cache_read_input_tokens)
+  // No provider emits both spellings on one line, so summing is safe.
+  const cacheRead = num(usage.cache_read_input_tokens) + num(usage.inputCacheRead)
   return { tokensIn, tokensOut, cacheRead }
 }
 
@@ -116,9 +124,20 @@ export interface UsageWindow {
   untilIso?: string
 }
 
+/**
+ * Line time in epoch ms. Claude lines carry an ISO `timestamp` string; Kimi
+ * wire.jsonl lines carry a numeric epoch-ms `time`. Both are accepted so
+ * windowed usage attribution works across providers.
+ */
+function lineTimeMs(line: TranscriptJsonlLine): number {
+  if (typeof line.timestamp === 'string') return Date.parse(line.timestamp)
+  if (typeof line.time === 'number') return line.time
+  return Number.NaN
+}
+
 function inWindow(line: TranscriptJsonlLine, window?: UsageWindow): boolean {
   if (!window?.sinceIso && !window?.untilIso) return true
-  const t = typeof line.timestamp === 'string' ? Date.parse(line.timestamp) : Number.NaN
+  const t = lineTimeMs(line)
   if (!Number.isFinite(t)) return false
   if (window.sinceIso && t < Date.parse(window.sinceIso)) return false
   if (window.untilIso && t >= Date.parse(window.untilIso)) return false
@@ -180,7 +199,10 @@ export function sumTranscriptUsageByModel(
     const message = asRecord(line.message)
     const usage = asRecord(message?.usage) ?? asRecord(line.usage) ?? asRecord(line.usageMetadata)
     if (!usage) continue
-    const model = typeof message?.model === 'string' && message.model ? message.model : 'unknown'
+    // Kimi `usage.record` lines carry the model at the TOP level (no
+    // `message` envelope); Claude nests it under `message.model`.
+    const rawModel = message?.model ?? line.model
+    const model = typeof rawModel === 'string' && rawModel ? rawModel : 'unknown'
     const pair = usagePairFrom(usage)
     const cur = acc.get(model) ?? { tokensIn: 0, tokensOut: 0, maxCacheRead: 0 }
     cur.tokensIn += pair.tokensIn

@@ -97,6 +97,11 @@ function hasPrjctMcpToml(text: string | null): boolean {
   return /\[mcp_servers\.prjct\]/.test(text) || /# prjct:mcp:start/.test(text)
 }
 
+function hasPrjctManagedToml(text: string | null): boolean {
+  if (!text) return false
+  return text.includes('# prjct-managed') || text.includes('PRJCT_HOOK_HOST=')
+}
+
 function organicOf(
   detected: boolean,
   hooks: boolean,
@@ -147,6 +152,10 @@ export async function probeHarnessCoverage(
   const piAgent = path.join(home, '.pi', 'agent')
   const piSkill = getPiSkillInstallPath()
   const projectPi = path.join(projectPath, '.pi')
+  const kimiHome = path.join(home, '.kimi-code')
+  const kimiToml = path.join(kimiHome, 'config.toml')
+  const kimiMcp = path.join(kimiHome, 'mcp.json')
+  const kimiSkill = path.join(home, '.agents', 'skills', 'prjct', 'SKILL.md')
 
   const [
     claudeCmd,
@@ -174,6 +183,11 @@ export async function probeHarnessCoverage(
     piAgentDir,
     piSkillExists,
     projectPiDir,
+    kimiCmd,
+    kimiTomlText,
+    kimiMcpText,
+    kimiSkillExists,
+    kimiDir,
   ] = await Promise.all([
     commandOnPathAsync('claude'),
     commandOnPathAsync('codex'),
@@ -200,6 +214,11 @@ export async function probeHarnessCoverage(
     fileExists(piAgent),
     fileExists(piSkill),
     fileExists(projectPi),
+    commandOnPathAsync('kimi'),
+    readText(kimiToml),
+    readText(kimiMcp),
+    fileExists(kimiSkill),
+    fileExists(kimiHome),
   ])
 
   const claudeDetected = claudeCmd || (await fileExists(path.join(home, '.claude')))
@@ -234,6 +253,11 @@ export async function probeHarnessCoverage(
 
   const piDetected = Boolean(piCmd || piDir || piAgentDir || projectPiDir)
   const piSkillLive = Boolean(piSkillExists)
+
+  const kimiDetected = Boolean(kimiCmd || kimiDir)
+  const kimiHooksLive = hasPrjctManagedToml(kimiTomlText) || hasPrjctHookCommand(kimiTomlText)
+  const kimiMcpLive = hasPrjctMcpJson(kimiMcpText)
+  const kimiSkillLive = Boolean(kimiSkillExists)
 
   const runtimes: RuntimeCoverage[] = [
     {
@@ -352,6 +376,22 @@ export async function probeHarnessCoverage(
           ? 'detected — run prjct install for Pi skill'
           : 'not installed',
     },
+    {
+      id: 'kimi-cli',
+      displayName: 'Kimi Code CLI',
+      detected: kimiDetected,
+      hooksLive: kimiHooksLive,
+      mcpLive: kimiMcpLive,
+      organic: organicOf(kimiDetected, kimiHooksLive, kimiMcpLive),
+      evidence:
+        kimiHooksLive && kimiMcpLive
+          ? `~/.kimi-code/config.toml [[hooks]] + mcp.json${kimiSkillLive ? ' + ~/.agents/skills' : ''}`
+          : kimiHooksLive || kimiMcpLive
+            ? 'partial wire — run prjct install'
+            : kimiDetected
+              ? 'detected, not wired — run prjct install'
+              : 'not installed',
+    },
   ]
 
   const detected = runtimes.filter((r) => r.detected)
@@ -363,7 +403,7 @@ export async function probeHarnessCoverage(
 
   const summary =
     detectedCount === 0
-      ? 'No benchmark CLI/IDE detected — install Claude, Codex, Gemini, Cursor, OpenCode, Pi, or Grok, then `prjct install`.'
+      ? 'No benchmark CLI/IDE detected — install Claude, Codex, Gemini, Cursor, OpenCode, Pi, Kimi Code, or Grok, then `prjct install`.'
       : liveCount === detectedCount
         ? `Organic full board: ${liveCount}/${detectedCount} detected runtimes live (${organicPct}%). Same SQLite brain, multi-surface wire.`
         : `Organic board ${liveCount}/${detectedCount} live (${organicPct}%). Run \`prjct install\` to close gaps — one command, all surfaces.`

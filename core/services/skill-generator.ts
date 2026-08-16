@@ -60,6 +60,11 @@ function compactSkillRoots(): string[] {
     path.join(home, '.codex', 'skills'),
     path.join(home, '.gemini', 'skills'),
     path.join(home, '.gemini', 'antigravity', 'global_skills'),
+    // Kimi Code CLI user tier (docs: kimi.com/code/docs …/customization/skills.html
+    // lists BOTH $KIMI_CODE_HOME/skills and ~/.agents/skills as canonical). The
+    // shared ~/.agents/skills root is verified live and is tool-agnostic — the
+    // prjct skill is host-neutral content, so it belongs in the shared tier.
+    path.join(home, '.agents', 'skills'),
   ]
 }
 

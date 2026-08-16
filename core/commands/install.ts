@@ -28,7 +28,8 @@ import { installCursorHooks, uninstallCursorHooks } from '../utils/cursor-hooks'
 import { installGeminiSettings, uninstallGeminiSettings } from '../utils/gemini-settings'
 import { ensureGrokMcpServer } from '../utils/grok-mcp'
 import { installGrokPlugin } from '../utils/grok-plugin'
-import { ensureKimiMcpServer } from '../utils/kimi-mcp'
+import { installKimiHooks, uninstallKimiHooks } from '../utils/kimi-hooks'
+import { ensureKimiMcpServer, uninstallKimiMcpServer } from '../utils/kimi-mcp'
 import { failFromError, failHard } from '../utils/md-aware'
 import { ensureOpenCodeMcpServer } from '../utils/opencode-mcp'
 import out from '../utils/output'
@@ -70,6 +71,7 @@ export class InstallCommands extends PrjctCommandsBase {
       const cursorHooks = cursorDetected ? await installCursorHooks() : null
       const kimiDetected = detected.some((runtime) => runtime.runtime.id === 'kimi-cli')
       const kimiConfig = kimiDetected ? await ensureKimiMcpServer() : null
+      const kimiHooks = kimiDetected ? await installKimiHooks() : null
       const grokDetected = detected.some((runtime) => runtime.runtime.id === 'grok')
       const grokConfig = grokDetected ? await ensureGrokMcpServer() : null
       const grokSkill = grokDetected ? await installGrokSkill() : null
@@ -155,6 +157,11 @@ export class InstallCommands extends PrjctCommandsBase {
               : []),
             ...(kimiConfig
               ? [`- Kimi config: ${kimiConfig.changed ? 'updated' : 'already ready'}`]
+              : []),
+            ...(kimiHooks
+              ? [
+                  `- Kimi hooks: ${kimiHooks.hooksWritten} new, ${kimiHooks.alreadyPresent} present, ${kimiHooks.hooksPruned} pruned → \`${kimiHooks.configPath}\` (apply on next Kimi session or after \`/reload\`)`,
+                ]
               : []),
             ...(grokConfig
               ? [
@@ -248,6 +255,11 @@ export class InstallCommands extends PrjctCommandsBase {
         }
         if (kimiConfig) {
           out.info(`Kimi config: ${kimiConfig.changed ? 'updated' : 'already ready'}`)
+        }
+        if (kimiHooks) {
+          out.info(
+            `Kimi hooks: ${kimiHooks.hooksWritten} new, ${kimiHooks.alreadyPresent} present → ${kimiHooks.configPath} (apply on next Kimi session or after /reload)`
+          )
         }
         if (grokConfig) {
           const action =
@@ -343,6 +355,14 @@ export class InstallCommands extends PrjctCommandsBase {
               changed: kimiConfig.changed,
             }
           : null,
+        kimiHooks: kimiHooks
+          ? {
+              path: kimiHooks.configPath,
+              hooksWritten: kimiHooks.hooksWritten,
+              alreadyPresent: kimiHooks.alreadyPresent,
+              hooksPruned: kimiHooks.hooksPruned,
+            }
+          : null,
         grokConfig: grokConfig
           ? {
               path: grokConfig.path,
@@ -395,10 +415,20 @@ export class InstallCommands extends PrjctCommandsBase {
         hooksPath: '',
         hooksRemoved: 0,
       }))
+      const kimi = await uninstallKimiMcpServer().catch(() => ({
+        paths: [] as string[],
+        serversRemoved: 0,
+      }))
+      const kimiHooksRemoved = await uninstallKimiHooks().catch(() => ({
+        configPath: '',
+        hooksRemoved: 0,
+      }))
       const msg = `removed ${result.hooksRemoved} Claude prjct hook(s)${
         codex.hooksRemoved > 0 ? `, ${codex.hooksRemoved} Codex hook(s)` : ''
       }${gemini.hooksRemoved > 0 || gemini.mcpRemoved ? `, Gemini cleaned` : ''}${
         cursor.hooksRemoved > 0 ? `, ${cursor.hooksRemoved} Cursor hook(s)` : ''
+      }${kimi.serversRemoved > 0 ? `, ${kimi.serversRemoved} Kimi MCP server(s)` : ''}${
+        kimiHooksRemoved.hooksRemoved > 0 ? `, ${kimiHooksRemoved.hooksRemoved} Kimi hook(s)` : ''
       }`
       if (options.md) {
         console.log(
@@ -417,6 +447,16 @@ export class InstallCommands extends PrjctCommandsBase {
             ...(cursor.hooksRemoved > 0
               ? [`- Cursor: ${cursor.hooksRemoved} (\`${cursor.hooksPath}\`)`]
               : []),
+            ...(kimi.serversRemoved > 0
+              ? [
+                  `- Kimi: ${kimi.serversRemoved} MCP server(s) (${kimi.paths.map((p) => `\`${p}\``).join(', ')})`,
+                ]
+              : []),
+            ...(kimiHooksRemoved.hooksRemoved > 0
+              ? [
+                  `- Kimi: ${kimiHooksRemoved.hooksRemoved} hook(s) (\`${kimiHooksRemoved.configPath}\`)`,
+                ]
+              : []),
             ``,
           ].join('\n')
         )
@@ -430,6 +470,8 @@ export class InstallCommands extends PrjctCommandsBase {
         geminiHooksRemoved: gemini.hooksRemoved,
         geminiMcpRemoved: gemini.mcpRemoved,
         cursorHooksRemoved: cursor.hooksRemoved,
+        kimiMcpServersRemoved: kimi.serversRemoved,
+        kimiHooksRemoved: kimiHooksRemoved.hooksRemoved,
       }
     } catch (error) {
       const msg = getErrorMessage(error)

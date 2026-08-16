@@ -129,6 +129,21 @@ describe('hook routing — process/daemon parity', () => {
     await pending[0]!()
     expect(calls).toEqual(['after'])
   })
+
+  test('io mode honors the forwarded hookHost (kimi → raw text, not JSON)', async () => {
+    const opts: RunHookOptions<unknown> = {
+      event: 'UserPromptSubmit',
+      build: async () => 'plain context',
+    }
+    const chunks: string[] = []
+    await runHook(opts, {
+      input: {},
+      hookHost: 'kimi',
+      sink: (chunk) => chunks.push(chunk),
+      detachAfterEmit: () => {},
+    })
+    expect(chunks.join('')).toBe('plain context\n')
+  })
 })
 
 describe('hook registry', () => {

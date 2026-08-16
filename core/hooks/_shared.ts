@@ -68,12 +68,17 @@ export function buildDenyOutput(event: string, reason: string): DenyOutput {
 }
 
 /** Host that invoked the hook (Claude default; others remap output). */
-export type HookHost = 'claude' | 'gemini' | 'codex' | 'cursor'
+export type HookHost = 'claude' | 'gemini' | 'codex' | 'cursor' | 'kimi'
+
+/** Validate a raw host string (env var / daemon request field) into a HookHost. */
+export function hookHostFrom(raw: string | undefined | null): HookHost {
+  const v = (raw ?? 'claude').trim().toLowerCase()
+  if (v === 'gemini' || v === 'codex' || v === 'cursor' || v === 'kimi') return v
+  return 'claude'
+}
 
 export function currentHookHost(): HookHost {
-  const raw = (process.env.PRJCT_HOOK_HOST ?? 'claude').toLowerCase()
-  if (raw === 'gemini' || raw === 'codex' || raw === 'cursor') return raw
-  return 'claude'
+  return hookHostFrom(process.env.PRJCT_HOOK_HOST)
 }
 
 /**
@@ -81,16 +86,42 @@ export function currentHookHost(): HookHost {
  * - gemini: BeforeTool/decision deny (geminicli.com/docs/hooks)
  * - cursor: camelCase events + snake_case additional_context (community 2026)
  * - codex: Claude-compatible shapes (hooks.json mirrors Claude)
+ * - kimi: plain-text context on stdout; deny JSON is already Kimi's contract
+ *
+ * Returns a string when the host expects RAW TEXT on stdout instead of a
+ * JSON line (Kimi appends stdout verbatim to context and documents no
+ * `additionalContext` JSON field).
  */
 export function adaptHookOutputForHost(
   output: HookOutput | DenyOutput | Record<string, never>,
   host: HookHost = currentHookHost()
-): Record<string, unknown> {
+): Record<string, unknown> | string {
   if (host === 'claude' || host === 'codex') return output as Record<string, unknown>
   if (!output || Object.keys(output).length === 0) return output as Record<string, unknown>
 
   if (host === 'gemini') return adaptForGemini(output)
   if (host === 'cursor') return adaptForCursor(output)
+  if (host === 'kimi') return adaptForKimi(output)
+  return output as Record<string, unknown>
+}
+
+/**
+ * Kimi Code CLI (kimi.com/code/docs …/customization/hooks.html):
+ * - exit 0 stdout text is appended to context — so additionalContext and
+ *   systemMessage degrade to the bare text, no JSON envelope.
+ * - blocking uses the SAME `hookSpecificOutput.permissionDecision` JSON
+ *   shape prjct already builds — passed through unchanged.
+ */
+function adaptForKimi(
+  output: HookOutput | DenyOutput | Record<string, never>
+): Record<string, unknown> | string {
+  const deny = output as DenyOutput
+  if (deny.hookSpecificOutput?.permissionDecision === 'deny') {
+    return output as Record<string, unknown>
+  }
+  const out = output as HookOutput
+  if (out.hookSpecificOutput?.additionalContext) return out.hookSpecificOutput.additionalContext
+  if (out.systemMessage) return out.systemMessage
   return output as Record<string, unknown>
 }
 
@@ -240,13 +271,16 @@ export function readStdinSafe<T = Record<string, unknown>>(): T {
 }
 
 /**
- * Emit the hook's JSON output and exit 0. Both success and no-op paths
- * should flow through this — it guarantees a valid JSON line on stdout
- * so the host parser is happy.
+ * Emit the hook's output and exit 0. Both success and no-op paths
+ * should flow through this — it guarantees a valid line on stdout
+ * so the host parser is happy. Hosts that take raw text (Kimi) get
+ * the bare string; everyone else gets the JSON envelope.
  */
 export function emit(output: HookOutput | DenyOutput | Record<string, never>): void {
   const adapted = adaptHookOutputForHost(output)
-  process.stdout.write(`${JSON.stringify(adapted)}\n`)
+  process.stdout.write(
+    typeof adapted === 'string' ? `${adapted}\n` : `${JSON.stringify(adapted)}\n`
+  )
 }
 
 function emitEmpty(): void {

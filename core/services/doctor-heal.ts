@@ -195,7 +195,9 @@ export async function applyDoctorHeal(
         }
         if (detected.includes('kimi-cli')) {
           const { ensureKimiMcpServer } = await import('../utils/kimi-mcp')
+          const { installKimiHooks } = await import('../utils/kimi-hooks')
           await ensureKimiMcpServer()
+          await installKimiHooks()
         }
         if (detected.includes('grok')) {
           const { ensureGrokMcpServer } = await import('../utils/grok-mcp')

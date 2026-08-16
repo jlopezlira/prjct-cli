@@ -343,6 +343,51 @@ export const BENCHMARK_HARNESS_SURFACES: readonly HarnessSurfaceEntry[] = [
       'Native skill on prjct install when Pi is detected. AGENTS.md portable. MCP is optional via community extensions only.',
   },
   {
+    runtimeId: 'kimi-cli',
+    displayName: 'Kimi Code CLI',
+    product: 'Moonshot Kimi Code CLI',
+    instructions: {
+      files: ['AGENTS.md'],
+      loadOrder: 'project AGENTS.md routing block',
+      prjct: 'portable',
+    },
+    mcp: {
+      configPaths: ['~/.kimi-code/mcp.json', '~/.kimi/mcp.json (legacy fallback)'],
+      format: 'JSON mcpServers (claude-json shape)',
+      prjct: 'native',
+      notes:
+        'ensureKimiMcpServer prefers ~/.kimi-code, writes legacy only when it is the sole Kimi home; uninstall strips prjct-managed servers from both',
+    },
+    skills: {
+      paths: ['~/.agents/skills/prjct/SKILL.md', '$KIMI_CODE_HOME/skills/ (~/.kimi-code/skills/)'],
+      prjct: 'native',
+      notes:
+        'Compact skill via skill-generator fan-out into the shared user tier ~/.agents/skills (canonical Kimi scan dir, verified live)',
+    },
+    hooks: {
+      configPaths: ['~/.kimi-code/config.toml [[hooks]]'],
+      events: [
+        'SessionStart',
+        'UserPromptSubmit',
+        'PreToolUse',
+        'PostToolUse',
+        'Stop',
+        'SubagentStart',
+        'SubagentStop',
+        'Notification',
+      ],
+      format:
+        'TOML [[hooks]] (event/matcher/command/timeout only — extra fields break config load); # prjct-managed comment marks our entries',
+      prjct: 'native',
+      contract:
+        'stdin JSON snake_case (hook_event_name/session_id/cwd/tool_input); exit 0 stdout text appended to context; deny via hookSpecificOutput.permissionDecision JSON or exit 2 + stderr; fail-open on error/timeout. No CwdChanged (cwd rides every payload).',
+      notes:
+        'PRJCT_HOOK_HOST=kimi adapts output to raw stdout text; forwarded to the daemon as hookHost. kimi-hooks.ts patches config.toml textually — user entries and orca-managed blocks stay byte-identical.',
+    },
+    legibility:
+      'Full native wire: TOML hooks + claude-json MCP + shared-tier skill + AGENTS.md. First-class since the ~/.kimi-code path fix.',
+  },
+  {
     runtimeId: 'cursor',
     displayName: 'Cursor',
     product: 'Cursor IDE',

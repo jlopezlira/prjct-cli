@@ -289,22 +289,29 @@ export const AGENT_RUNTIME_REGISTRY: readonly AgentRuntimeDefinition[] = [
   },
   {
     id: 'kimi-cli',
-    displayName: 'Kimi CLI',
+    displayName: 'Kimi Code CLI',
     kind: 'model-runtime',
     status: 'emerging',
-    detectsBy: { homeDirs: ['.kimi'], projectDirs: ['.kimi'], commands: ['kimi'] },
+    detectsBy: { homeDirs: ['.kimi-code', '.kimi'], projectDirs: ['.kimi'], commands: ['kimi'] },
     contextFiles: ['AGENTS.md'],
-    mcpTargets: [{ format: 'claude-json', pathHint: '~/.kimi/mcp.json', writable: true }],
+    mcpTargets: [
+      { format: 'claude-json', pathHint: '~/.kimi-code/mcp.json', writable: true },
+      {
+        format: 'claude-json',
+        pathHint: '~/.kimi/mcp.json (legacy Kimi CLI fallback)',
+        writable: false,
+      },
+    ],
     supports: {
       agentsMd: true,
       mcp: true,
-      skills: false,
-      hooks: false,
+      skills: true,
+      hooks: true,
       acp: false,
       projectRules: false,
     },
     notes:
-      'Kimi-family coding runtime; AGENTS.md and MCP/CLI markdown output are the portable contract.',
+      'Kimi Code CLI (~/.kimi-code; legacy ~/.kimi is fallback-only): native MCP + hooks ([[hooks]] in config.toml) + compact skill at ~/.agents/skills/prjct via prjct install. See harness-surfaces.',
   },
   {
     id: 'grok',
@@ -738,6 +745,7 @@ const FULL_SUPPORT_RUNTIME_IDS = new Set<AgentRuntimeId>([
   'cursor',
   'cline',
   'grok',
+  'kimi-cli',
 ])
 
 function supportLevelFor(runtime: AgentRuntimeDefinition): RuntimeSupportLevel {

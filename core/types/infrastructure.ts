@@ -228,8 +228,8 @@ export interface CodexDetection {
 }
 
 export interface KimiDetection {
-  /** Whether the `kimi` CLI is available or ~/.kimi/ exists */
+  /** Whether the `kimi` CLI is available or ~/.kimi-code/ (legacy ~/.kimi/) exists */
   installed: boolean
-  /** Path to config directory (~/.kimi) when installed */
+  /** Path to config directory (~/.kimi-code preferred, legacy ~/.kimi as fallback) */
   configPath?: string
 }

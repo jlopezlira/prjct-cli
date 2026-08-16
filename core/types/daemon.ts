@@ -22,6 +22,10 @@ export interface DaemonRequest {
   /** Raw stdin payload, forwarded for `hook` commands (the Claude Code
    *  event JSON the hook would otherwise read from its own stdin). */
   stdin?: string
+  /** Host that invoked a `hook` command (the client's PRJCT_HOOK_HOST), so
+   *  the warm daemon adapts output for the right host instead of reading its
+   *  own — host-less — env. */
+  hookHost?: string
 }
 
 /** Response sent from daemon to CLI client */
