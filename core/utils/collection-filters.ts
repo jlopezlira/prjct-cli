@@ -36,3 +36,17 @@ export function uniqueBy<T>(items: T[], keyFn: (item: T) => string): T[] {
     return true
   })
 }
+
+/**
+ * Convert a path→score map into a sorted array, highest score first.
+ * Shared by the BM25 and git-cochange scorers, which both build up a
+ * `Map<string, number>` while scanning candidates and need the same
+ * "flatten + sort descending" tail step.
+ */
+export function scoresToSortedArray(
+  scores: Map<string, number>
+): { path: string; score: number }[] {
+  return Array.from(scores.entries())
+    .map(([p, s]) => ({ path: p, score: s }))
+    .sort((a, b) => b.score - a.score)
+}

@@ -13,8 +13,7 @@
  */
 
 import { hasSymbolIndex, listAllSymbols, loadMeta } from '../domain/symbol-graph'
-import prjctDb from '../storage/database'
-import type { CodeSymbolEdge, SymbolEdgeType } from '../types/domain.js'
+import { loadCodeSymbolEdges } from '../storage/code-graph-storage'
 
 export type CloudGraphNodeKind =
   | 'Function'
@@ -76,26 +75,6 @@ function mapKind(kind: string): CloudGraphNodeKind {
   return KIND_MAP[kind.toLowerCase()] ?? 'Symbol'
 }
 
-function loadEdges(projectId: string): CodeSymbolEdge[] {
-  try {
-    return prjctDb
-      .query<{
-        src: string
-        dst: string
-        edge_type: string
-        confidence: number
-      }>(projectId, 'SELECT src, dst, edge_type, confidence FROM code_symbol_edges')
-      .map((r) => ({
-        src: r.src,
-        dst: r.dst,
-        edgeType: r.edge_type as SymbolEdgeType,
-        confidence: r.confidence,
-      }))
-  } catch {
-    return []
-  }
-}
-
 function hasFiniteCap(n: number | undefined): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0
 }
@@ -115,7 +94,7 @@ export function buildCloudCodeGraphSnapshot(
   const symbols = listAllSymbols(projectId)
   if (symbols.length === 0) return null
 
-  const edges = loadEdges(projectId)
+  const edges = loadCodeSymbolEdges(projectId)
   const meta = loadMeta(projectId)
 
   // Degree from structural edges only (ordering only — does not drop nodes)

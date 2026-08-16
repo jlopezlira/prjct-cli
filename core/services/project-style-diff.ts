@@ -8,6 +8,7 @@ import type {
   ProjectStyleDiffItem,
   ProjectStyleSnapshot,
 } from '../types/project-style'
+import { summarizeDiffItems } from './diff-summary'
 
 export function generateProjectStyleDiff(
   before: ProjectStyleSnapshot | null,
@@ -105,17 +106,7 @@ export function generateProjectStyleDiff(
     })
   }
 
-  const added = items.filter((i) => i.type === 'added').length
-  const removed = items.filter((i) => i.type === 'removed').length
-  const changed = items.filter((i) => i.type === 'changed').length
-
-  return {
-    hasChanges: items.length > 0,
-    items,
-    summary: { added, removed, changed },
-    beforeCommit: before.commitHash,
-    afterCommit: after.commitHash,
-  }
+  return summarizeDiffItems(items, before.commitHash, after.commitHash)
 }
 
 export function formatProjectStyleDiffMd(diff: ProjectStyleDiff): string {

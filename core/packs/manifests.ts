@@ -65,21 +65,34 @@ export interface PackManifest {
   }
 }
 
+/**
+ * Shared signals between `code` and `code-strict` — both packs declare the
+ * same persona, memory types, workflow slots, and hook signals; they only
+ * diverge on config strictness (and code's extra suggestedTags). Keeping
+ * this as one literal means the two packs can't silently drift apart.
+ */
+const CODE_PACK_BASE: Pick<
+  PackManifest,
+  'suggestedPersona' | 'memoryTypes' | 'workflowSlots' | 'hookSignals'
+> = {
+  suggestedPersona: {
+    role: 'DEV',
+    mcps: ['github'],
+  },
+  memoryTypes: ['fact', 'decision', 'learning', 'gotcha', 'pattern', 'anti-pattern', 'shipped'],
+  workflowSlots: {
+    ship: { description: 'Publish finished work — tests, commit, push, PR.' },
+    review: { description: 'Pre-commit or pre-PR review pass.' },
+  },
+  hookSignals: [],
+}
+
 export const PACK_MANIFESTS: Record<string, PackManifest> = {
   code: {
     name: 'code',
     version: '1.1.0',
     description: 'Coding work: features, bugs, refactors, TDD, shipping.',
-    suggestedPersona: {
-      role: 'DEV',
-      mcps: ['github'],
-    },
-    memoryTypes: ['fact', 'decision', 'learning', 'gotcha', 'pattern', 'anti-pattern', 'shipped'],
-    workflowSlots: {
-      ship: { description: 'Publish finished work — tests, commit, push, PR.' },
-      review: { description: 'Pre-commit or pre-PR review pass.' },
-    },
-    hookSignals: [],
+    ...CODE_PACK_BASE,
     suggestedTags: {
       domain: ['auth', 'api', 'frontend', 'infra', 'data'],
     },
@@ -100,16 +113,7 @@ export const PACK_MANIFESTS: Record<string, PackManifest> = {
     name: 'code-strict',
     version: '1.1.0',
     description: 'Ship-grade coding: SDD+TDD strict, delivery-geometry gate, forced land. Opt-in.',
-    suggestedPersona: {
-      role: 'DEV',
-      mcps: ['github'],
-    },
-    memoryTypes: ['fact', 'decision', 'learning', 'gotcha', 'pattern', 'anti-pattern', 'shipped'],
-    workflowSlots: {
-      ship: { description: 'Publish finished work — tests, commit, push, PR.' },
-      review: { description: 'Pre-commit or pre-PR review pass.' },
-    },
-    hookSignals: [],
+    ...CODE_PACK_BASE,
     configDefaults: {
       sdd: 'strict',
       tdd: 'strict',

@@ -509,27 +509,5 @@ export interface ContextOutput {
   }
 }
 
-// Global Config Types (command-related)
-
-/**
- * Global configuration for prjct.
- */
-export interface GlobalConfig {
-  projectId: string
-  projectPath?: string
-  authors: AuthorEntry[]
-  version: string
-  created?: string
-  lastSync: string
-}
-
-/**
- * Author entry in global config
- */
-export interface AuthorEntry {
-  name: string
-  email: string
-  github: string
-  firstContribution?: string
-  lastActivity?: string
-}
+// Global Config Types (command-related) — GlobalConfig/AuthorEntry live in
+// './config' (their canonical home); import from there directly.

@@ -33,6 +33,7 @@ import { getErrorMessage } from '../types/fs'
 import { SPEC_STATUSES, type SpecContent, type SpecStatus } from '../types/spec'
 import { failHard, failWith } from '../utils/md-aware'
 import out from '../utils/output'
+import { parseFlagTags } from '../utils/tags'
 import { PrjctCommandsBase } from './base'
 
 // Re-exported so existing importers (and tests) can reach the dispatch
@@ -701,15 +702,4 @@ export class SpecCommands extends PrjctCommandsBase {
       return failHard(getErrorMessage(error))
     }
   }
-}
-
-function parseFlagTags(raw: string | undefined): Record<string, string> {
-  if (!raw) return {}
-  const tags: Record<string, string> = {}
-  for (const token of raw.split(',')) {
-    const pair = token.trim()
-    const idx = pair.indexOf(':')
-    if (idx > 0) tags[pair.slice(0, idx)] = pair.slice(idx + 1)
-  }
-  return tags
 }

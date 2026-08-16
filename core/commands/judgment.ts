@@ -8,7 +8,7 @@
  */
 
 import configManager from '../infrastructure/config-manager'
-import type { FindingSeverity, RefuteVerdict } from '../schemas/judgment'
+import type { FindingSeverity, JudgmentLedger, RefuteVerdict } from '../schemas/judgment'
 import { FindingSeveritySchema, RefuteVerdictSchema } from '../schemas/judgment'
 import { computeCommittedChangeset, type DeliveryTier } from '../services/delivery-geometry'
 import {
@@ -205,10 +205,9 @@ export class JudgmentCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { projectId, ledger } = req.value
 
     const flags = parseFlags(args)
     const sevRaw = flags.severity ?? flags.s
@@ -243,7 +242,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
     const taxed = applyMechanicalStyleRefute(applyEvidenceTax(rawFinding))
 
     // Ghost filter — annotate known FPs (never auto-kill)
-    const book = judgmentLedgerStorage.getGhosts(proj.value)
+    const book = judgmentLedgerStorage.getGhosts(projectId)
     const [tagged] = applyGhostFilter([taxed], book)
     // Scope freeze: file outside frozen git path set → non-blocking follow-up.
     const scoped = applyScopeFreeze(tagged!, ledger.scopePaths)
@@ -251,7 +250,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
     ledger.findings = findings
     ledger.updatedAt = getTimestamp()
     ledger.verdict = 'in_progress'
-    judgmentLedgerStorage.set(proj.value, ledger)
+    judgmentLedgerStorage.set(projectId, ledger)
 
     const taxNote =
       finding.severity !== (sevParsed.data as FindingSeverity)
@@ -291,10 +290,9 @@ export class JudgmentCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { projectId, ledger } = req.value
 
     const flags = parseFlags(args)
     const redRaw = flags.red ?? flags.r
@@ -353,7 +351,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
       { role: 'blue', findings: parseSide(blueFindings, 'blue') }
     )
 
-    const book = judgmentLedgerStorage.getGhosts(proj.value)
+    const book = judgmentLedgerStorage.getGhosts(projectId)
     const findings = applyGhostFilter(merged.findings, book).map((f) =>
       applyScopeFreeze(applyMechanicalStyleRefute(applyEvidenceTax(f)), ledger.scopePaths)
     )
@@ -374,7 +372,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
     if (merged.shouldEscalate) {
       ledger.verdict = 'escalated'
       ledger.escalateReason = merged.escalateReason
-      judgmentLedgerStorage.set(proj.value, ledger)
+      judgmentLedgerStorage.set(projectId, ledger)
       print(
         options,
         '## Judgment merge → ESCALATE',
@@ -388,7 +386,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
     }
 
     ledger.verdict = 'in_progress'
-    judgmentLedgerStorage.set(proj.value, ledger)
+    judgmentLedgerStorage.set(projectId, ledger)
     const next = buildNextAction(ledger, ledger.intensity)
     print(
       options,
@@ -410,10 +408,9 @@ export class JudgmentCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { projectId, ledger } = req.value
 
     const flags = parseFlags(args)
     const raw = flags.verdicts ?? flags.v ?? args.join(' ')
@@ -431,23 +428,15 @@ export class JudgmentCommands extends PrjctCommandsBase {
 
     ledger.findings = applyBatchRefutation(ledger.findings, votesById, ledger.intensity)
     // Fail-closed remaining candidates
-    ledger.findings = applyBatchRefutation(
-      ledger.findings,
-      Object.fromEntries(
-        ledger.findings
-          .filter((f) => f.status === 'candidate')
-          .map((f) => [f.id, [] as RefuteVerdict[]])
-      ),
-      ledger.intensity
-    )
+    ledger.findings = this.failCloseRemainingCandidates(ledger)
     ledger.updatedAt = getTimestamp()
     const updated = finalizeLedger(ledger, getTimestamp())
-    judgmentLedgerStorage.set(proj.value, updated)
+    judgmentLedgerStorage.set(projectId, updated)
 
     // Compound FP ghosts from refuted findings
-    const book = judgmentLedgerStorage.getGhosts(proj.value)
+    const book = judgmentLedgerStorage.getGhosts(projectId)
     const nextBook = recordRefutedAsGhosts(book, updated.findings, getTimestamp())
-    judgmentLedgerStorage.setGhosts(proj.value, nextBook)
+    judgmentLedgerStorage.setGhosts(projectId, nextBook)
 
     const stands = updated.findings.filter((f) => f.status === 'stands').length
     const refuted = updated.findings.filter((f) => f.status === 'refuted').length
@@ -469,16 +458,15 @@ export class JudgmentCommands extends PrjctCommandsBase {
   }
 
   private async fixRound(projectPath: string, options: MdOption): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { projectId, ledger } = req.value
 
     const gate = canStartFixRound(ledger)
     if (!gate.ok) {
       if (ledger.fixRound >= ledger.maxFixRounds) {
         const closed = markLeftoversOpen(ledger, getTimestamp())
-        judgmentLedgerStorage.set(proj.value, closed)
+        judgmentLedgerStorage.set(projectId, closed)
         print(
           options,
           '## Judgment fix-round',
@@ -490,7 +478,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
     }
 
     const next = advanceFixRound(ledger, getTimestamp())
-    judgmentLedgerStorage.set(proj.value, next)
+    judgmentLedgerStorage.set(projectId, next)
     const brief = buildReReviewBrief(next)
     const ranked = rankFindingsForFix(next.findings, next.scopePaths)
     print(
@@ -511,16 +499,15 @@ export class JudgmentCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { projectId, ledger } = req.value
     if (ids.length === 0) return failWith(`${status} requires at least one finding id.`, options)
 
     const skipped = markFindingsSkippedByScope(ledger, ids, status)
     const next = markFindings(ledger, ids, status, getTimestamp())
     const finalized = finalizeLedger(next, getTimestamp())
-    judgmentLedgerStorage.set(proj.value, finalized)
+    judgmentLedgerStorage.set(projectId, finalized)
     const card = buildNextAction(finalized, finalized.intensity)
     const marked = ids.filter((id) => !skipped.includes(id)).length
     print(
@@ -541,10 +528,9 @@ export class JudgmentCommands extends PrjctCommandsBase {
   }
 
   private async brief(projectPath: string, options: MdOption): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { ledger } = req.value
 
     const brief = buildReReviewBrief(ledger)
     const body = [
@@ -642,10 +628,9 @@ export class JudgmentCommands extends PrjctCommandsBase {
   }
 
   private async approve(projectPath: string, options: MdOption): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { projectId, ledger } = req.value
 
     const stampApprove = async (l: typeof ledger): Promise<{ bit: string; ok: boolean }> => {
       try {
@@ -677,7 +662,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
           options
         )
       }
-      judgmentLedgerStorage.set(proj.value, ledger)
+      judgmentLedgerStorage.set(projectId, ledger)
       print(
         options,
         '## Judgment APPROVED',
@@ -686,18 +671,10 @@ export class JudgmentCommands extends PrjctCommandsBase {
       return { success: true, ledger, verdict: 'approved', emptyAttestation: true }
     }
 
-    ledger.findings = applyBatchRefutation(
-      ledger.findings,
-      Object.fromEntries(
-        ledger.findings
-          .filter((f) => f.status === 'candidate')
-          .map((f) => [f.id, [] as RefuteVerdict[]])
-      ),
-      ledger.intensity
-    )
+    ledger.findings = this.failCloseRemainingCandidates(ledger)
     const finalized = finalizeLedger(ledger, getTimestamp())
     if (finalized.verdict !== 'approved') {
-      judgmentLedgerStorage.set(proj.value, finalized)
+      judgmentLedgerStorage.set(projectId, finalized)
       return failWith(
         `Cannot approve: verdict=${finalized.verdict}. → \`prjct judgment next\``,
         options
@@ -710,7 +687,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
         options
       )
     }
-    judgmentLedgerStorage.set(proj.value, finalized)
+    judgmentLedgerStorage.set(projectId, finalized)
     print(
       options,
       '## Judgment APPROVED',
@@ -728,15 +705,14 @@ export class JudgmentCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const proj = await requireProject(projectPath)
-    if (!proj.ok) return proj.result
-    const ledger = judgmentLedgerStorage.get(proj.value)
-    if (!ledger) return failWith('No active ledger — `prjct judgment open` first.', options)
+    const req = await this.requireLedger(projectPath, options)
+    if (!req.ok) return req.result
+    const { projectId, ledger } = req.value
 
     ledger.verdict = 'escalated'
     ledger.escalateReason = why.trim() || 'judges contradict on a material finding'
     ledger.updatedAt = getTimestamp()
-    judgmentLedgerStorage.set(proj.value, ledger)
+    judgmentLedgerStorage.set(projectId, ledger)
     print(
       options,
       '## Judgment ESCALATED',
@@ -751,6 +727,48 @@ export class JudgmentCommands extends PrjctCommandsBase {
     judgmentLedgerStorage.clear(proj.value)
     print(options, '## Judgment clear', 'Active ledger cleared (ghost FP book kept).')
     return { success: true, cleared: true }
+  }
+
+  /**
+   * `requireProject` + "is there an active ledger" in one call — the same
+   * open every subcommand that needs a ledger to already exist used to
+   * repeat (as opposed to `open`, which creates one, or `next`/`status`,
+   * which handle a missing ledger themselves rather than failing).
+   */
+  private async requireLedger(
+    projectPath: string,
+    options: MdOption
+  ): Promise<
+    | { ok: true; value: { projectId: string; ledger: JudgmentLedger } }
+    | { ok: false; result: CommandResult }
+  > {
+    const proj = await requireProject(projectPath)
+    if (!proj.ok) return proj
+    const ledger = judgmentLedgerStorage.get(proj.value)
+    if (!ledger) {
+      return {
+        ok: false,
+        result: failWith('No active ledger — `prjct judgment open` first.', options),
+      }
+    }
+    return { ok: true, value: { projectId: proj.value, ledger } }
+  }
+
+  /**
+   * Fail-closed refutation pass: any finding still `candidate` after the
+   * explicit verdicts (no votes cast) is defeated per the ledger's
+   * intensity refute-threshold — silence on a finding is not a pass.
+   */
+  private failCloseRemainingCandidates(ledger: JudgmentLedger): JudgmentLedger['findings'] {
+    return applyBatchRefutation(
+      ledger.findings,
+      Object.fromEntries(
+        ledger.findings
+          .filter((f) => f.status === 'candidate')
+          .map((f) => [f.id, [] as RefuteVerdict[]])
+      ),
+      ledger.intensity
+    )
   }
 }
 

@@ -14,6 +14,16 @@ import { requireWorkflow } from '../../guards'
 import { parseAction, searchRules } from '../intent'
 import { MAX_LISTED_MATCHES, newRuleDefaults, RULE_POSITIONS, type RulePosition } from './_shared'
 
+/**
+ * Everything in `input` after the matched workflow command name — the
+ * remaining "before|after ..." / instruction text a rule action still has
+ * to parse. `name` may not start at index 0 (e.g. leading whitespace), so
+ * this locates it rather than assuming a fixed offset.
+ */
+function restAfterWorkflowName(input: string, name: string): string {
+  return input.slice(input.indexOf(name) + name.length).trim()
+}
+
 export async function workflowAdd(
   input: string,
   projectId: string,
@@ -73,7 +83,7 @@ export async function workflowGate(
   const guard = requireWorkflow(projectId, command, options)
   if (!guard.ok) return guard.result
 
-  const actionInput = input.slice(input.indexOf(guard.value.name) + guard.value.name.length).trim()
+  const actionInput = restAfterWorkflowName(input, guard.value.name)
   const [action] = parseAction(actionInput)
 
   if (!action) {
@@ -115,7 +125,7 @@ export async function workflowInstruction(
   const guard = requireWorkflow(projectId, command, options)
   if (!guard.ok) return guard.result
 
-  const afterCommand = input.slice(input.indexOf(guard.value.name) + guard.value.name.length).trim()
+  const afterCommand = restAfterWorkflowName(input, guard.value.name)
   const positionMatch = afterCommand.match(/^(before|after)\s+/i)
   if (!positionMatch) {
     return failWith(

@@ -12,7 +12,7 @@ import type { ContextSection, NestedContext, ResolvedContext } from '../../types
 import * as fileHelper from '../../utils/file-helper'
 import {
   buildInheritanceChain,
-  computeDepth,
+  buildNestedFileBase,
   findParentByDir,
   pickBestMatchForPath,
   scanForNestedFiles,
@@ -71,14 +71,8 @@ export class ContextDiscovery {
   ): Promise<NestedContext> {
     const content = await fs.readFile(filePath, 'utf-8')
     return {
-      path: filePath,
-      relativePath: path.relative(this.rootPath, filePath),
-      depth: computeDepth(this.rootPath, filePath),
-      parent,
-      children: [],
-      content,
+      ...buildNestedFileBase<NestedContext>(filePath, parent, pkg, this.rootPath, content),
       sections: parseSections(content),
-      package: pkg,
     }
   }
 }

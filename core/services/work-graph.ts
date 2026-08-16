@@ -35,6 +35,30 @@ export interface ReadyItem {
   unblocks: number
 }
 
+interface ReadyItemRow {
+  id: string
+  description: string
+  type: string | null
+  priority: string | null
+  section: string | null
+  claimed_by: string | null
+  created_at: string
+}
+
+/** Map a queue_tasks row to a `ReadyItem`. `unblocks` defaults to 0 for callers (like `allOpen`) that don't compute it. */
+function rowToReadyItem(r: ReadyItemRow, unblocks = 0): ReadyItem {
+  return {
+    id: r.id,
+    description: r.description,
+    type: r.type,
+    priority: r.priority,
+    section: r.section,
+    claimedBy: r.claimed_by,
+    createdAt: r.created_at,
+    unblocks,
+  }
+}
+
 /** True when the referenced item is finished, whichever table owns it. */
 const OPEN_BLOCKER_SQL = `
   SELECT d.from_id FROM work_dependencies d
@@ -88,16 +112,7 @@ class WorkGraph {
    * ranked by how much they unblock, then priority, then age.
    */
   ready(projectId: string, opts?: { unclaimedOnly?: boolean; limit?: number }): ReadyItem[] {
-    const rows = prjctDb.query<{
-      id: string
-      description: string
-      type: string | null
-      priority: string | null
-      section: string | null
-      claimed_by: string | null
-      created_at: string
-      unblocks: number
-    }>(
+    const rows = prjctDb.query<ReadyItemRow & { unblocks: number }>(
       projectId,
       `SELECT q.id, q.description, q.type, q.priority, q.section, q.claimed_by, q.created_at,
               (SELECT COUNT(*) FROM work_dependencies u
@@ -112,16 +127,7 @@ class WorkGraph {
        LIMIT ?`,
       opts?.limit ?? 20
     )
-    return rows.map((r) => ({
-      id: r.id,
-      description: r.description,
-      type: r.type,
-      priority: r.priority,
-      section: r.section,
-      claimedBy: r.claimed_by,
-      createdAt: r.created_at,
-      unblocks: r.unblocks,
-    }))
+    return rows.map((r) => rowToReadyItem(r, r.unblocks))
   }
 
   /** Deterministic "what now": top unclaimed item of the frontier. */
@@ -194,28 +200,11 @@ class WorkGraph {
   }
 
   private allOpen(projectId: string): ReadyItem[] {
-    const rows = prjctDb.query<{
-      id: string
-      description: string
-      type: string | null
-      priority: string | null
-      section: string | null
-      claimed_by: string | null
-      created_at: string
-    }>(
+    const rows = prjctDb.query<ReadyItemRow>(
       projectId,
       'SELECT id, description, type, priority, section, claimed_by, created_at FROM queue_tasks WHERE completed = 0'
     )
-    return rows.map((r) => ({
-      id: r.id,
-      description: r.description,
-      type: r.type,
-      priority: r.priority,
-      section: r.section,
-      claimedBy: r.claimed_by,
-      createdAt: r.created_at,
-      unblocks: 0,
-    }))
+    return rows.map((r) => rowToReadyItem(r))
   }
 
   /** Persist the triage-time decomposition record (Task Master's report). */

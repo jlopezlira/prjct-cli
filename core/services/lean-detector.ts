@@ -21,6 +21,7 @@ import configManager from '../infrastructure/config-manager'
 import { projectMemory } from '../memory/project-memory'
 import type { LocalConfig } from '../types/config'
 import { exitCodeMeans, runGit, throwProc } from '../utils/exec'
+import { collectFromPersistedEvents } from './persisted-events'
 
 const LEAN_DEBT_SOURCE_TAG = 'lean-detector'
 const LEAN_DEBT_PATTERN_TAG = 'lean-debt-growth'
@@ -127,37 +128,22 @@ async function measureLeanMarkers(projectPath: string): Promise<number> {
   }, 0)
 }
 
-interface DebtMemoryRow {
-  data: string
-}
-
 /** Read the most recent lean-debt snapshot we persisted. Returns 0 on the
  *  first run so the comparison (gated on previous > 0) never flags noise. */
 function collectPreviousSnapshot(projectId: string): number {
-  try {
-    const { prjctDb } = require('../storage/database') as typeof import('../storage/database')
-    const rows = prjctDb.query<DebtMemoryRow>(
-      projectId,
-      "SELECT data FROM events WHERE type = 'memory.remember.lean-debt' ORDER BY id DESC LIMIT 50"
-    )
-    for (const row of rows) {
-      const parsed = (() => {
-        try {
-          return JSON.parse(row.data) as unknown
-        } catch {
-          return null
-        }
-      })()
-      if (!parsed || typeof parsed !== 'object') continue
-      const tags = (parsed as { tags?: Record<string, unknown> }).tags
-      if (!tags || tags.source !== LEAN_DEBT_SOURCE_TAG) continue
+  const totals = collectFromPersistedEvents<number>(
+    projectId,
+    "SELECT data FROM events WHERE type = 'memory.remember.lean-debt' ORDER BY id DESC LIMIT 50",
+    [],
+    (tags) => {
+      if (tags.source !== LEAN_DEBT_SOURCE_TAG) return undefined
       const total = typeof tags.total === 'string' ? Number.parseInt(tags.total, 10) : 0
-      if (Number.isFinite(total)) return total
+      return Number.isFinite(total) ? total : undefined
     }
-  } catch {
-    /* fall through — best-effort */
-  }
-  return 0
+  )
+  // Rows come back newest-first; the first qualifying total is the most
+  // recent snapshot (mirrors the original loop's early return).
+  return totals[0] ?? 0
 }
 
 // Test exports

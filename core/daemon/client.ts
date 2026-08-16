@@ -434,3 +434,25 @@ export async function restartDaemon(): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * Force a fresh daemon lifecycle: stop the current daemon (falling back to
+ * a force-kill), or — when none is running — clean up any stale PID/socket
+ * files, then spawn a new one. Unlike {@link restartDaemon} (best-effort,
+ * a no-op when no daemon is running — the semantics `login`/`logout` want),
+ * this always attempts to end with a live daemon: the explicit-command
+ * semantics behind `prjct daemon restart`, the top-level `prjct restart`
+ * shortcut, and the updater's post-install restart phase.
+ */
+export async function forceRestartDaemon(): Promise<boolean> {
+  if (await isDaemonRunning()) {
+    const stopped = await stopDaemon()
+    if (!stopped) forceKillDaemon()
+    // Give the OS a beat to release the socket before respawning.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  } else {
+    // Clean up any stale files
+    forceKillDaemon()
+  }
+  return await spawnDaemon()
+}

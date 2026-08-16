@@ -17,6 +17,7 @@ import { sha256 } from '../utils/hash'
 import log from '../utils/logger'
 import { VERSION } from '../utils/version'
 import { detectCodex } from './ai-provider'
+import { writeSkillIfChanged } from './skill-install-helper'
 
 const CODEX_SKILL_META_MARKER = 'prjct-codex-router'
 
@@ -95,6 +96,7 @@ export function buildCodexSkillContent(templateContent: string): {
 export async function installCodexSkill(): Promise<{
   success: boolean
   action: string | null
+  path?: string
 }> {
   try {
     const skillMdPath = getCodexSkillPath()
@@ -110,28 +112,24 @@ export async function installCodexSkill(): Promise<{
       return { success: false, action: null }
     }
 
-    const built = buildCodexSkillContent(templateContent)
-
-    const bytes = Buffer.byteLength(built.content, 'utf-8')
-    if (bytes > CODEX_SKILL_MAX_BYTES) {
-      // Install anyway (Codex may relax the cap), but surface it loudly:
-      // over the cap, Codex rejects the whole skill with no error shown.
-      log.warn(
-        `Codex SKILL.md is ${bytes} bytes — over Codex's ~${CODEX_SKILL_MAX_BYTES}-byte hard limit; the skill may be rejected. Trim editor-surfaces.ts.`
-      )
-    }
-
-    if (skillExists) {
-      const existing = await fs.readFile(skillMdPath, 'utf-8').catch(() => '')
-      if (existing === built.content) {
-        return { success: true, action: 'unchanged' }
-      }
-    }
-
-    // Write SKILL.md
-    await fs.writeFile(skillMdPath, built.content, 'utf-8')
-
-    return { success: true, action: skillExists ? 'updated' : 'created' }
+    return await writeSkillIfChanged({
+      skillMdPath,
+      skillExists,
+      templateContent,
+      build: (tpl) => {
+        const built = buildCodexSkillContent(tpl)
+        const bytes = Buffer.byteLength(built.content, 'utf-8')
+        if (bytes > CODEX_SKILL_MAX_BYTES) {
+          // Install anyway (Codex may relax the cap), but surface it loudly:
+          // over the cap, Codex rejects the whole skill with no error shown.
+          log.warn(
+            `Codex SKILL.md is ${bytes} bytes — over Codex's ~${CODEX_SKILL_MAX_BYTES}-byte hard limit; the skill may be rejected. Trim editor-surfaces.ts.`
+          )
+        }
+        return built
+      },
+      logLabel: 'Codex',
+    })
   } catch (error) {
     log.warn(`Codex skill warning: ${getErrorMessage(error)}`)
     return { success: false, action: null }

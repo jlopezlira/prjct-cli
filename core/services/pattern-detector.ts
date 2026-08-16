@@ -28,6 +28,7 @@ import configManager from '../infrastructure/config-manager'
 import { projectMemory } from '../memory/project-memory'
 import type { LocalConfig } from '../types/config'
 import { exitCodeMeans, runGit, throwProc } from '../utils/exec'
+import { collectFromPersistedEvents } from './persisted-events'
 
 const HOT_FILE_PATTERN_TAG = 'hot-file'
 const HOT_FILE_SOURCE_TAG = 'pattern-detector-auto'
@@ -271,11 +272,6 @@ interface RecurringBug {
   occurrences: number
 }
 
-interface GotchaRow {
-  data: string
-  timestamp: string
-}
-
 /**
  * Walk the last RECURRING_WINDOW_DAYS of `gotcha` memory entries.
  * Group by `topic` tag (or by `area` tag if topic is missing). Any
@@ -285,45 +281,32 @@ interface GotchaRow {
  * are too noisy to group reliably.
  */
 function detectRecurringBugs(projectId: string): RecurringBug[] {
-  try {
-    const { prjctDb } = require('../storage/database') as typeof import('../storage/database')
-    const cutoff = new Date(Date.now() - RECURRING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
-    const rows = prjctDb.query<GotchaRow>(
-      projectId,
-      "SELECT data, timestamp FROM events WHERE type = 'memory.remember.gotcha' AND timestamp >= ? ORDER BY id DESC LIMIT 500",
-      cutoff
-    )
-    const counts = new Map<string, number>()
-    for (const row of rows) {
-      const parsed: unknown = (() => {
-        try {
-          return JSON.parse(row.data)
-        } catch {
-          return null
-        }
-      })()
-      if (!parsed || typeof parsed !== 'object') continue
-      const tags = (parsed as { tags?: Record<string, unknown> }).tags
-      if (!tags) continue
+  const cutoff = new Date(Date.now() - RECURRING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  const keys = collectFromPersistedEvents<string>(
+    projectId,
+    "SELECT data, timestamp FROM events WHERE type = 'memory.remember.gotcha' AND timestamp >= ? ORDER BY id DESC LIMIT 500",
+    [cutoff],
+    (tags) => {
       // Skip auto-captured gotchas — they'd inflate the count without
       // adding signal. We only care about user-asserted gotchas.
-      if (tags.source === 'transcript-auto') continue
+      if (tags.source === 'transcript-auto') return undefined
       const topic = typeof tags.topic === 'string' ? tags.topic : undefined
       const area = typeof tags.area === 'string' ? tags.area : undefined
       const key = topic ?? area
-      if (!key) continue
-      counts.set(key, (counts.get(key) ?? 0) + 1)
+      return key || undefined
     }
-    const out: RecurringBug[] = []
-    for (const [topic, occurrences] of counts) {
-      if (occurrences < RECURRING_THRESHOLD) continue
-      out.push({ topic, occurrences })
-    }
-    out.sort((a, b) => b.occurrences - a.occurrences)
-    return out
-  } catch {
-    return []
+  )
+  const counts = new Map<string, number>()
+  for (const key of keys) {
+    counts.set(key, (counts.get(key) ?? 0) + 1)
   }
+  const out: RecurringBug[] = []
+  for (const [topic, occurrences] of counts) {
+    if (occurrences < RECURRING_THRESHOLD) continue
+    out.push({ topic, occurrences })
+  }
+  out.sort((a, b) => b.occurrences - a.occurrences)
+  return out
 }
 
 // Tech-debt growth detection
@@ -358,47 +341,28 @@ async function measureTechDebt(projectPath: string): Promise<DebtSnapshot> {
   return { totalCount: total }
 }
 
-interface DebtMemoryRow {
-  data: string
-}
-
 /**
  * Read the most recent tech-debt snapshot we persisted. Returns 0 if
  * we've never measured (first run); the comparison gates on previous>0
  * so first-run never flags noise.
  */
 function collectPreviousDebtSnapshot(projectId: string): number {
-  try {
-    const { prjctDb } = require('../storage/database') as typeof import('../storage/database')
-    const rows = prjctDb.query<DebtMemoryRow>(
-      projectId,
-      "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 50"
-    )
-    for (const row of rows) {
-      const parsed: unknown = (() => {
-        try {
-          return JSON.parse(row.data)
-        } catch {
-          return null
-        }
-      })()
-      if (!parsed || typeof parsed !== 'object') continue
-      const tags = (parsed as { tags?: Record<string, unknown> }).tags
-      if (!tags || tags.source !== TECH_DEBT_SOURCE_TAG) continue
+  const totals = collectFromPersistedEvents<number>(
+    projectId,
+    "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 50",
+    [],
+    (tags) => {
+      if (tags.source !== TECH_DEBT_SOURCE_TAG) return undefined
       const total = typeof tags.total === 'string' ? Number.parseInt(tags.total, 10) : 0
-      if (Number.isFinite(total)) return total
+      return Number.isFinite(total) ? total : undefined
     }
-  } catch {
-    /* fall through */
-  }
-  return 0
+  )
+  // Rows come back newest-first; the first qualifying total is the most
+  // recent snapshot (mirrors the original loop's early return).
+  return totals[0] ?? 0
 }
 
 // Dedup against previously persisted insights (per detector)
-
-interface MemoryRow {
-  data: string
-}
 
 /**
  * Pull recent auto-persisted hot-file insights and return the set of
@@ -407,43 +371,30 @@ interface MemoryRow {
  * Stop hook call. The next window will let us re-mark naturally.
  */
 function collectAlreadyMarkedHotFiles(projectId: string): Set<string> {
-  const out = new Set<string>()
-  try {
-    const { prjctDb } = require('../storage/database') as typeof import('../storage/database')
-    const rows = prjctDb.query<MemoryRow>(
-      projectId,
-      "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 200"
-    )
-    const cutoffMs = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000
-    for (const row of rows) {
-      const parsed: unknown = (() => {
-        try {
-          return JSON.parse(row.data)
-        } catch {
-          return null
-        }
-      })()
-      if (!parsed || typeof parsed !== 'object') continue
-      const tags = (parsed as { tags?: Record<string, unknown> }).tags
-      if (!tags || tags.source !== HOT_FILE_SOURCE_TAG) continue
+  const cutoffMs = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000
+  // Best-effort: a missing dedup index just means a duplicate this turn.
+  // The user can prune.
+  const files = collectFromPersistedEvents<string>(
+    projectId,
+    "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 200",
+    [],
+    (tags, parsed) => {
+      if (tags.source !== HOT_FILE_SOURCE_TAG) return undefined
       // Tags carry the marker; the row's timestamp is the event's
       // outer field, not in `data`. Conservative: if we have a hit on
       // source+pattern+file, treat as marked regardless of age and let
       // the LIMIT 200 window handle staleness.
       const file = tags.file
-      const ts = (parsed as { rememberedAt?: unknown }).rememberedAt
-      if (typeof file !== 'string') continue
+      const ts = parsed.rememberedAt
+      if (typeof file !== 'string') return undefined
       if (typeof ts === 'string') {
         const t = Date.parse(ts)
-        if (!Number.isNaN(t) && t < cutoffMs) continue
+        if (!Number.isNaN(t) && t < cutoffMs) return undefined
       }
-      out.add(file)
+      return file
     }
-  } catch {
-    // Best-effort: a missing dedup index just means a duplicate this
-    // turn. The user can prune.
-  }
-  return out
+  )
+  return new Set(files)
 }
 
 /**
@@ -451,38 +402,24 @@ function collectAlreadyMarkedHotFiles(projectId: string): Set<string> {
  * insights. Keyed by `topic` (the gotcha tag we grouped on).
  */
 function collectAlreadyMarkedRecurringBugs(projectId: string): Set<string> {
-  const out = new Set<string>()
-  try {
-    const { prjctDb } = require('../storage/database') as typeof import('../storage/database')
-    const rows = prjctDb.query<MemoryRow>(
-      projectId,
-      "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 200"
-    )
-    const cutoffMs = Date.now() - RECURRING_WINDOW_DAYS * 24 * 60 * 60 * 1000
-    for (const row of rows) {
-      const parsed: unknown = (() => {
-        try {
-          return JSON.parse(row.data)
-        } catch {
-          return null
-        }
-      })()
-      if (!parsed || typeof parsed !== 'object') continue
-      const tags = (parsed as { tags?: Record<string, unknown> }).tags
-      if (!tags || tags.source !== RECURRING_BUG_SOURCE_TAG) continue
+  const cutoffMs = Date.now() - RECURRING_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  const topics = collectFromPersistedEvents<string>(
+    projectId,
+    "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 200",
+    [],
+    (tags, parsed) => {
+      if (tags.source !== RECURRING_BUG_SOURCE_TAG) return undefined
       const topic = tags.topic
-      const ts = (parsed as { rememberedAt?: unknown }).rememberedAt
-      if (typeof topic !== 'string') continue
+      const ts = parsed.rememberedAt
+      if (typeof topic !== 'string') return undefined
       if (typeof ts === 'string') {
         const t = Date.parse(ts)
-        if (!Number.isNaN(t) && t < cutoffMs) continue
+        if (!Number.isNaN(t) && t < cutoffMs) return undefined
       }
-      out.add(topic)
+      return topic
     }
-  } catch {
-    /* best-effort */
-  }
-  return out
+  )
+  return new Set(topics)
 }
 
 // Test exports

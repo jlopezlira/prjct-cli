@@ -30,7 +30,7 @@ import { LATEST_SCHEMA_VERSION } from '../storage/database/migrations'
 import { getErrorMessage, isNotFoundError } from '../types/fs'
 import type { AIProviderConfig, AIProviderName } from '../types/provider'
 import { getTimeout } from '../utils/constants'
-import { fileExists } from '../utils/file-helper'
+import { fileExists, readExistingFileOrEmpty } from '../utils/file-helper'
 import { ensureGrokMcpServer } from '../utils/grok-mcp'
 import log from '../utils/logger'
 import { VERSION } from '../utils/version'
@@ -341,13 +341,7 @@ async function installGeminiGlobalConfig(): Promise<{ success: boolean; action: 
       return { success: false, action: null }
     }
 
-    const existingFile = await fs
-      .readFile(globalConfigPath, 'utf-8')
-      .then((content) => ({ content, exists: true }))
-      .catch((error) => {
-        if (isNotFoundError(error)) return { content: '', exists: false }
-        throw error
-      })
+    const existingFile = await readExistingFileOrEmpty(globalConfigPath)
 
     const startMarker = '<!-- prjct:start - DO NOT REMOVE THIS MARKER -->'
     const endMarker = '<!-- prjct:end - DO NOT REMOVE THIS MARKER -->'

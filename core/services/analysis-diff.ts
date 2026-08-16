@@ -10,6 +10,7 @@
 
 import type { AnalysisSchema } from '../schemas/analysis'
 import type { AnalysisDiff, AnalysisDiffItem } from '../types/services/extracted'
+import { summarizeDiffItems } from './diff-summary'
 
 // Diff Logic
 
@@ -79,17 +80,7 @@ export function generateAnalysisDiff(before: AnalysisSchema, after: AnalysisSche
   const afterAntiNames = after.antiPatterns.map((a) => a.issue)
   diffStringArray('Anti-patterns', beforeAntiNames, afterAntiNames, items)
 
-  const added = items.filter((i) => i.type === 'added').length
-  const removed = items.filter((i) => i.type === 'removed').length
-  const changed = items.filter((i) => i.type === 'changed').length
-
-  return {
-    hasChanges: items.length > 0,
-    items,
-    summary: { added, removed, changed },
-    beforeCommit: before.commitHash ?? null,
-    afterCommit: after.commitHash ?? null,
-  }
+  return summarizeDiffItems(items, before.commitHash ?? null, after.commitHash ?? null)
 }
 
 // Formatting

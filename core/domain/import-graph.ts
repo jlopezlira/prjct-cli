@@ -75,22 +75,8 @@ export async function buildGraph(projectPath: string): Promise<ImportGraph> {
 
   // Process files in parallel batches of 50
   const results = await batchProcess(files, 50, async (filePath) => {
-    try {
-      const content = await fs.readFile(path.join(projectPath, filePath), 'utf-8')
-      const sources = extractImportSources(content)
-      const resolved: string[] = []
-
-      for (const source of sources) {
-        const target = await resolveImport(source, filePath, projectPath)
-        if (target && target !== filePath) {
-          resolved.push(target)
-        }
-      }
-
-      return resolved.length > 0 ? { filePath, imports: resolved } : null
-    } catch {
-      return null
-    }
+    const result = await importsForFile(projectPath, filePath)
+    return result && result.imports.length > 0 ? result : null
   })
 
   for (const { filePath, imports } of results) {

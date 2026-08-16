@@ -22,9 +22,9 @@
  * wrap the call themselves.
  */
 
-import crypto from 'node:crypto'
 import { syncEventBus } from '../events/sync-events'
 import type { SyncEvent } from '../types/events'
+import { hashPayload } from '../utils/hash'
 export type CrudEventType = 'upsert' | 'delete'
 
 export interface PublishCrudArgs {
@@ -50,27 +50,6 @@ export interface PublishCrudArgs {
 const LEGACY_TYPE_OF: Record<CrudEventType, string> = {
   upsert: 'updated',
   delete: 'deleted',
-}
-
-/**
- * Hash the payload deterministically. Object key order matters here —
- * we sort top-level keys before stringifying so two equivalent
- * payloads produce the same hash.
- */
-export function hashPayload(data: unknown): string {
-  const canonical =
-    data && typeof data === 'object' && !Array.isArray(data)
-      ? JSON.stringify(sortKeys(data as Record<string, unknown>))
-      : JSON.stringify(data)
-  return crypto.createHash('sha256').update(canonical).digest('hex')
-}
-
-function sortKeys(obj: Record<string, unknown>): Record<string, unknown> {
-  const sorted: Record<string, unknown> = {}
-  for (const k of Object.keys(obj).sort()) {
-    sorted[k] = obj[k]
-  }
-  return sorted
 }
 
 /**

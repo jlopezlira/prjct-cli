@@ -377,12 +377,7 @@ class SyncClient {
 
       // Retry on server errors (5xx) but not client errors (4xx) — idempotent only
       if (idempotent && response.status >= 500 && retryCount < this.retryConfig.maxRetries) {
-        const delay = Math.min(
-          this.retryConfig.baseDelayMs * 2 ** retryCount,
-          this.retryConfig.maxDelayMs
-        )
-        await this.sleep(delay)
-        return this.fetchWithRetry(url, options, retryCount + 1)
+        return this.scheduleRetry(url, options, retryCount)
       }
 
       return response
@@ -399,12 +394,7 @@ class SyncClient {
       // Retry on network errors — idempotent only (a POST may have landed
       // server-side before the connection dropped; replaying duplicates it).
       if (idempotent && retryCount < this.retryConfig.maxRetries) {
-        const delay = Math.min(
-          this.retryConfig.baseDelayMs * 2 ** retryCount,
-          this.retryConfig.maxDelayMs
-        )
-        await this.sleep(delay)
-        return this.fetchWithRetry(url, options, retryCount + 1)
+        return this.scheduleRetry(url, options, retryCount)
       }
 
       throw this.createError(
@@ -412,6 +402,24 @@ class SyncClient {
         error instanceof Error ? error.message : 'Network request failed'
       )
     }
+  }
+
+  /**
+   * Wait out the exponential backoff window, then replay the request with
+   * an incremented retry count. Shared by both the 5xx branch and the
+   * network-error branch of `fetchWithRetry`.
+   */
+  private async scheduleRetry(
+    url: string,
+    options: RequestInit,
+    retryCount: number
+  ): Promise<Response> {
+    const delay = Math.min(
+      this.retryConfig.baseDelayMs * 2 ** retryCount,
+      this.retryConfig.maxDelayMs
+    )
+    await this.sleep(delay)
+    return this.fetchWithRetry(url, options, retryCount + 1)
   }
 
   private async parseErrorResponse(response: Response): Promise<SyncClientError> {

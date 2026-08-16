@@ -423,3 +423,30 @@ export async function gitStdout(
   if (infra) throw infra
   return null
 }
+
+/** Uncommitted + untracked files vs HEAD, sorted. Typed exit → skip that half
+ *  (still returns what it could read); infra failure (timeout/spawn) throws. */
+export async function listChangedFiles(projectPath: string): Promise<string[]> {
+  const files = new Set<string>()
+  const diff = await runGit(['diff', '--name-only', 'HEAD'], { cwd: projectPath })
+  if (diff.ok) {
+    for (const line of diff.stdout.split('\n')) {
+      const value = line.trim()
+      if (value) files.add(value)
+    }
+  } else if (diff.kind !== 'exit') {
+    throwProc(diff)
+  }
+  const untracked = await runGit(['ls-files', '--others', '--exclude-standard'], {
+    cwd: projectPath,
+  })
+  if (untracked.ok) {
+    for (const line of untracked.stdout.split('\n')) {
+      const value = line.trim()
+      if (value) files.add(value)
+    }
+  } else if (untracked.kind !== 'exit') {
+    throwProc(untracked)
+  }
+  return [...files].sort()
+}

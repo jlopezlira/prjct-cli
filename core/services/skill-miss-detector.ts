@@ -34,6 +34,7 @@ import fs from 'node:fs/promises'
 import { projectMemory } from '../memory/project-memory'
 import { getModifiedFiles } from '../session/git-helpers'
 import { crewRunStorage } from '../storage/crew-run-storage'
+import { projectIdFromPath, textOf } from './hot-path-helpers'
 import { parseTranscriptJsonl, type TranscriptJsonlLine } from './transcript-jsonl'
 import { usefulnessService } from './usefulness'
 
@@ -344,24 +345,6 @@ function transcriptTextOf(lines: TranscriptLine[]): string {
   return parts.join('\n').toLowerCase()
 }
 
-function textOf(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => {
-        if (typeof block === 'string') return block
-        if (block && typeof block === 'object' && 'text' in block) {
-          const t = (block as { text?: unknown }).text
-          return typeof t === 'string' ? t : ''
-        }
-        return ''
-      })
-      .join('\n')
-      .trim()
-  }
-  return ''
-}
-
 function tokenize(text: string): Set<string> {
   const out = new Set<string>()
   for (const rawTok of text.toLowerCase().split(/[^a-z0-9]+/)) {
@@ -464,20 +447,6 @@ function existingSkillMissKeys(projectId: string): Set<string> {
     return keys
   } catch {
     return new Set()
-  }
-}
-
-function projectIdFromPath(projectPath: string): string | null {
-  // Lightweight sync read — mirrors friction-detector, avoids the full
-  // config-manager round trip on the Stop hot path.
-  try {
-    const fs2 = require('node:fs') as typeof import('node:fs')
-    const path2 = require('node:path') as typeof import('node:path')
-    const file = path2.join(projectPath, '.prjct', 'prjct.config.json')
-    const parsed = JSON.parse(fs2.readFileSync(file, 'utf-8')) as { projectId?: string }
-    return parsed.projectId ?? null
-  } catch {
-    return null
   }
 }
 

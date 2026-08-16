@@ -19,11 +19,12 @@ import type { CommandResult } from '../types/commands'
 import type { LocalConfig } from '../types/config'
 import { getErrorMessage } from '../types/fs'
 import { execAsync } from '../utils/exec'
-import { failHard, failWith } from '../utils/md-aware'
+import { failWith } from '../utils/md-aware'
 import { mdOutput } from '../utils/md-formatter'
 import out from '../utils/output'
 import { detectProjectCommands } from '../utils/project-commands'
 import { PrjctCommandsBase } from './base'
+import { parseModeSubcommand, requireProjectConfig } from './mode-command-helpers'
 
 type TddMode = 'off' | 'assist' | 'strict'
 const TDD_MODES: readonly TddMode[] = ['off', 'assist', 'strict']
@@ -34,25 +35,21 @@ export class TddCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: MdOption = {}
   ): Promise<CommandResult> {
-    const parts = (input ?? '').trim().split(/\s+/).filter(Boolean)
-    const sub = (parts[0] ?? '').toLowerCase()
-
-    if (!sub || sub === 'status' || sub === 'show') return this.showStatus(projectPath, options)
-    if ((TDD_MODES as readonly string[]).includes(sub)) {
-      return this.setMode(sub as TddMode, projectPath, options)
-    }
-    if (sub === 'check') return this.check(projectPath, options)
+    const parsed = parseModeSubcommand(input, TDD_MODES)
+    if (parsed.kind === 'status') return this.showStatus(projectPath, options)
+    if (parsed.kind === 'mode') return this.setMode(parsed.mode as TddMode, projectPath, options)
+    if (parsed.sub === 'check') return this.check(projectPath, options)
     return failWith(
-      `Unknown tdd subcommand "${sub}". Use: check, or ${TDD_MODES.join('|')}.`,
+      `Unknown tdd subcommand "${parsed.sub}". Use: check, or ${TDD_MODES.join('|')}.`,
       options
     )
   }
 
   /** Effective mode + the detected test command (what `check`/`ship` use). */
   private async showStatus(projectPath: string, options: MdOption): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     const mode = effectiveTddMode(config)
     const detected = await detectProjectCommands(projectPath).catch(() => null)
@@ -84,9 +81,9 @@ export class TddCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     config.tdd = { mode }
     await configManager.writeConfig(projectPath, config)

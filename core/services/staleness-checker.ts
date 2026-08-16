@@ -206,13 +206,7 @@ class StalenessChecker {
 
     // Wrap details in a box
     if (details.length > 0) {
-      const maxLen = Math.max(...details.map((l) => l.length))
-      const border = '─'.repeat(maxLen + 2)
-      lines.push(`┌${border}┐`)
-      for (const detail of details) {
-        lines.push(`│ ${detail.padEnd(maxLen)} │`)
-      }
-      lines.push(`└${border}┘`)
+      lines.push(...boxLines(details))
     }
 
     if (status.significantChanges.length > 0) {
@@ -278,13 +272,7 @@ class StalenessChecker {
     details.push(`Idle:           ${info.expiresIn} until timeout`)
 
     if (details.length > 0) {
-      const maxLen = Math.max(...details.map((l) => l.length))
-      const border = '─'.repeat(maxLen + 2)
-      lines.push(`┌${border}┐`)
-      for (const detail of details) {
-        lines.push(`│ ${detail.padEnd(maxLen)} │`)
-      }
-      lines.push(`└${border}┘`)
+      lines.push(...boxLines(details))
     }
 
     return lines.join('\n')
@@ -304,6 +292,13 @@ class StalenessChecker {
     }
     return `⚠️  Context may be stale. Run \`prjct sync\``
   }
+}
+
+/** Wrap `details` lines in a box-drawing border sized to the longest line. */
+function boxLines(details: string[]): string[] {
+  const maxLen = Math.max(...details.map((l) => l.length))
+  const border = '─'.repeat(maxLen + 2)
+  return [`┌${border}┐`, ...details.map((detail) => `│ ${detail.padEnd(maxLen)} │`), `└${border}┘`]
 }
 
 // EXPORTS

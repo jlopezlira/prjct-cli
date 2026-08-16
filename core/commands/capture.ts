@@ -18,12 +18,13 @@
  */
 
 import { projectMemory } from '../memory/project-memory'
-import { evaluateMemoryContent } from '../services/trust-boundary'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
 import { failHard } from '../utils/md-aware'
 import out from '../utils/output'
+import { parseFlagTags } from '../utils/tags'
 import { PrjctCommandsBase } from './base'
+import { requireTrustedMemoryContent } from './guards'
 
 export class CaptureCommands extends PrjctCommandsBase {
   /**
@@ -46,19 +47,8 @@ export class CaptureCommands extends PrjctCommandsBase {
 
       const text = content.trim()
 
-      const trust = evaluateMemoryContent(text, { force: options.force })
-      if (!trust.allow) {
-        out.fail(trust.denyMessage)
-        return {
-          success: false,
-          error:
-            trust.kind === 'secrets'
-              ? 'Secret-like content detected'
-              : trust.kind === 'prompt_injection'
-                ? 'Prompt-injection-like content detected'
-                : trust.reason,
-        }
-      }
+      const trustCheck = requireTrustedMemoryContent(text, { force: options.force })
+      if (!trustCheck.ok) return trustCheck.result
 
       const tags = parseFlagTags(options.tags)
 
@@ -114,15 +104,4 @@ export class CaptureCommands extends PrjctCommandsBase {
       return failHard(msg)
     }
   }
-}
-
-function parseFlagTags(raw: string | undefined): Record<string, string> {
-  if (!raw) return {}
-  const tags: Record<string, string> = {}
-  for (const token of raw.split(',')) {
-    const pair = token.trim()
-    const idx = pair.indexOf(':')
-    if (idx > 0) tags[pair.slice(0, idx)] = pair.slice(idx + 1)
-  }
-  return tags
 }

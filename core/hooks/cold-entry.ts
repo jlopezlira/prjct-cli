@@ -28,51 +28,19 @@
  */
 
 import { spawn } from 'node:child_process'
-import { readSync } from 'node:fs'
-import { isatty } from 'node:tty'
+import { readStdinRaw } from './_shared'
 import { getHookRunner } from './registry'
 
 /** Env flag: this process only exists to finish afterEmit (parent already responded). */
 const AFTER_EMIT_ENV = 'PRJCT_HOOK_AFTER_EMIT'
 
 /**
- * Sync-read stdin (the hook event JSON) via fs.readSync on fd 0 directly —
- * never READS through `process.stdin`, whose stream wrapper costs event-loop
- * turnaround per hook. We still touch `process.stdin.fd` once up front: on
- * node (the production runtime) creating the wrapper flips fd 0
- * non-blocking, so an open-but-empty pipe yields EAGAIN and the timeoutMs
- * deadline below is REAL — a host that opens stdin but never closes degrades
- * to whatever arrived instead of hanging until the host's hook-timeout kill.
- * On bun (dev-only) the fd stays blocking and the deadline only governs
- * EAGAIN retries; the host-side hook timeout remains the backstop there.
- * Retries sleep ~1ms via Atomics.wait so a slow-to-flush host doesn't
- * busy-spin. Mirrors bin/prjct.ts `readStdinSync`.
+ * Sync-read stdin (the hook event JSON) within `timeoutMs`. Thin raw-string
+ * wrapper around `_shared.ts`'s `readStdinRaw` — see that function for the
+ * fd/EAGAIN/Atomics.wait rationale. Mirrors bin/prjct.ts `readStdinSync`.
  */
 function readStdinSync(timeoutMs: number): string {
-  if (isatty(0)) return ''
-  try {
-    void process.stdin.fd
-  } catch {
-    // stdin fd unavailable — readSync below fails and degrades to ''
-  }
-  const deadline = Date.now() + timeoutMs
-  const sleeper = new Int32Array(new SharedArrayBuffer(4))
-  const buf = Buffer.alloc(65536)
-  const parts: Buffer[] = []
-  for (;;) {
-    try {
-      const n = readSync(0, buf, 0, buf.length, null)
-      if (n === 0) break
-      parts.push(Buffer.from(buf.subarray(0, n)))
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EAGAIN' && Date.now() < deadline) {
-        Atomics.wait(sleeper, 0, 0, 1)
-        continue
-      }
-      break
-    }
-  }
-  return Buffer.concat(parts).toString('utf-8')
+  return readStdinRaw(timeoutMs).toString('utf-8')
 }
 
 /**

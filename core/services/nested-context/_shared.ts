@@ -7,6 +7,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import type { MonorepoPackage } from '../../types/infrastructure'
 import * as fileHelper from '../../utils/file-helper'
 
 export const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage'])
@@ -92,4 +93,37 @@ export function buildInheritanceChain<T extends { parent: T | null }>(node: T): 
 export function computeDepth(rootPath: string, filePath: string): number {
   const rel = path.relative(rootPath, filePath)
   return rel.split(path.sep).length - 1
+}
+
+/** Fields shared by every nested-context file node (AGENTS.md, PRJCT.md, ...). */
+export interface NestedFileBase<TSelf> {
+  path: string
+  relativePath: string
+  depth: number
+  parent: TSelf | null
+  children: TSelf[]
+  content: string
+  package: MonorepoPackage | null
+}
+
+/**
+ * Build the fields common to every nested-context file node. Callers spread
+ * the result and add their own varying field (e.g. `agents` or `sections`).
+ */
+export function buildNestedFileBase<TSelf>(
+  filePath: string,
+  parent: TSelf | null,
+  pkg: MonorepoPackage | null,
+  rootPath: string,
+  content: string
+): NestedFileBase<TSelf> {
+  return {
+    path: filePath,
+    relativePath: path.relative(rootPath, filePath),
+    depth: computeDepth(rootPath, filePath),
+    parent,
+    children: [],
+    content,
+    package: pkg,
+  }
 }

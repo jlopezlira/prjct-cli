@@ -12,17 +12,10 @@ import { fileFanIn, filesCallingInto, hasSymbolIndex, symbolsInFile } from '../d
 import type { ChangeRisk, DetectChangesResult, DetectedChange } from '../types/domain.js'
 import { gitStdout } from '../utils/exec'
 
-// Cache — `ship` (source:'auto'/'working-tree') and `code impact`
-// (source:'committed') independently recompute the full symbol/call-graph
-// walk even when called back-to-back against the identical diff (verified
-// redundant in prjct-cli's own session telemetry). Both route through the
-// long-lived daemon process (ship/code are NOT bin-only commands — see
-// bin/prjct.ts's daemon fast path), so an in-process cache here is actually
-// shared across separate CLI invocations, not just within one process.
-// Keyed on a content-sensitive diff signature: staleness is self-correcting
-// (any real change to the diff produces a different signature → miss), so
-// no TTL is needed — only a small size cap against unbounded growth across
-// a long daemon uptime spanning many projects/branches.
+// `ship` and `code impact` independently recompute this on the identical
+// diff (verified redundant). Survives across separate CLI calls because both
+// route through the daemon (bin/prjct.ts) — keyed on a diff signature so
+// staleness self-corrects; size-capped rather than TTL'd.
 const DETECT_CHANGES_CACHE_MAX = 20
 const detectChangesCache = new Map<string, { signature: string; result: DetectChangesResult }>()
 
@@ -30,12 +23,8 @@ function sha256Hex(data: string): string {
   return createHash('sha256').update(data).digest('hex')
 }
 
-/**
- * Content-sensitive fingerprint of the current diff for `changedFiles`.
- * Cheap relative to the symbol-graph walk it guards: one scoped `git diff`
- * call plus a content hash for any untracked files in the set (git diff
- * shows nothing for untracked paths — they need their own read+hash).
- */
+/** Content-sensitive diff fingerprint. Cheap vs. the symbol-graph walk it
+ *  guards — untracked files need their own read+hash (git diff skips them). */
 async function computeDiffSignature(
   projectPath: string,
   source: DetectChangesResult['source'],

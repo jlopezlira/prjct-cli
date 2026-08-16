@@ -18,10 +18,10 @@ import type {
   SyncManagerResult as SyncResult,
   SyncStatus,
 } from '../types/sync'
+import { hashPayload } from '../utils/hash'
 import authConfig from './auth-config'
 import { entityHandlers, UNKNOWN_ENTITY_TYPES } from './entity-handlers'
 import { isTableIncluded, toCloudTable } from './entity-map'
-import { hashPayload } from './publish-helper'
 import { clearApplied, getApplied, recordApplied } from './sync-applied-hashes'
 import { syncClient } from './sync-client'
 

@@ -97,11 +97,23 @@ ${sectionName}:
   return true
 }
 
-export async function installHusky(projectPath: string, hooks: HookName[]): Promise<boolean> {
-  const huskyDir = path.join(projectPath, '.husky')
+/**
+ * Shared install loop for husky/direct strategies: resolve each hook's
+ * path, pick its script, and append-or-write. `ensureDir` covers the
+ * `.git/hooks` precondition that husky doesn't need (`.husky` always
+ * pre-exists once husky itself is installed).
+ */
+async function installHookScriptInto(
+  dir: string,
+  hooks: HookName[],
+  opts?: { ensureDir?: boolean }
+): Promise<boolean> {
+  if (opts?.ensureDir && !(await fileExists(dir))) {
+    await fs.mkdir(dir, { recursive: true })
+  }
 
   for (const hook of hooks) {
-    const hookPath = path.join(huskyDir, hook)
+    const hookPath = path.join(dir, hook)
     const script = hook === 'post-commit' ? getPostCommitScript() : getPostCheckoutScript()
 
     if (await fileExists(hookPath)) {
@@ -116,27 +128,14 @@ export async function installHusky(projectPath: string, hooks: HookName[]): Prom
   return true
 }
 
+export async function installHusky(projectPath: string, hooks: HookName[]): Promise<boolean> {
+  return installHookScriptInto(path.join(projectPath, '.husky'), hooks)
+}
+
 export async function installDirect(projectPath: string, hooks: HookName[]): Promise<boolean> {
-  const hooksDir = path.join(projectPath, '.git', 'hooks')
-
-  if (!(await fileExists(hooksDir))) {
-    await fs.mkdir(hooksDir, { recursive: true })
-  }
-
-  for (const hook of hooks) {
-    const hookPath = path.join(hooksDir, hook)
-    const script = hook === 'post-commit' ? getPostCommitScript() : getPostCheckoutScript()
-
-    if (await fileExists(hookPath)) {
-      const existing = await fs.readFile(hookPath, 'utf-8')
-      if (hasPrjctAutoSync(existing)) continue
-      await fs.appendFile(hookPath, `\n${script.split('\n').slice(1).join('\n')}`)
-    } else {
-      await fs.writeFile(hookPath, script, { mode: 0o755 })
-    }
-  }
-
-  return true
+  return installHookScriptInto(path.join(projectPath, '.git', 'hooks'), hooks, {
+    ensureDir: true,
+  })
 }
 
 // UNINSTALL

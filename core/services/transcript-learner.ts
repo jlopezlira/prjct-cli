@@ -26,6 +26,7 @@ import configManager from '../infrastructure/config-manager'
 import type { MemoryType } from '../memory/entries'
 import { projectMemory } from '../memory/project-memory'
 import type { LocalConfig } from '../types/config'
+import { collectFromPersistedEvents } from './persisted-events'
 import { parseTranscriptJsonl, type TranscriptJsonlLine } from './transcript-jsonl'
 
 const SOURCE_TAG = 'transcript-auto'
@@ -445,43 +446,29 @@ function hashContent(content: string): string {
 
 // Dedup against previously ingested entries
 
-interface AutoMemoryRow {
-  data: string
-}
-
 function collectExistingAutoHashes(projectId: string): Set<string> {
-  const out = new Set<string>()
   try {
     // We tag every auto-captured entry with `source:transcript-auto` and
     // embed the hash in `tags.hash`. Pull recent events and parse out
     // the hashes — same pattern projectMemory.recall uses.
-    const { prjctDb } = require('../storage/database') as typeof import('../storage/database')
     const { REMEMBER_EVENT_RANGE } =
       require('../memory/events') as typeof import('../memory/events')
-    const rows = prjctDb.query<AutoMemoryRow>(
+    const hashes = collectFromPersistedEvents<string>(
       projectId,
       'SELECT data FROM events WHERE type >= ? AND type < ? ORDER BY id DESC LIMIT 500',
-      ...REMEMBER_EVENT_RANGE
+      [...REMEMBER_EVENT_RANGE],
+      (tags) => {
+        if (tags.source !== SOURCE_TAG) return undefined
+        const h = tags.hash
+        return typeof h === 'string' ? h : undefined
+      }
     )
-    for (const row of rows) {
-      const parsed = (() => {
-        try {
-          return JSON.parse(row.data) as unknown
-        } catch {
-          return null
-        }
-      })()
-      if (!parsed || typeof parsed !== 'object') continue
-      const tags = (parsed as { tags?: Record<string, unknown> }).tags
-      if (!tags || tags.source !== SOURCE_TAG) continue
-      const h = tags.hash
-      if (typeof h === 'string') out.add(h)
-    }
+    return new Set(hashes)
   } catch {
     // Best-effort: a missing dedup index just means we may write a
     // duplicate this turn; the user can prune.
+    return new Set()
   }
-  return out
 }
 
 // Test exports

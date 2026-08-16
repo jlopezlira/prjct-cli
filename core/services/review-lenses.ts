@@ -46,11 +46,7 @@ export const LENS_CATALOG: Record<string, LensSpec> = {
     label: 'UX/DX',
     rubric:
       'Rate 0-10 across {clarity, ergonomics, consistency, accessibility} for the user-facing or developer-facing surface. If scope touches existing UI/CLI patterns (read the listed paths), consistency must be judged against those — not against your priors. Pass only if all dimensions ≥6; include the four scores in notes.',
-    // Checklist-style rubric (4 fixed dimensions, pass bar is a threshold, not
-    // open judgment) — the first candidate for the cheap-model lever this
-    // field exists for. `strategic` was evaluated too but its rubric asks for
-    // scope/tradeoff judgment (is the goal worth the cost, is it over/under
-    // scoped) that benefits from the stronger default model; left unset.
+    // Checklist rubric, not open judgment — cheap model is enough here.
     capabilityClass: 'fast',
   },
   security: {

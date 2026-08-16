@@ -5,9 +5,12 @@
  */
 
 /** Truncate to at most `max` chars, appending an ellipsis when shortened.
- *  The result (including the ellipsis) never exceeds `max`. */
+ *  The result (including the ellipsis) never exceeds `max`. Whitespace
+ *  (including newlines) is collapsed to single spaces first so callers get
+ *  a clean single-line summary regardless of source formatting. */
 export function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value
+  const collapsed = value.replace(/\s+/g, ' ').trim()
+  return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed
 }
 
 /**

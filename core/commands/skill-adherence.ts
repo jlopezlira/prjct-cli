@@ -22,6 +22,7 @@ import { projectMemory } from '../memory/project-memory'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
+import { parseWindowSpec } from '../utils/date-helper'
 import { failHard } from '../utils/md-aware'
 import out from '../utils/output'
 import { PrjctCommandsBase } from './base'
@@ -122,12 +123,11 @@ interface ParsedWindow {
 }
 
 function parseWindow(arg: string | null): ParsedWindow | null {
-  const raw = (arg ?? '7d').trim().toLowerCase()
-  const m = raw.match(/^(\d+)\s*([hd])$/)
-  if (!m) return null
-  const n = Number.parseInt(m[1]!, 10)
-  if (!Number.isFinite(n) || n <= 0 || n > 365) return null
-  return m[2] === 'h' ? { label: `${n}h`, hours: n } : { label: `${n}d`, hours: n * 24 }
+  const spec = parseWindowSpec(arg)
+  if (!spec) return null
+  return spec.unit === 'h'
+    ? { label: `${spec.n}h`, hours: spec.n }
+    : { label: `${spec.n}d`, hours: spec.n * 24 }
 }
 
 function firstLine(content: string): string {

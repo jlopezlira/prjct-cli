@@ -9,6 +9,8 @@
 
 import { projectMemory } from '../memory/project-memory'
 import { prjctDb } from '../storage/database'
+import { truncate } from '../utils/text-summary'
+import { recentJournal } from './journal-queries'
 
 export const RECEIPT_SOURCE = 'land-receipt'
 export const RECEIPT_TOPIC = 'judgment-receipt'
@@ -270,28 +272,6 @@ export function countReceiptsWritten(projectId: string, sinceMs?: number): numbe
   }
 }
 
-function recentJournal(projectId: string, cycleId: string | null | undefined): string[] {
-  try {
-    if (cycleId) {
-      return prjctDb
-        .query<{ content: string }>(
-          projectId,
-          'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 5',
-          cycleId
-        )
-        .map((r) => r.content)
-    }
-    return prjctDb
-      .query<{ content: string }>(
-        projectId,
-        'SELECT content FROM task_log ORDER BY id DESC LIMIT 5'
-      )
-      .map((r) => r.content)
-  } catch {
-    return []
-  }
-}
-
 function recentSurfacedTraps(projectId: string): ReceiptSurface[] {
   try {
     // Recent preventive-type memories (gotchas / anti-patterns) as proxy for
@@ -339,9 +319,4 @@ function recentConflictDecisions(
   } catch {
     return []
   }
-}
-
-function truncate(s: string, n: number): string {
-  const t = s.replace(/\s+/g, ' ').trim()
-  return t.length > n ? `${t.slice(0, n - 1)}…` : t
 }

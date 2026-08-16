@@ -26,7 +26,7 @@ import type { AgentDefinition, NestedAgents, ResolvedAgents } from '../../types/
 import * as fileHelper from '../../utils/file-helper'
 import {
   buildInheritanceChain,
-  computeDepth,
+  buildNestedFileBase,
   findParentByDir,
   pickBestMatchForPath,
   scanForNestedFiles,
@@ -85,14 +85,8 @@ export class AgentsDiscovery {
   ): Promise<NestedAgents> {
     const content = await fs.readFile(filePath, 'utf-8')
     return {
-      path: filePath,
-      relativePath: path.relative(this.rootPath, filePath),
-      depth: computeDepth(this.rootPath, filePath),
-      parent,
-      children: [],
-      content,
+      ...buildNestedFileBase<NestedAgents>(filePath, parent, pkg, this.rootPath, content),
       agents: parseAgents(content),
-      package: pkg,
     }
   }
 }

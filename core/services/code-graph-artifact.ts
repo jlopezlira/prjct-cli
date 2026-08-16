@@ -14,6 +14,7 @@ import path from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { hasSymbolIndex, listAllSymbols, loadMeta } from '../domain/symbol-graph'
 import pathManager from '../infrastructure/path-manager'
+import { loadCodeSymbolEdges, replaceCodeGraph } from '../storage/code-graph-storage'
 import prjctDb from '../storage/database'
 import type { LocalConfig } from '../types/config'
 import type { CodeSymbol, CodeSymbolEdge, SymbolGraphMeta } from '../types/domain.js'
@@ -40,25 +41,7 @@ export async function exportCodeGraphArtifact(
 ): Promise<{ path: string; bytes: number; symbols: number; edges: number } | null> {
   if (!hasSymbolIndex(projectId)) return null
   const symbols = listAllSymbols(projectId)
-  const edges = (() => {
-    try {
-      return prjctDb
-        .query<{
-          src: string
-          dst: string
-          edge_type: string
-          confidence: number
-        }>(projectId, 'SELECT src, dst, edge_type, confidence FROM code_symbol_edges')
-        .map((r) => ({
-          src: r.src,
-          dst: r.dst,
-          edgeType: r.edge_type as CodeSymbolEdge['edgeType'],
-          confidence: r.confidence,
-        }))
-    } catch {
-      return []
-    }
-  })()
+  const edges = loadCodeSymbolEdges(projectId)
   const meta = loadMeta(projectId) ?? {
     symbolCount: symbols.length,
     edgeCount: edges.length,
@@ -117,24 +100,7 @@ export async function importCodeGraphArtifact(
     }
   }
 
-  prjctDb.transaction(projectId, (db) => {
-    db.prepare('DELETE FROM code_symbols').run()
-    db.prepare('DELETE FROM code_symbol_edges').run()
-    const insSym = db.prepare(
-      `INSERT INTO code_symbols (id, file, kind, name, qname, start_line, end_line, exported)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    const insEdge = db.prepare(
-      `INSERT OR IGNORE INTO code_symbol_edges (src, dst, edge_type, confidence)
-       VALUES (?, ?, ?, ?)`
-    )
-    for (const s of payload.symbols) {
-      insSym.run(s.id, s.file, s.kind, s.name, s.qname, s.startLine, s.endLine, s.exported ? 1 : 0)
-    }
-    for (const e of payload.edges) {
-      insEdge.run(e.src, e.dst, e.edgeType, e.confidence)
-    }
-  })
+  replaceCodeGraph(projectId, { symbols: payload.symbols, edges: payload.edges })
   prjctDb.setDoc(projectId, 'symbol-graph', {
     ...payload.meta,
     builtAt: payload.meta.builtAt ?? payload.exportedAt,

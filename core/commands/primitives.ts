@@ -14,7 +14,6 @@ import { projectMemory } from '../memory/project-memory'
 import type { TaskType } from '../schemas/state'
 import { memoryService } from '../services/memory-service'
 import { readLastStatus, resolveActiveTask, setTaskStatus } from '../services/task-service'
-import { evaluateMemoryContent } from '../services/trust-boundary'
 import { recordTaskTokenUsage } from '../services/work-cost-service'
 import { stateStorage } from '../storage/state-storage'
 import type { MdOption } from '../types/cli'
@@ -22,8 +21,9 @@ import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
 import { failHard } from '../utils/md-aware'
 import out from '../utils/output'
+import { parseFlagTags } from '../utils/tags'
 import { PrjctCommandsBase } from './base'
-import { requireActiveTask, requireProject } from './guards'
+import { requireActiveTask, requireProject, requireTrustedMemoryContent } from './guards'
 
 const TASK_TYPE_VALUES: readonly TaskType[] = ['feature', 'bug', 'improvement', 'chore']
 
@@ -220,19 +220,8 @@ export class PrimitiveCommands extends PrjctCommandsBase {
       }
       const { type, content } = parsed
 
-      const trust = evaluateMemoryContent(content, { force: options.force })
-      if (!trust.allow) {
-        out.fail(trust.denyMessage)
-        return {
-          success: false,
-          error:
-            trust.kind === 'secrets'
-              ? 'Secret-like content detected'
-              : trust.kind === 'prompt_injection'
-                ? 'Prompt-injection-like content detected'
-                : trust.reason,
-        }
-      }
+      const trustCheck = requireTrustedMemoryContent(content, { force: options.force })
+      if (!trustCheck.ok) return trustCheck.result
 
       const tags = parseFlagTags(options.tags)
 
@@ -329,12 +318,8 @@ export class PrimitiveCommands extends PrjctCommandsBase {
       const pid = await requireProject(projectPath)
       if (!pid.ok) return pid.result
 
-      const removed = projectMemory.forget(pid.value, target)
-      if (!removed) {
-        if (options.md) console.log(`✗ no memory entry matched ${target}`)
-        else out.fail(`no memory entry matched ${target}`)
-        return { success: false, error: `No memory entry matched ${target}` }
-      }
+      const removal = tryForgetMemory(pid.value, target, options)
+      if (!removal.ok) return removal.result
 
       if (options.md) console.log(`✓ forgot ${target}`)
       else out.done(`forgot ${target}`)
@@ -366,12 +351,8 @@ export class PrimitiveCommands extends PrjctCommandsBase {
       const pid = await requireProject(projectPath)
       if (!pid.ok) return pid.result
 
-      const removed = projectMemory.forget(pid.value, target)
-      if (!removed) {
-        if (options.md) console.log(`✗ no memory entry matched ${target}`)
-        else out.fail(`no memory entry matched ${target}`)
-        return { success: false, error: `No memory entry matched ${target}` }
-      }
+      const removal = tryForgetMemory(pid.value, target, options)
+      if (!removal.ok) return removal.result
 
       const reason = (options.reason ?? '').trim()
       try {
@@ -419,15 +400,23 @@ function parseTagPairs(args: string): Record<string, string> {
   return Object.fromEntries(pairs)
 }
 
-function parseFlagTags(raw: string | undefined): Record<string, string> {
-  if (!raw) return {}
-  const tags: Record<string, string> = {}
-  for (const token of raw.split(',')) {
-    const pair = token.trim()
-    const idx = pair.indexOf(':')
-    if (idx > 0) tags[pair.slice(0, idx)] = pair.slice(idx + 1)
+/**
+ * Attempt to forget a memory entry by id, printing + shaping the uniform
+ * "no memory entry matched" failure on a miss. Shared by `forget` and
+ * `close`, which otherwise only differ in what they do after success.
+ */
+function tryForgetMemory(
+  projectId: string,
+  target: string,
+  options: MdOption
+): { ok: true } | { ok: false; result: CommandResult } {
+  const removed = projectMemory.forget(projectId, target)
+  if (!removed) {
+    if (options.md) console.log(`✗ no memory entry matched ${target}`)
+    else out.fail(`no memory entry matched ${target}`)
+    return { ok: false, result: { success: false, error: `No memory entry matched ${target}` } }
   }
-  return tags
+  return { ok: true }
 }
 
 type ParsedRemember = { ok: true; type: MemoryType; content: string } | { ok: false; error: string }

@@ -18,6 +18,7 @@ import { BM25_B, BM25_K1 } from '../constants/algorithms'
 import prjctDb from '../storage/database'
 import type { SqliteStatement } from '../storage/database/sqlite-compat'
 import type { BM25Index, BM25Score } from '../types/domain.js'
+import { scoresToSortedArray } from '../utils/collection-filters'
 import { batchProcess, walkDir } from '../utils/file-helper'
 
 /** Common stop words to exclude from BM25 indexing */
@@ -329,9 +330,7 @@ export function score(query: string, index: BM25Index): BM25Score[] {
   }
 
   // Sort by score descending
-  return Array.from(scores.entries())
-    .map(([p, s]) => ({ path: p, score: s }))
-    .sort((a, b) => b.score - a.score)
+  return scoresToSortedArray(scores)
 }
 
 // SQLite Persistence

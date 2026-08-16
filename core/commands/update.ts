@@ -405,23 +405,14 @@ export class UpdateCommands extends PrjctCommandsBase {
     }
 
     try {
-      const { isDaemonRunning, stopDaemon, forceKillDaemon, spawnDaemon } = await import(
-        '../daemon/client'
-      )
+      const { isDaemonRunning, forceRestartDaemon } = await import('../daemon/client')
 
-      // Stop (graceful → force)
-      if (await isDaemonRunning()) {
-        const stopped = await stopDaemon()
-        if (!stopped) forceKillDaemon()
-        await new Promise((resolve) => setTimeout(resolve, 300))
-        result.details.push('Daemon stopped')
-      } else {
-        forceKillDaemon()
-        result.details.push('No running daemon (cleaned stale files)')
-      }
+      // Stop (graceful → force) or, if none was running, clean stale files.
+      const wasRunning = await isDaemonRunning()
+      result.details.push(wasRunning ? 'Daemon stopped' : 'No running daemon (cleaned stale files)')
 
       // Respawn (non-fatal: daemon auto-starts on next command if this fails)
-      const started = await spawnDaemon()
+      const started = await forceRestartDaemon()
       result.details.push(
         started ? 'Daemon restarted' : 'Daemon will start automatically on next use'
       )

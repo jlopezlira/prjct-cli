@@ -15,6 +15,7 @@ import { fileExists } from '../utils/file-helper'
 import { sha256 } from '../utils/hash'
 import log from '../utils/logger'
 import { VERSION } from '../utils/version'
+import { writeSkillIfChanged } from './skill-install-helper'
 import { resolveUserPath } from './user-home'
 
 const GROK_SKILL_META_MARKER = 'prjct-grok-skill'
@@ -79,22 +80,13 @@ export async function installGrokSkill(): Promise<{
       return { success: false, action: null }
     }
 
-    const built = buildGrokSkillContent(templateContent)
-
-    if (skillExists) {
-      const existing = await fs.readFile(skillMdPath, 'utf-8').catch(() => '')
-      if (existing === built.content) {
-        return { success: true, action: 'unchanged', path: skillMdPath }
-      }
-    }
-
-    await fs.writeFile(skillMdPath, built.content, 'utf-8')
-
-    return {
-      success: true,
-      action: skillExists ? 'updated' : 'created',
-      path: skillMdPath,
-    }
+    return await writeSkillIfChanged({
+      skillMdPath,
+      skillExists,
+      templateContent,
+      build: buildGrokSkillContent,
+      logLabel: 'Grok',
+    })
   } catch (error) {
     log.warn(`Grok skill warning: ${getErrorMessage(error)}`)
     return { success: false, action: null }

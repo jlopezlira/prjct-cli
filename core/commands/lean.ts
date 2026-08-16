@@ -31,6 +31,7 @@ import { failHard, failWith } from '../utils/md-aware'
 import { mdOutput } from '../utils/md-formatter'
 import out from '../utils/output'
 import { PrjctCommandsBase } from './base'
+import { parseModeSubcommand, requireProjectConfig } from './mode-command-helpers'
 
 type LeanMode = 'off' | 'lite' | 'full' | 'ultra'
 const LEAN_MODES: readonly LeanMode[] = ['off', 'lite', 'full', 'ultra']
@@ -77,16 +78,10 @@ export class LeanCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: MdOption = {}
   ): Promise<CommandResult> {
-    const parts = (input ?? '').trim().split(/\s+/).filter(Boolean)
-    const sub = (parts[0] ?? '').toLowerCase()
-
-    if (!sub || sub === 'status' || sub === 'show') {
-      return this.showStatus(projectPath, options)
-    }
-    if ((LEAN_MODES as readonly string[]).includes(sub)) {
-      return this.setMode(sub as LeanMode, projectPath, options)
-    }
-    switch (sub) {
+    const parsed = parseModeSubcommand(input, LEAN_MODES)
+    if (parsed.kind === 'status') return this.showStatus(projectPath, options)
+    if (parsed.kind === 'mode') return this.setMode(parsed.mode as LeanMode, projectPath, options)
+    switch (parsed.sub) {
       case 'review':
         return this.review(projectPath, options)
       case 'audit':
@@ -95,7 +90,7 @@ export class LeanCommands extends PrjctCommandsBase {
         return this.debt(projectPath, options)
       default:
         return failWith(
-          `Unknown lean subcommand "${sub}". Use: review, audit, debt, or ${LEAN_MODES.join('|')}.`,
+          `Unknown lean subcommand "${parsed.sub}". Use: review, audit, debt, or ${LEAN_MODES.join('|')}.`,
           options
         )
     }
@@ -103,9 +98,9 @@ export class LeanCommands extends PrjctCommandsBase {
 
   /** Show the effective intensity + a one-screen orientation. */
   private async showStatus(projectPath: string, options: MdOption): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     const mode = effectiveMode(config)
     const summary = [
@@ -129,9 +124,9 @@ export class LeanCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     config.lean = { mode }
     await configManager.writeConfig(projectPath, config)
@@ -153,9 +148,8 @@ export class LeanCommands extends PrjctCommandsBase {
    */
   private async review(projectPath: string, options: MdOption): Promise<CommandResult> {
     try {
-      const config = await configManager.readConfig(projectPath).catch(() => null)
-      if (!config?.projectId)
-        return failHard('No prjct project here — run `prjct init` first.', options)
+      const guard = await requireProjectConfig(projectPath, options)
+      if (!guard.ok) return guard.result
 
       const collected = await collectReviewDiff(projectPath)
       if (!collected || (!collected.diff.trim() && !collected.nameStatus.trim())) {
@@ -202,9 +196,9 @@ export class LeanCommands extends PrjctCommandsBase {
    */
   private async audit(projectPath: string, options: MdOption): Promise<CommandResult> {
     try {
-      const config = await configManager.readConfig(projectPath).catch(() => null)
-      if (!config?.projectId)
-        return failHard('No prjct project here — run `prjct init` first.', options)
+      const guard = await requireProjectConfig(projectPath, options)
+      if (!guard.ok) return guard.result
+      const config = guard.value
 
       const analysis = llmAnalysisStorage.getActive(config.projectId)
       if (!analysis) {
@@ -257,9 +251,9 @@ export class LeanCommands extends PrjctCommandsBase {
    */
   private async debt(projectPath: string, options: MdOption): Promise<CommandResult> {
     try {
-      const config = await configManager.readConfig(projectPath).catch(() => null)
-      if (!config?.projectId)
-        return failHard('No prjct project here — run `prjct init` first.', options)
+      const guard = await requireProjectConfig(projectPath, options)
+      if (!guard.ok) return guard.result
+      const config = guard.value
 
       const memories = projectMemory.recall(config.projectId, {
         types: ['lean-debt', 'over-engineering'],

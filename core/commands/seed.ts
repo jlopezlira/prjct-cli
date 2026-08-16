@@ -84,9 +84,7 @@ export class SeedCommands extends PrjctCommandsBase {
       const msg = `activated: ${result.activated.join(', ') || 'none'}${
         result.skipped.length ? ` • unknown: ${result.skipped.join(', ')}` : ''
       }`
-      if (options.md) console.log(`✓ ${msg}`)
-      else out.done(msg)
-      return { success: true, ...result }
+      return reportPackChange(msg, result, options)
     } catch (error) {
       const msg = getErrorMessage(error)
       return failHard(msg)
@@ -116,9 +114,7 @@ export class SeedCommands extends PrjctCommandsBase {
       const msg = `deactivated: ${result.deactivated.join(', ') || 'none'}${
         result.notActive.length ? ` • not active: ${result.notActive.join(', ')}` : ''
       }`
-      if (options.md) console.log(`✓ ${msg}`)
-      else out.done(msg)
-      return { success: true, ...result }
+      return reportPackChange(msg, result, options)
     } catch (error) {
       const msg = getErrorMessage(error)
       return failHard(msg)
@@ -272,4 +268,18 @@ export class SeedCommands extends PrjctCommandsBase {
       return failHard(msg)
     }
   }
+}
+
+/**
+ * `add`/`remove`'s shared tail: print the already-built summary (respecting
+ * `--md`), then fold the pack-manager result into a success `CommandResult`.
+ */
+function reportPackChange<T extends object>(
+  msg: string,
+  result: T,
+  options: MdOption
+): CommandResult {
+  if (options.md) console.log(`✓ ${msg}`)
+  else out.done(msg)
+  return { success: true, ...result }
 }

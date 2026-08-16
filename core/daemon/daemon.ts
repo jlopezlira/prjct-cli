@@ -520,12 +520,8 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
       try {
         return await daemonRequestLanes.run(lane, () => handleRequestInner(request), request.cwd)
       } catch (error) {
-        // The chained prompt/stop work for this cwd is still running (and
-        // still will, in order — this lane bounds only OUR wait, never the
-        // work itself). Hand back the SAME `retry: true` shape already used
-        // for stale-daemon-code: the client already falls back to running
-        // the hook in-process on any such response, just without wasting the
-        // rest of its own 800ms socket timeout finding that out.
+        // Work keeps running in order — this only bounds our own wait. Same
+        // retry:true shape the client already falls back on for stale-daemon-code.
         if (error instanceof HookStateLaneTimeoutError) {
           return {
             id: request.id,
