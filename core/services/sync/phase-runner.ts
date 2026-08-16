@@ -41,19 +41,28 @@ export function withPhaseTimeout<T>(promise: Promise<T>, phase: string): Promise
   return Promise.race([promise, timeout.promise]).finally(timeout.cancel)
 }
 
-export async function runSyncPhase<T>(name: string, fn: () => Promise<T>): Promise<T> {
+export interface SyncPhaseTiming {
+  phase: string
+  ms: number
+}
+
+export async function runSyncPhase<T>(
+  name: string,
+  fn: () => Promise<T>,
+  timings?: SyncPhaseTiming[]
+): Promise<T> {
   const start = Date.now()
   log.debug('sync phase start', { phase: name })
   try {
     const result = await fn()
-    log.debug('sync phase done', { phase: name, ms: Date.now() - start })
+    const ms = Date.now() - start
+    log.debug('sync phase done', { phase: name, ms })
+    timings?.push({ phase: name, ms })
     return result
   } catch (error) {
-    log.debug('sync phase failed', {
-      phase: name,
-      ms: Date.now() - start,
-      error: getErrorMessage(error),
-    })
+    const ms = Date.now() - start
+    log.debug('sync phase failed', { phase: name, ms, error: getErrorMessage(error) })
+    timings?.push({ phase: name, ms })
     throw error
   }
 }

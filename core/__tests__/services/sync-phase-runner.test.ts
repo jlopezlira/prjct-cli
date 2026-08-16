@@ -25,6 +25,29 @@ describe('sync phase runner', () => {
     ).rejects.toThrow('boom')
   })
 
+  test('runSyncPhase records a timing entry on success', async () => {
+    const timings: { phase: string; ms: number }[] = []
+    await runSyncPhase('unit-success', async () => 'ok', timings)
+    expect(timings).toHaveLength(1)
+    expect(timings[0].phase).toBe('unit-success')
+    expect(timings[0].ms).toBeGreaterThanOrEqual(0)
+  })
+
+  test('runSyncPhase records a timing entry even when the phase throws', async () => {
+    const timings: { phase: string; ms: number }[] = []
+    await expect(
+      runSyncPhase(
+        'unit-fail',
+        async () => {
+          throw new Error('boom')
+        },
+        timings
+      )
+    ).rejects.toThrow('boom')
+    expect(timings).toHaveLength(1)
+    expect(timings[0].phase).toBe('unit-fail')
+  })
+
   test('withPhaseTimeout rejects with phase name and clears quickly', async () => {
     process.env.PRJCT_SYNC_PHASE_TIMEOUT_MS = '5'
 

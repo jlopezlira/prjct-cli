@@ -4,7 +4,7 @@
  * Runs against tmpdir projects with controllable script outcomes.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -71,5 +71,25 @@ describe('prjct health', () => {
     expect(r.success).toBe(false)
     // typecheck weight=25, lint weight=20; pass=25 / total=45 → 56
     expect(r.score).toBe(56)
+  })
+
+  it('reports a timeout diagnostic, not a scraped log line, when a dimension is killed on budget', async () => {
+    const prev = process.env.PRJCT_HEALTH_DIM_TIMEOUT_MS
+    process.env.PRJCT_HEALTH_DIM_TIMEOUT_MS = '50'
+    const log = spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      // Prints a misleading line before the timeout fires, to prove we no
+      // longer scrape stdout/stderr on a killed run.
+      await writePkg({ typecheck: 'echo "core/__tests__/unrelated.test.ts:" && sleep 2' })
+      const r = await cmd.health(null, fixture.dir, { md: true })
+      expect(r.success).toBe(false)
+      const output = log.mock.calls.map((call) => call.join(' ')).join('\n')
+      expect(output).toContain('timed out after')
+      expect(output).not.toContain('unrelated.test.ts')
+    } finally {
+      log.mockRestore()
+      if (prev === undefined) delete process.env.PRJCT_HEALTH_DIM_TIMEOUT_MS
+      else process.env.PRJCT_HEALTH_DIM_TIMEOUT_MS = prev
+    }
   })
 })

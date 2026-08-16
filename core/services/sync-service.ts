@@ -45,7 +45,11 @@ import { skillGenerator } from './skill-generator'
 import { emptyCommands, emptyGitData, emptyStack, emptyStats } from './sync/defaults'
 import { detectIncrementalChanges } from './sync/incremental'
 import { archiveStaleData, recordSyncMetrics, saveDraftAnalysis } from './sync/persistence'
-import { runSyncPhase as phase, withPhaseTimeout as withTimeout } from './sync/phase-runner'
+import {
+  runSyncPhase,
+  type SyncPhaseTiming,
+  withPhaseTimeout as withTimeout,
+} from './sync/phase-runner'
 import { type PostIndexWork, startPostIndexWork } from './sync/post-index'
 import {
   ensureProjectDirectories,
@@ -78,6 +82,9 @@ class SyncService {
   ): Promise<ProjectSyncResult> {
     this.projectPath = projectPath
     const startTime = Date.now()
+    const phaseTimings: SyncPhaseTiming[] = []
+    const phase = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
+      runSyncPhase(name, fn, phaseTimings)
 
     const context7Status: Context7Status = {
       installed: false,
@@ -403,6 +410,21 @@ class SyncService {
           }
         })()
 
+      // work-cost / archive / context-quality are kept SEQUENTIAL on purpose.
+      // They look independent from their signatures (each takes only
+      // `this.projectId`/`this.projectPath`), but tracing the actual
+      // read/write sets found a real ordering dependency: `archive` deletes
+      // stale rows from the same `tasks`/`memory`-adjacent tables that
+      // `work-cost` (SELECT ... FROM tasks) and `context-quality`
+      // (evaluateRetention scoring) read. Running archive concurrently with
+      // either would make the cost snapshot / quality repair race against
+      // rows mid-deletion — non-deterministic output, not just a perf change.
+      // The CURRENT order (cost/quality reads happen before archive's writes
+      // land) is already correct, not accidental; parallelizing here would
+      // trade correctness for speed. `metrics` above already runs earlier
+      // and touches none of these tables. See spec 1f3bb902 AC5 — the phase
+      // TIMING half of that AC is implemented (phaseTimings, surfaced in
+      // --md/text output above); this half was investigated and rejected.
       const workCost = await phase('work-cost', () => publishWorkCostSnapshots(this.projectId!))
 
       // 9b. Archive stale data (PRJ-267)
@@ -566,6 +588,7 @@ class SyncService {
         projectStyle,
         developerSnapshotCaptured,
         generatedSkills,
+        phaseTimings,
       }
     } catch (error) {
       return {

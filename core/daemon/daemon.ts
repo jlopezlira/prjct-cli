@@ -36,7 +36,7 @@ import {
   SHUTDOWN_DRAIN_MS,
 } from './protocol'
 import { daemonRequestJournal } from './request-journal'
-import { daemonRequestLanes } from './request-lanes'
+import { daemonRequestLanes, HookStateLaneTimeoutError } from './request-lanes'
 import {
   decideRestart,
   isCodeStale as detectStaleCode,
@@ -517,7 +517,26 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
           : request.args[0] === 'prompt' || request.args[0] === 'stop'
             ? 'hook-state'
             : 'hook'
-      return await daemonRequestLanes.run(lane, () => handleRequestInner(request), request.cwd)
+      try {
+        return await daemonRequestLanes.run(lane, () => handleRequestInner(request), request.cwd)
+      } catch (error) {
+        // The chained prompt/stop work for this cwd is still running (and
+        // still will, in order — this lane bounds only OUR wait, never the
+        // work itself). Hand back the SAME `retry: true` shape already used
+        // for stale-daemon-code: the client already falls back to running
+        // the hook in-process on any such response, just without wasting the
+        // rest of its own 800ms socket timeout finding that out.
+        if (error instanceof HookStateLaneTimeoutError) {
+          return {
+            id: request.id,
+            success: false,
+            exitCode: 1,
+            retry: true,
+            stderr: error.message,
+          }
+        }
+        throw error
+      }
     } finally {
       state.activeRequests--
       if (state.restartPending && state.activeRequests === 0) {

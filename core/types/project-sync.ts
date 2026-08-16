@@ -202,6 +202,8 @@ export interface ProjectSyncResult {
   error?: string
   isPreview?: boolean
   previewDiff?: SyncDiff
+  /** Per-phase wall-clock timing, slowest first, for `--md`/verbose diagnosis. */
+  phaseTimings?: { phase: string; ms: number }[]
 }
 
 export interface ContextGeneratorConfig {

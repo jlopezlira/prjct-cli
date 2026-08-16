@@ -11,7 +11,7 @@ import { indexSymbols } from '../../domain/symbol-graph'
 import pathManager from '../../infrastructure/path-manager'
 import { detectChanges } from '../../services/detect-changes'
 import prjctDb from '../../storage/database'
-import { GitInfraError } from '../../utils/exec'
+import { execFileAsync, GitInfraError } from '../../utils/exec'
 
 describe('detect-changes', () => {
   const fixture: {
@@ -75,6 +75,51 @@ describe('detect-changes', () => {
     })
     expect(result.changes[0]?.risk).toBe('critical')
     expect(result.summary.critical).toBe(1)
+  })
+
+  it('caches the blast-radius result for an unchanged diff — a second call (e.g. `ship` then `code impact`) against the same diff does not re-walk', async () => {
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.testDir })
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: fixture.testDir })
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: fixture.testDir })
+    await execFileAsync('git', ['config', 'commit.gpgsign', 'false'], { cwd: fixture.testDir })
+    await fs.writeFile(path.join(fixture.testDir, '.gitignore'), 'prjct.db*\n')
+    await fs.writeFile(path.join(fixture.testDir, 'core.ts'), `export function core() {}\n`)
+    await execFileAsync('git', ['add', '.'], { cwd: fixture.testDir })
+    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: fixture.testDir })
+
+    // Uncommitted change — this is the diff detectChanges observes.
+    await fs.writeFile(
+      path.join(fixture.testDir, 'core.ts'),
+      `export function core() { return 1 }\n`
+    )
+    await indexSymbols(fixture.testDir, fixture.testProjectId)
+    await indexImports(fixture.testDir, fixture.testProjectId)
+
+    const first = await detectChanges(fixture.testDir, fixture.testProjectId, {
+      source: 'working-tree',
+    })
+    expect(first.changedFiles).toEqual(['core.ts'])
+    expect(first.affectedFiles).not.toContain('app.ts')
+
+    // Add a NEW importer of core.ts and commit it immediately — it's fully
+    // tracked/clean, so it does NOT appear in the working-tree diff (the
+    // uncommitted edit to core.ts is still the only diff content, so the
+    // signature is unchanged). A fresh (uncached) re-walk would now see
+    // app.ts in the import graph and include it in blast radius; a cache
+    // hit — keyed on the diff signature, not the import graph — must not.
+    await fs.writeFile(
+      path.join(fixture.testDir, 'app.ts'),
+      `import { core } from './core'\nexport function app() { return core() }\n`
+    )
+    await execFileAsync('git', ['add', 'app.ts'], { cwd: fixture.testDir })
+    await execFileAsync('git', ['commit', '-q', '-m', 'add app.ts'], { cwd: fixture.testDir })
+    await indexImports(fixture.testDir, fixture.testProjectId)
+
+    const second = await detectChanges(fixture.testDir, fixture.testProjectId, {
+      source: 'working-tree',
+    })
+    expect(second).toEqual(first)
+    expect(second.affectedFiles).not.toContain('app.ts')
   })
 })
 
