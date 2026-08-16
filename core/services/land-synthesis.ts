@@ -16,6 +16,8 @@
 import { execFileSync } from 'node:child_process'
 import { projectMemory } from '../memory/project-memory'
 import { prjctDb } from '../storage/database'
+import { truncate } from '../utils/text-summary'
+import { recentJournal } from './journal-queries'
 
 const SOURCE_TAG = 'land-auto'
 const TOPIC_KEY = 'session-close'
@@ -188,28 +190,6 @@ export function buildLandHandoffContent(input: LandSynthesisInput): string | nul
   return parts.join(' · ')
 }
 
-function recentJournal(projectId: string, cycleId: string | null | undefined): string[] {
-  try {
-    if (cycleId) {
-      return prjctDb
-        .query<{ content: string }>(
-          projectId,
-          'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 5',
-          cycleId
-        )
-        .map((r) => r.content)
-    }
-    return prjctDb
-      .query<{ content: string }>(
-        projectId,
-        'SELECT content FROM task_log ORDER BY id DESC LIMIT 5'
-      )
-      .map((r) => r.content)
-  } catch {
-    return []
-  }
-}
-
 function recentCommits(projectPath: string): string[] {
   try {
     const out = execFileSync('git', ['log', '-5', '--oneline', '--no-decorate'], {
@@ -244,9 +224,4 @@ function recentAutoCaptures(projectId: string): Array<{ type: string; content: s
   } catch {
     return []
   }
-}
-
-function truncate(s: string, n: number): string {
-  const t = s.replace(/\s+/g, ' ').trim()
-  return t.length > n ? `${t.slice(0, n - 1)}…` : t
 }

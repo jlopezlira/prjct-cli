@@ -418,34 +418,32 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
         // hand-off without asking the agent to remember. Cooldown-aligned
         // with heavy steps so we don't re-write every assistant turn.
         if (runHeavySteps && stopContext.activeTaskId) {
-          try {
+          // Shared by both syntheses below — same cycle snapshot, two
+          // independent best-effort writers.
+          const cycleSynthesisArgs = {
+            projectId: config.projectId,
+            projectPath: p,
+            cycleDescription: stopContext.activeTaskDescription ?? null,
+            cycleId: stopContext.activeTaskId,
+            tokensIn: stopContext.transcriptUsage?.tokensIn,
+            tokensOut: stopContext.transcriptUsage?.tokensOut,
+            model,
+          }
+          const runBestEffort = async (fn: () => Promise<void>): Promise<void> => {
+            try {
+              await fn()
+            } catch {
+              /* never block session end — land synthesis / judgment receipt are best-effort */
+            }
+          }
+          await runBestEffort(async () => {
             const { synthesizeLandHandoff } = await import('../services/land-synthesis')
-            await synthesizeLandHandoff({
-              projectId: config.projectId,
-              projectPath: p,
-              cycleDescription: stopContext.activeTaskDescription ?? null,
-              cycleId: stopContext.activeTaskId,
-              tokensIn: stopContext.transcriptUsage?.tokensIn,
-              tokensOut: stopContext.transcriptUsage?.tokensOut,
-              model,
-            })
-          } catch {
-            /* never block session end on land synthesis */
-          }
-          try {
+            await synthesizeLandHandoff(cycleSynthesisArgs)
+          })
+          await runBestEffort(async () => {
             const { synthesizeJudgmentReceipt } = await import('../services/judgment-receipt')
-            await synthesizeJudgmentReceipt({
-              projectId: config.projectId,
-              projectPath: p,
-              cycleDescription: stopContext.activeTaskDescription ?? null,
-              cycleId: stopContext.activeTaskId,
-              tokensIn: stopContext.transcriptUsage?.tokensIn,
-              tokensOut: stopContext.transcriptUsage?.tokensOut,
-              model,
-            })
-          } catch {
-            /* never block session end on judgment receipt */
-          }
+            await synthesizeJudgmentReceipt(cycleSynthesisArgs)
+          })
         }
 
         // Cloud sync (opt-in): flush this project's pending queue at session

@@ -27,16 +27,9 @@ export type LaneName = 'command' | 'hook-state' | 'hook'
 
 const MAX_CONCURRENT_HOOKS = 4
 
-// A slow buildProjectState (git fork + FTS query) ahead of you in this cwd's
-// hook-state chain otherwise stacks its FULL duration onto your observed
-// latency — the root cause of a real 4.4s hook:prompt tail-latency outlier
-// (p50 15ms) measured in this project's own production telemetry, worst
-// under exactly the kind of concurrent-agent burst this session generates.
-// Comfortably under the client's 800ms HOOK_REQUEST_TIMEOUT_MS budget
-// (core/daemon/protocol.ts) so the daemon can proactively hand back the
-// existing `retry: true` signal — which the client already falls back on
-// for a stale-daemon response — before the client's own raw socket timeout
-// fires and the caller learns nothing more useful than "timed out".
+// A slow prior hook-state job otherwise stacks its full duration onto the
+// next caller (measured: 4.4s tail on hook:prompt, p50 15ms). Kept under the
+// client's 800ms budget so the daemon can hand back retry:true proactively.
 const DEFAULT_HOOK_STATE_TIMEOUT_MS = 500
 
 function hookStateTimeoutMs(): number {
@@ -58,14 +51,9 @@ export class HookStateLaneTimeoutError extends Error {
   }
 }
 
-/**
- * Bounds only what THIS caller waits for — never the underlying promise.
- * `run` keeps executing (and, for hook-state, keeps chaining) exactly as if
- * this wrapper weren't here; a caller that stops waiting cannot cancel or
- * reorder it. That's the invariant hook-state's per-cwd exclusivity depends
- * on: the NEXT queued call for this cwd must still wait for the REAL work to
- * settle, not for whichever caller gave up first.
- */
+/** Bounds only the CALLER's wait — `run` keeps executing untouched, so the
+ *  next queued hook-state call still waits for the real work, not for
+ *  whichever caller gave up. */
 function raceWithTimeout<T>(run: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new HookStateLaneTimeoutError(timeoutMs)), timeoutMs)

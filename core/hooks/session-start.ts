@@ -32,11 +32,11 @@
 
 import configManager from '../infrastructure/config-manager'
 import { isSyncCurrent, runSelfHeal } from '../infrastructure/self-heal'
-import type { MemoryEntry } from '../memory/entries'
-import { deriveTitle } from '../memory/format'
+import { deriveTitle, formatMemoryDigestLine } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
 import { recordAgentSessionStart } from '../services/agent-session-recorder'
 import { extractDeveloperRules } from '../services/developer-profile'
+import { findRepeatMissedEntry } from '../services/memory-index'
 import { getActiveProjectStyle } from '../services/project-style-evolution'
 import { formatProjectStyleDigest } from '../services/project-style-profile'
 import { createStalenessChecker } from '../services/staleness-checker'
@@ -64,6 +64,8 @@ const DIGEST_MAX_CHARS = 1600
 const DIGEST_PER_TYPE = 3
 /** How many developer rules to push on cold start (apply without MCP pull). */
 const DIGEST_DEV_RULES = 4
+/** Teaser sizing for the knowledge-digest lines (see `formatMemoryDigestLine`). */
+const DIGEST_TEASER = { minTeaser: 24, maxTeaser: 90 }
 
 /**
  * Build the additionalContext body for the current project.
@@ -400,17 +402,17 @@ function buildKnowledgeDigest(projectId: string): string | null {
   }
   if (gotchas.length > 0) {
     lines.push('', '**Traps to avoid:**')
-    for (const e of gotchas) lines.push(`- ${digestLine(e)}`)
+    for (const e of gotchas) lines.push(`- ${formatMemoryDigestLine(e, DIGEST_TEASER)}`)
   }
   if (decisions.length > 0) {
     lines.push('', '**Decisions in force:**')
-    for (const e2 of decisions) lines.push(`- ${digestLine(e2)}`)
+    for (const e2 of decisions) lines.push(`- ${formatMemoryDigestLine(e2, DIGEST_TEASER)}`)
   }
   if (repeatMiss) {
     lines.push(
       '',
       '**Keeps being missed:**',
-      `- ${digestLine(repeatMiss.entry)} — flagged relevant-but-unused ${repeatMiss.count}×. Apply it or supersede it.`
+      `- ${formatMemoryDigestLine(repeatMiss.entry, DIGEST_TEASER)} — flagged relevant-but-unused ${repeatMiss.count}×. Apply it or supersede it.`
     )
   }
   lines.push(
@@ -418,65 +420,6 @@ function buildKnowledgeDigest(projectId: string): string | null {
     '> Resolve any `mem_id` with `prjct search <id>`. Full developer model: MCP `prjct_developer`. Project style: `prjct analysis` / sync evolution.'
   )
   return safeTruncate(lines.join('\n'), DIGEST_MAX_CHARS)
-}
-
-/**
- * One digest line: title is usually enough; when the body is longer and
- * carries a distinct second clause, append a short teaser so weak models
- * can apply without a second pull.
- */
-function digestLine(e: MemoryEntry): string {
-  const title = deriveTitle(e)
-  const body = (e.content ?? '').replace(/\s+/g, ' ').trim()
-  // If body is essentially the title, skip teaser.
-  if (body.length <= title.length + 8) return `${title}  \`${e.id}\``
-  // Prefer content after first sentence for the teaser.
-  const after = body
-    .slice(title.length)
-    .replace(/^[\s.:;—-]+/, '')
-    .trim()
-  if (after.length < 24) return `${title}  \`${e.id}\``
-  const teaser = after.length > 90 ? `${after.slice(0, 89)}…` : after
-  return `${title} — ${teaser}  \`${e.id}\``
-}
-
-/** A memory must be skill-missed at least this often to earn a digest slot. */
-const REPEAT_MISS_THRESHOLD = 2
-
-/**
- * The skill-miss feedback loop's read side: the entry most often flagged
- * "relevant but never referenced" across sessions. One slot, ≥2 misses,
- * skipping anything the digest already shows — knowledge that keeps
- * failing to land gets pushed in front of the agent instead of silently
- * accumulating improvement-signal rows. Best-effort: null on any failure.
- */
-function findRepeatMissedEntry(
-  projectId: string,
-  alreadyShown: Set<string>
-): { entry: MemoryEntry; count: number } | null {
-  try {
-    const signals = projectMemory.recall(projectId, {
-      types: ['improvement-signal'],
-      tags: { kind: 'skill-miss' },
-      limit: 50,
-      dedupeByKey: false,
-    })
-    const counts = new Map<string, number>()
-    for (const s of signals) {
-      const memId = s.tags?.relates
-      if (!memId) continue
-      counts.set(memId, (counts.get(memId) ?? 0) + 1)
-    }
-    const [topId, topCount] = [...counts].reduce<[string | null, number]>(
-      (top, candidate) => (candidate[1] > top[1] ? candidate : top),
-      [null, 0]
-    )
-    if (!topId || topCount < REPEAT_MISS_THRESHOLD || alreadyShown.has(topId)) return null
-    const entry = projectMemory.getById(projectId, topId)
-    return entry ? { entry, count: topCount } : null
-  } catch {
-    return null
-  }
 }
 
 const SUBAGENT_DIGEST_MAX_CHARS = 500

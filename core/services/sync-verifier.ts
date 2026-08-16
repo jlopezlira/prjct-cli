@@ -18,6 +18,7 @@ import type {
   VerificationReport,
 } from '../types/sync-verifier'
 import { execAsync } from '../utils/exec'
+import { summarizeChecks } from '../utils/verification-summary'
 
 // BUILT-IN CHECKS
 
@@ -149,15 +150,8 @@ class SyncVerifier {
       }
     }
 
-    const failedCount = checks.filter((c) => !c.passed).length
-    const passedCount = checks.filter((c) => c.passed).length
-
     return {
-      passed: failedCount === 0,
-      checks,
-      totalMs: Date.now() - totalStart,
-      failedCount,
-      passedCount,
+      ...summarizeChecks(checks, totalStart),
       skippedCount: skippedChecks.length,
     }
   }

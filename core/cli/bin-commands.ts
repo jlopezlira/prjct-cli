@@ -102,19 +102,9 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
       }
       process.exitCode = 0
     } else if (subcommand === 'restart') {
-      const { isDaemonRunning, stopDaemon, forceKillDaemon, spawnDaemon } = await import(
-        '../daemon/client'
-      )
+      const { forceRestartDaemon } = await import('../daemon/client')
 
-      if (await isDaemonRunning()) {
-        const stopped = await stopDaemon()
-        if (!stopped) forceKillDaemon()
-        await new Promise((resolve) => setTimeout(resolve, 300))
-      } else {
-        forceKillDaemon()
-      }
-
-      const started = await spawnDaemon()
+      const started = await forceRestartDaemon()
       if (started) {
         console.log('Daemon restarted.')
         process.exitCode = 0
@@ -189,25 +179,9 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     }
   } else if (args[0] === 'restart') {
     // Top-level shortcut: prjct restart → stop + start daemon
-    const { isDaemonRunning, stopDaemon, forceKillDaemon, spawnDaemon } = await import(
-      '../daemon/client'
-    )
+    const { forceRestartDaemon } = await import('../daemon/client')
 
-    // Stop first (graceful → force)
-    if (await isDaemonRunning()) {
-      const stopped = await stopDaemon()
-      if (!stopped) {
-        forceKillDaemon()
-      }
-      // Wait for process to fully exit
-      await new Promise((resolve) => setTimeout(resolve, 300))
-    } else {
-      // Clean up any stale files
-      forceKillDaemon()
-    }
-
-    // Start fresh
-    const started = await spawnDaemon()
+    const started = await forceRestartDaemon()
     if (started) {
       console.log('Daemon restarted.')
       process.exitCode = 0
@@ -229,13 +203,9 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'context') {
     const projectPath = process.cwd()
-    const configManager = (await import('../infrastructure/config-manager')).default
-    const projectId = await configManager.getProjectId(projectPath)
+    const projectId = await requireProjectOrExit(projectPath)
 
-    if (!projectId) {
-      console.error('No prjct project found. Run "prjct init" first.')
-      process.exitCode = 1
-    } else {
+    if (projectId) {
       const done = await ctx.trackSession('context')
       // Strip --md and --json flags before passing to context tools
       const contextArgs = args.slice(1).filter((a) => a !== '--md' && a !== '--json')
@@ -574,13 +544,9 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'watch') {
     const projectPath = process.cwd()
-    const configManager = (await import('../infrastructure/config-manager')).default
-    const projectId = await configManager.getProjectId(projectPath)
+    const projectId = await requireProjectOrExit(projectPath)
 
-    if (!projectId) {
-      console.error('No prjct project found. Run "prjct init" first.')
-      process.exitCode = 1
-    } else {
+    if (projectId) {
       const { watchService } = await import('../services/watch-service')
       const verbose = args.includes('--verbose') || args.includes('-v')
       const debounceArg = args.find((a) => a.startsWith('--debounce='))
@@ -707,4 +673,22 @@ ${chalk.cyan('https://prjct.app')}
     return false
   }
   return true
+}
+
+/**
+ * Bin-dispatch-level "is this a prjct project" gate: resolves the project
+ * id or prints the uniform not-found message and sets `process.exitCode`.
+ * Distinct from the async command layer's `requireProject()` (in
+ * `core/commands/guards.ts`) — this one is a plain resolve-or-exit for
+ * subcommands routed here in `runBinCommand`, not a `Guard<T>` result.
+ */
+async function requireProjectOrExit(projectPath: string): Promise<string | null> {
+  const configManager = (await import('../infrastructure/config-manager')).default
+  const projectId = await configManager.getProjectId(projectPath)
+  if (!projectId) {
+    console.error('No prjct project found. Run "prjct init" first.')
+    process.exitCode = 1
+    return null
+  }
+  return projectId
 }

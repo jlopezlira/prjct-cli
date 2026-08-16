@@ -9,8 +9,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getTemplateContent } from '../../agentic/template-loader'
-import { getErrorMessage, isNotFoundError } from '../../types/fs'
+import { getErrorMessage } from '../../types/fs'
 import type { GlobalConfigResult } from '../../types/infrastructure'
+import { readExistingFileOrEmpty } from '../../utils/file-helper'
 import { mergeWithMarkers } from '../ide-project-installer'
 
 const GLOBAL_CLAUDE_MD_CONTENT = `<!-- prjct:start - DO NOT REMOVE THIS MARKER -->
@@ -90,13 +91,7 @@ export async function installGlobalConfig(): Promise<GlobalConfigResult> {
         )
     })()
 
-    const existingFile = await fs
-      .readFile(globalConfigPath, 'utf-8')
-      .then((content) => ({ content, exists: true }))
-      .catch((error) => {
-        if (isNotFoundError(error)) return { content: '', exists: false }
-        throw error
-      })
+    const existingFile = await readExistingFileOrEmpty(globalConfigPath)
 
     // Strip legacy prjct-project sections (static context generation removed)
     const projectStartMarker = '<!-- prjct-project:start - DO NOT REMOVE THIS MARKER -->'

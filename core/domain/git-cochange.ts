@@ -18,6 +18,7 @@ import {
 } from '../constants/algorithms'
 import prjctDb from '../storage/database'
 import type { CoChangeIndex, CoChangeMatrix, CoChangeScore } from '../types/domain.js'
+import { scoresToSortedArray } from '../utils/collection-filters'
 import { execAsync } from '../utils/exec'
 
 // Git Log Parsing
@@ -178,9 +179,7 @@ export function scoreFromSeeds(seedFiles: string[], index: CoChangeIndex): CoCha
     }
   }
 
-  return Array.from(scores.entries())
-    .map(([p, s]) => ({ path: p, score: s }))
-    .sort((a, b) => b.score - a.score)
+  return scoresToSortedArray(scores)
 }
 
 // SQLite Persistence

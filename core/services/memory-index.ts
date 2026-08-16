@@ -10,7 +10,7 @@
  */
 
 import { isModelMemory, type MemoryEntry } from '../memory/entries'
-import { deriveTitle } from '../memory/format'
+import { formatMemoryDigestLine } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
 import { prjctDb } from '../storage/database'
 import { getTimestamp } from '../utils/date-helper'
@@ -29,6 +29,8 @@ export const L0_INDEX_FRESH_MS = 24 * 60 * 60 * 1000
 const PER_TYPE = 3
 const DEV_RULES = 4
 const REPEAT_MISS_THRESHOLD = 2
+/** Teaser sizing for index lines (see `formatMemoryDigestLine`) — tighter than SessionStart's digest. */
+const INDEX_TEASER = { minTeaser: 20, maxTeaser: 80 }
 const INDEX_TYPES = ['decision', 'gotcha', 'anti-pattern', 'learning', 'fact', 'feedback'] as const
 
 export interface MemoryL0IndexStamp {
@@ -143,7 +145,7 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
     if (pool.length === 0) continue
     lines.push(`**${sec.title}:**`)
     for (const e2 of pool) {
-      lines.push(`- ${indexLine(e2)}`)
+      lines.push(`- ${formatMemoryDigestLine(e2, INDEX_TEASER)}`)
       if (sec.suppressMiss) suppressMissIds.add(e2.id)
     }
     lines.push('')
@@ -154,7 +156,7 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
   if (repeatMiss) {
     lines.push(
       '**Keeps being missed:**',
-      `- ${indexLine(repeatMiss.entry)} — flagged relevant-but-unused ${repeatMiss.count}×. Apply it or supersede it.`,
+      `- ${formatMemoryDigestLine(repeatMiss.entry, INDEX_TEASER)} — flagged relevant-but-unused ${repeatMiss.count}×. Apply it or supersede it.`,
       ''
     )
   }
@@ -163,7 +165,7 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
   const inboxN = byType.inbox ?? 0
   if (inboxN > 0) {
     lines.push(`**Inbox (${inboxN}):**`)
-    for (const e3 of inbox) lines.push(`- ${indexLine(e3)}`)
+    for (const e3 of inbox) lines.push(`- ${formatMemoryDigestLine(e3, INDEX_TEASER)}`)
     if (inboxN > inbox.length) lines.push(`- … +${inboxN - inbox.length} more`)
     lines.push(
       '',
@@ -248,23 +250,12 @@ export function memoryL0IndexForSession(
   }
 }
 
-function indexLine(e: MemoryEntry): string {
-  const title = deriveTitle(e)
-  const body = (e.content ?? '').replace(/\s+/g, ' ').trim()
-  if (body.length <= title.length + 8) return `${title}  \`${e.id}\``
-  const after = body
-    .slice(title.length)
-    .replace(/^[\s.:;—-]+/, '')
-    .trim()
-  if (after.length < 20) return `${title}  \`${e.id}\``
-  const teaser = after.length > 80 ? `${after.slice(0, 79)}…` : after
-  return `${title} — ${teaser}  \`${e.id}\``
-}
-
 /**
  * Skill-miss feedback loop read side (same contract as SessionStart digest).
+ * Exported: `hooks/session-start.ts` imports this directly rather than
+ * keeping its own copy.
  */
-function findRepeatMissedEntry(
+export function findRepeatMissedEntry(
   projectId: string,
   alreadyShown: Set<string>
 ): { entry: MemoryEntry; count: number } | null {

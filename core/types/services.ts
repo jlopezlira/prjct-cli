@@ -189,19 +189,8 @@ export interface TaskFeedbackContext {
   agentAccuracy: Array<{ agent: string; rating: string; note?: string }>
 }
 
-// --- Git Analyzer Types ---
-
-export interface GitData {
-  branch: string
-  commits: number
-  contributors: number
-  hasChanges: boolean
-  stagedFiles: string[]
-  modifiedFiles: string[]
-  untrackedFiles: string[]
-  recentCommits: { hash: string; message: string; date: string }[]
-  weeklyCommits: number
-}
+// --- Git Analyzer Types --- GitData lives in './project-sync' (its
+// documented single source of truth); import from there directly.
 
 // --- Agent Generator Types ---
 

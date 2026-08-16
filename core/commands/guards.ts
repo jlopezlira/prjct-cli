@@ -11,6 +11,7 @@ import configManager from '../infrastructure/config-manager'
 import type { CurrentTask } from '../schemas/state'
 import { projectService } from '../services/project-service'
 import { resolveActiveTask } from '../services/task-service'
+import { evaluateMemoryContent } from '../services/trust-boundary'
 import { customWorkflowStorage } from '../storage/custom-workflow-storage'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
@@ -100,4 +101,33 @@ export function requireWorkflow(
     ok: false,
     result: failWith(`Workflow '${command ?? ''}' not found. Available: ${available}`, options),
   }
+}
+
+/**
+ * Trust-boundary gate for memory content (`capture` / `remember`). Runs
+ * `evaluateMemoryContent` and, on deny, prints the uniform failure and maps
+ * the verdict (secrets / prompt-injection / other) to a `CommandResult`
+ * error — the same 13-line mapping both commands used to inline.
+ */
+export function requireTrustedMemoryContent(
+  content: string,
+  options: { force?: boolean } = {}
+): { ok: true } | { ok: false; result: CommandResult } {
+  const trust = evaluateMemoryContent(content, { force: options.force })
+  if (!trust.allow) {
+    out.fail(trust.denyMessage)
+    return {
+      ok: false,
+      result: {
+        success: false,
+        error:
+          trust.kind === 'secrets'
+            ? 'Secret-like content detected'
+            : trust.kind === 'prompt_injection'
+              ? 'Prompt-injection-like content detected'
+              : trust.reason,
+      },
+    }
+  }
+  return { ok: true }
 }

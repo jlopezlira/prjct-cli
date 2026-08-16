@@ -191,21 +191,25 @@ function mapClaudeEventToCursor(event: string): string {
  * `process.stdin`, whose stream wrapper costs event-loop turnaround per
  * hook. We still touch `process.stdin.fd` once up front: on node (the
  * production runtime) creating the wrapper flips fd 0 non-blocking, so an
- * open-but-empty pipe yields EAGAIN and the 200ms deadline below is REAL —
- * a host that opens stdin but never closes degrades to whatever arrived
- * instead of hanging until the host's hook-timeout kill. On bun (dev-only)
- * the fd stays blocking and the deadline only governs EAGAIN retries; the
- * host-side hook timeout remains the backstop there. Retries sleep ~1ms
- * via Atomics.wait so a slow-to-flush host doesn't busy-spin.
+ * open-but-empty pipe yields EAGAIN and the `timeoutMs` deadline below is
+ * REAL — a host that opens stdin but never closes degrades to whatever
+ * arrived instead of hanging until the host's hook-timeout kill. On bun
+ * (dev-only) the fd stays blocking and the deadline only governs EAGAIN
+ * retries; the host-side hook timeout remains the backstop there. Retries
+ * sleep ~1ms via Atomics.wait so a slow-to-flush host doesn't busy-spin.
+ *
+ * Shared busy-wait/EAGAIN-retry core for both this module's JSON-parsing
+ * `readStdinSafe` and the cold-entry raw-string reader (mirrors bin/prjct.ts
+ * `readStdinSync`) — same loop, different timeout and post-processing.
  */
-export function readStdinSafe<T = Record<string, unknown>>(): T {
-  if (isatty(0)) return {} as T
+export function readStdinRaw(timeoutMs: number): Buffer {
+  if (isatty(0)) return Buffer.alloc(0)
   try {
     void process.stdin.fd
   } catch {
-    // stdin fd unavailable — readSync below fails and degrades to {}
+    // stdin fd unavailable — readSync below fails and degrades to empty
   }
-  const deadline = Date.now() + 200
+  const deadline = Date.now() + timeoutMs
   const sleeper = new Int32Array(new SharedArrayBuffer(4))
   const buf = Buffer.alloc(65536)
   const parts: Buffer[] = []
@@ -222,8 +226,12 @@ export function readStdinSafe<T = Record<string, unknown>>(): T {
       break
     }
   }
+  return Buffer.concat(parts)
+}
+
+export function readStdinSafe<T = Record<string, unknown>>(): T {
   try {
-    const raw = Buffer.concat(parts).toString('utf-8').trim()
+    const raw = readStdinRaw(200).toString('utf-8').trim()
     if (!raw) return {} as T
     return JSON.parse(raw) as T
   } catch {

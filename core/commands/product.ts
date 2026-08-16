@@ -22,11 +22,12 @@ import {
   type WorkCostTask,
 } from '../services/work-cost-service'
 import prjctDb from '../storage/database'
-import type { SqliteBindings } from '../storage/database/sqlite-compat'
+import { count, query } from '../storage/query-helpers'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
-import { runGit, throwProc } from '../utils/exec'
+import { durationMinutes, nullableNumber, sinceIso } from '../utils/date-helper'
+import { listChangedFiles } from '../utils/exec'
 import { failHard } from '../utils/md-aware'
 import out from '../utils/output'
 import { PrjctCommandsBase } from './base'
@@ -34,10 +35,6 @@ import { requireProject } from './guards'
 
 interface ProductOptions extends MdOption {
   days?: number
-}
-
-interface CountRow {
-  value: number
 }
 
 interface TypeCountRow {
@@ -199,16 +196,13 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-
-      const snapshot = await buildValueSnapshot(guard.value, projectPath)
-      console.log(options.md ? formatValueMd(snapshot) : formatValueText(snapshot))
-      return { success: true, ...snapshot }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildValueSnapshot(projectId, projectPath),
+      (snapshot) => console.log(options.md ? formatValueMd(snapshot) : formatValueText(snapshot)),
+      (snapshot) => snapshot
+    )
   }
 
   async memoryDoctor(
@@ -216,21 +210,19 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-
-      const report = buildMemoryDoctor(guard.value)
-      const includeFixPlan = wantsFixPlan(_input)
-      console.log(
-        options.md
-          ? formatMemoryDoctorMd(report, includeFixPlan)
-          : formatMemoryDoctorText(report, includeFixPlan)
-      )
-      return { success: true, score: report.score, issues: report.issues.length }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    const includeFixPlan = wantsFixPlan(_input)
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildMemoryDoctor(projectId),
+      (report) =>
+        console.log(
+          options.md
+            ? formatMemoryDoctorMd(report, includeFixPlan)
+            : formatMemoryDoctorText(report, includeFixPlan)
+        ),
+      (report) => ({ score: report.score, issues: report.issues.length })
+    )
   }
 
   async report(
@@ -238,17 +230,14 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-
-      const days = pickDays(input, options.days, 7)
-      const report = await buildHumanReport(guard.value, projectPath, days)
-      console.log(options.md ? formatReportMd(report) : formatReportText(report))
-      return { success: true, days, ships: report.ships.length, completed: report.completed.length }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    const days = pickDays(input, options.days, 7)
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildHumanReport(projectId, projectPath, days),
+      (report) => console.log(options.md ? formatReportMd(report) : formatReportText(report)),
+      (report) => ({ days, ships: report.ships.length, completed: report.completed.length })
+    )
   }
 
   async handoff(
@@ -256,17 +245,14 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-
-      const target = (input ?? '').trim().split(/\s+/).filter(Boolean)[0] ?? 'next agent'
-      const handoff = await buildHandoff(guard.value, projectPath, target)
-      console.log(options.md ? formatHandoffMd(handoff) : formatHandoffText(handoff))
-      return { success: true, target, memories: handoff.memories.length }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    const target = (input ?? '').trim().split(/\s+/).filter(Boolean)[0] ?? 'next agent'
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildHandoff(projectId, projectPath, target),
+      (handoff) => console.log(options.md ? formatHandoffMd(handoff) : formatHandoffText(handoff)),
+      (handoff) => ({ target, memories: handoff.memories.length })
+    )
   }
 
   async guardrails(
@@ -274,16 +260,14 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-
-      const report = await buildGuardrails(guard.value, projectPath)
-      console.log(options.md ? formatGuardrailsMd(report) : formatGuardrailsText(report))
-      return { success: true, files: report.files.length, hits: report.hits.length }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildGuardrails(projectId, projectPath),
+      (report) =>
+        console.log(options.md ? formatGuardrailsMd(report) : formatGuardrailsText(report)),
+      (report) => ({ files: report.files.length, hits: report.hits.length })
+    )
   }
 
   async performance(
@@ -291,19 +275,17 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-
-      const days = pickDays(input, options.days, 14)
-      const cycles = buildPerformanceCycles(guard.value, days)
-      console.log(
-        options.md ? formatPerformanceMd(days, cycles) : formatPerformanceText(days, cycles)
-      )
-      return { success: true, days, cycles: cycles.length }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    const days = pickDays(input, options.days, 14)
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildPerformanceCycles(projectId, days),
+      (cycles) =>
+        console.log(
+          options.md ? formatPerformanceMd(days, cycles) : formatPerformanceText(days, cycles)
+        ),
+      (cycles) => ({ days, cycles: cycles.length })
+    )
   }
 
   async perf(
@@ -311,16 +293,14 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-      const days = pickDays(input, options.days, 7)
-      const report = performanceTracker.getLatencyReport(guard.value, days)
-      console.log(options.md ? formatLatencyMd(report) : formatLatencyText(report))
-      return { success: true, days, commands: Object.keys(report.commands).length }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    const days = pickDays(input, options.days, 7)
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => performanceTracker.getLatencyReport(projectId, days),
+      (report) => console.log(options.md ? formatLatencyMd(report) : formatLatencyText(report)),
+      (report) => ({ days, commands: Object.keys(report.commands).length })
+    )
   }
 
   async cost(
@@ -328,17 +308,14 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-
-      const days = pickDays(input, options.days, 30)
-      const snapshot = buildWorkCostSnapshot(guard.value, days)
-      console.log(options.md ? formatCostMd(snapshot) : formatCostText(snapshot))
-      return { success: true, ...snapshot }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    const days = pickDays(input, options.days, 30)
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildWorkCostSnapshot(projectId, days),
+      (snapshot) => console.log(options.md ? formatCostMd(snapshot) : formatCostText(snapshot)),
+      (snapshot) => snapshot
+    )
   }
 
   /**
@@ -347,18 +324,20 @@ export class ProductCommands extends PrjctCommandsBase {
    * start/completion). Idempotent; only touches tasks with zero tokens.
    */
   async backfill(projectPath: string = process.cwd(), options: ProductOptions = {}) {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
-      const { backfillTaskTokens } = await import('../services/token-backfill')
-      const r = await backfillTaskTokens(guard.value, projectPath)
-      const msg = `backfilled ${r.tasksBackfilled} task(s) with ${r.tokensRecovered.toLocaleString()} tokens from ${r.transcriptsScanned} transcript(s) (${r.tasksSkipped} had no usage in window)`
-      if (options.md) console.log(`✓ ${msg}`)
-      else out.done(msg)
-      return { success: true, ...r }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+    return runProductCommand(
+      projectPath,
+      options,
+      async (projectId) => {
+        const { backfillTaskTokens } = await import('../services/token-backfill')
+        return backfillTaskTokens(projectId, projectPath)
+      },
+      (r) => {
+        const msg = `backfilled ${r.tasksBackfilled} task(s) with ${r.tokensRecovered.toLocaleString()} tokens from ${r.transcriptsScanned} transcript(s) (${r.tasksSkipped} had no usage in window)`
+        if (options.md) console.log(`✓ ${msg}`)
+        else out.done(msg)
+      },
+      (r) => r
+    )
   }
 
   async reliability(
@@ -366,17 +345,38 @@ export class ProductCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: ProductOptions = {}
   ): Promise<CommandResult> {
-    try {
-      const guard = await requireProject(projectPath, options)
-      if (!guard.ok) return guard.result
+    const days = pickDays(input, options.days, 30)
+    return runProductCommand(
+      projectPath,
+      options,
+      (projectId) => buildReliabilitySnapshot(projectId, projectPath, days),
+      (snapshot) =>
+        console.log(options.md ? formatReliabilityMd(snapshot) : formatReliabilityText(snapshot)),
+      (snapshot) => snapshot
+    )
+  }
+}
 
-      const days = pickDays(input, options.days, 30)
-      const snapshot = await buildReliabilitySnapshot(guard.value, projectPath, days)
-      console.log(options.md ? formatReliabilityMd(snapshot) : formatReliabilityText(snapshot))
-      return { success: true, ...snapshot }
-    } catch (error) {
-      return failHard(getErrorMessage(error), options)
-    }
+/**
+ * Shared try/guard/build/print/catch shell for the report commands above —
+ * the only per-command variance is what to build, how to print it, and what
+ * extra fields the result carries.
+ */
+async function runProductCommand<T>(
+  projectPath: string,
+  options: ProductOptions,
+  build: (projectId: string) => Promise<T> | T,
+  print: (data: T) => void,
+  toResult: (data: T) => object
+): Promise<CommandResult> {
+  try {
+    const guard = await requireProject(projectPath, options)
+    if (!guard.ok) return guard.result
+    const data = await build(guard.value)
+    print(data)
+    return { success: true, ...toResult(data) }
+  } catch (error) {
+    return failHard(getErrorMessage(error), options)
   }
 }
 
@@ -818,7 +818,7 @@ async function buildHandoff(projectId: string, projectPath: string, target: stri
 }
 
 async function buildGuardrails(projectId: string, projectPath: string) {
-  const files = await changedFiles(projectPath)
+  const files = await listChangedFiles(projectPath)
   const hits: Array<{ file: string; entry: MemoryEntry }> = []
   for (const file of files.slice(0, 40)) {
     const entries = projectMemory.recallForFile(projectId, file, 3)
@@ -833,48 +833,6 @@ async function buildGuardrails(projectId: string, projectPath: string) {
         })
       : []
   return { files, hits, fallback }
-}
-
-async function changedFiles(projectPath: string): Promise<string[]> {
-  const names = new Set<string>()
-  const diff = await runGit(['diff', '--name-only', 'HEAD'], { cwd: projectPath })
-  if (diff.ok) {
-    for (const line of diff.stdout.split('\n')) {
-      const value = line.trim()
-      if (value) names.add(value)
-    }
-  } else if (diff.kind !== 'exit') {
-    // Typed exit → no diff answer; still collect untracked below.
-    throwProc(diff)
-  }
-  const untracked = await runGit(['ls-files', '--others', '--exclude-standard'], {
-    cwd: projectPath,
-  })
-  if (untracked.ok) {
-    for (const line2 of untracked.stdout.split('\n')) {
-      const value = line2.trim()
-      if (value) names.add(value)
-    }
-  } else if (untracked.kind !== 'exit') {
-    throwProc(untracked)
-  }
-  return [...names].sort()
-}
-
-function count(projectId: string, sql: string, ...params: SqliteBindings[]): number {
-  try {
-    return Number(prjctDb.get<CountRow>(projectId, sql, ...params)?.value ?? 0)
-  } catch {
-    return 0
-  }
-}
-
-function query<T>(projectId: string, sql: string, ...params: SqliteBindings[]): T[] {
-  try {
-    return prjctDb.query<T>(projectId, sql, ...params)
-  } catch {
-    return []
-  }
 }
 
 function valueScore(
@@ -906,27 +864,6 @@ function wantsFixPlan(input: string | null): boolean {
 
 function unique(items: string[]): string[] {
   return [...new Set(items)]
-}
-
-function sinceIso(days: number): string {
-  const date = new Date()
-  date.setDate(date.getDate() - days)
-  return date.toISOString()
-}
-
-function nullableNumber(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
-}
-
-function durationMinutes(
-  start: string | null | undefined,
-  end: string | null | undefined
-): number | null {
-  if (!start || !end) return null
-  const started = Date.parse(start)
-  const ended = Date.parse(end)
-  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) return null
-  return Math.round((ended - started) / 60_000)
 }
 
 function synthesizePrompt(description: string): string {

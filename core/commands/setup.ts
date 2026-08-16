@@ -22,6 +22,8 @@ import syncManager from '../sync/sync-manager'
 import type { MdOption } from '../types/cli'
 import type { CommandResult, SetupOptions } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
+import type { AntigravityDetection, CodexDetection } from '../types/infrastructure'
+import type { AIProviderConfig } from '../types/provider'
 import { execAsync } from '../utils/exec'
 import { fileExists, readJson, writeJson } from '../utils/file-helper'
 import { failFromError } from '../utils/md-aware'
@@ -478,26 +480,14 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
         `\n✅ Installed ${result.installed?.length ?? 0} commands to:\n   ${pathManager.getDisplayPath(result.path || '')}`
       )
 
-      if ((result.errors?.length ?? 0) > 0) {
-        console.log(`\n⚠️  ${result.errors?.length ?? 0} errors:`)
-        for (const e of result.errors ?? []) {
-          console.log(`   - ${e.file}: ${e.error}`)
-        }
-      }
+      this.printInstallErrors(result.errors)
     }
 
-    await this.installCodexSurface(codexDetection.installed, 'Installed Codex skill')
-    await this.installAntigravitySurface(antigravityDetection.installed)
-
-    await this.setupMcpServers()
-    await this.installProjectAgentSurfacesIfConfigured()
-    await this.saveSetupStamp(
-      activeProvider?.name ??
-        (codexDetection.installed
-          ? 'codex'
-          : antigravityDetection.installed
-            ? 'antigravity'
-            : 'claude')
+    await this.finishProviderInstall(
+      codexDetection,
+      antigravityDetection,
+      activeProvider,
+      'Installed Codex skill'
     )
 
     console.log('\n🎉 Setup complete!')
@@ -547,12 +537,7 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
 
       console.log(`\n✅ Installed ${result.installed?.length ?? 0} commands`)
 
-      if ((result.errors?.length ?? 0) > 0) {
-        console.log(`\n⚠️  ${result.errors?.length ?? 0} errors:`)
-        for (const e of result.errors ?? []) {
-          console.log(`   - ${e.file}: ${e.error}`)
-        }
-      }
+      this.printInstallErrors(result.errors)
 
       console.log('\n📝 Installing global configuration...')
       const configResult = await commandInstaller.installGlobalConfig()
@@ -590,18 +575,11 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
       }
     }
 
-    await this.installCodexSurface(codexDetection.installed, 'Codex skill installed')
-    await this.installAntigravitySurface(antigravityDetection.installed)
-
-    await this.setupMcpServers()
-    await this.installProjectAgentSurfacesIfConfigured()
-    await this.saveSetupStamp(
-      activeProvider?.name ??
-        (codexDetection.installed
-          ? 'codex'
-          : antigravityDetection.installed
-            ? 'antigravity'
-            : 'claude')
+    await this.finishProviderInstall(
+      codexDetection,
+      antigravityDetection,
+      activeProvider,
+      'Codex skill installed'
     )
 
     console.log('\n🎉 Setup complete!\n')
@@ -622,6 +600,44 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
    */
   private async setupMcpServers(): Promise<void> {
     await configureDefaultMcpServers()
+  }
+
+  /** Print `commandInstaller.installCommands()`'s per-file error list, if any. */
+  private printInstallErrors(errors: Array<{ file: string; error: string }> | undefined): void {
+    if ((errors?.length ?? 0) > 0) {
+      console.log(`\n⚠️  ${errors?.length ?? 0} errors:`)
+      for (const e of errors ?? []) {
+        console.log(`   - ${e.file}: ${e.error}`)
+      }
+    }
+  }
+
+  /**
+   * The tail both `start()` and `setup()` run once the command router (and,
+   * for `setup()`, global config) is installed: Codex/Antigravity skill
+   * surfaces, MCP servers, project agent surfaces, and the version stamp.
+   * `codexSuccessLabel` is the one thing that differs between the two
+   * flows' console output.
+   */
+  private async finishProviderInstall(
+    codexDetection: CodexDetection,
+    antigravityDetection: AntigravityDetection,
+    activeProvider: AIProviderConfig | null,
+    codexSuccessLabel: string
+  ): Promise<void> {
+    await this.installCodexSurface(codexDetection.installed, codexSuccessLabel)
+    await this.installAntigravitySurface(antigravityDetection.installed)
+
+    await this.setupMcpServers()
+    await this.installProjectAgentSurfacesIfConfigured()
+    await this.saveSetupStamp(
+      activeProvider?.name ??
+        (codexDetection.installed
+          ? 'codex'
+          : antigravityDetection.installed
+            ? 'antigravity'
+            : 'claude')
+    )
   }
 
   private async saveSetupStamp(

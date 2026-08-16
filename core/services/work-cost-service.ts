@@ -1,10 +1,7 @@
 import prjctDb from '../storage/database'
-import type { SqliteBindings } from '../storage/database/sqlite-compat'
+import { count, query } from '../storage/query-helpers'
 import { publishCRUD } from '../sync/publish-helper'
-
-interface CountRow {
-  value: number
-}
+import { durationMinutes, nullableNumber, sinceIso } from '../utils/date-helper'
 
 interface CostTaskRow {
   id: string
@@ -655,41 +652,4 @@ function aggregatePerf(projectId: string, metric: string, since: string): PerfAg
       since
     )[0] ?? { samples: 0, total: 0, average: null }
   )
-}
-
-function count(projectId: string, sql: string, ...params: SqliteBindings[]): number {
-  try {
-    return Number(prjctDb.get<CountRow>(projectId, sql, ...params)?.value ?? 0)
-  } catch {
-    return 0
-  }
-}
-
-function query<T>(projectId: string, sql: string, ...params: SqliteBindings[]): T[] {
-  try {
-    return prjctDb.query<T>(projectId, sql, ...params)
-  } catch {
-    return []
-  }
-}
-
-function sinceIso(days: number): string {
-  const date = new Date()
-  date.setDate(date.getDate() - days)
-  return date.toISOString()
-}
-
-function nullableNumber(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
-}
-
-function durationMinutes(
-  start: string | null | undefined,
-  end: string | null | undefined
-): number | null {
-  if (!start || !end) return null
-  const started = Date.parse(start)
-  const ended = Date.parse(end)
-  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) return null
-  return Math.round((ended - started) / 60_000)
 }

@@ -13,11 +13,12 @@
 import configManager from '../infrastructure/config-manager'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
-import { failHard, failWith } from '../utils/md-aware'
+import { failWith } from '../utils/md-aware'
 import { mdOutput } from '../utils/md-formatter'
 import { effectiveNotifyMode, NOTIFY_MODES, type NotifyMode } from '../utils/notify'
 import out from '../utils/output'
 import { PrjctCommandsBase } from './base'
+import { parseModeSubcommand, requireProjectConfig } from './mode-command-helpers'
 
 export class NotifyCommands extends PrjctCommandsBase {
   async notify(
@@ -25,18 +26,19 @@ export class NotifyCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: MdOption = {}
   ): Promise<CommandResult> {
-    const sub = (input ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean)[0] ?? ''
-    if (!sub || sub === 'status' || sub === 'show') return this.showStatus(projectPath, options)
-    if ((NOTIFY_MODES as readonly string[]).includes(sub)) {
-      return this.setMode(sub as NotifyMode, projectPath, options)
-    }
-    return failWith(`Unknown notify subcommand "${sub}". Use: ${NOTIFY_MODES.join('|')}.`, options)
+    const parsed = parseModeSubcommand(input, NOTIFY_MODES)
+    if (parsed.kind === 'status') return this.showStatus(projectPath, options)
+    if (parsed.kind === 'mode') return this.setMode(parsed.mode as NotifyMode, projectPath, options)
+    return failWith(
+      `Unknown notify subcommand "${parsed.sub}". Use: ${NOTIFY_MODES.join('|')}.`,
+      options
+    )
   }
 
   private async showStatus(projectPath: string, options: MdOption): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     const mode = effectiveNotifyMode(config)
     const summary = [
@@ -57,9 +59,9 @@ export class NotifyCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     config.notify = { mode }
     await configManager.writeConfig(projectPath, config)

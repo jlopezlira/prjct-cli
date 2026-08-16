@@ -14,7 +14,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { resolveUserPath } from '../infrastructure/user-home'
 import type { MCPServerConfig } from '../types/utils.js'
-import { MCP_SERVER_PRESETS } from './mcp-config'
+import { MCP_SERVER_PRESETS, upsertMarkedBlock, writeConfigIfChanged } from './mcp-config'
 
 const START_MARKER = '# prjct:mcp:start - managed by prjct, do not edit between markers'
 const END_MARKER = '# prjct:mcp:end'
@@ -79,36 +79,6 @@ export function buildContext7McpTomlBlock(
   return buildMcpTomlBlock('context7', server, CONTEXT7_START_MARKER, CONTEXT7_END_MARKER)
 }
 
-/**
- * Upsert a marker-delimited block into `existing`. Returns the new text plus
- * whether a user-managed (marker-less) table of the same name was found — in
- * which case we leave their config untouched.
- */
-function upsertMarkedBlock(
-  existing: string,
-  block: string,
-  startMarker: string,
-  endMarker: string,
-  tableName: string
-): { next: string; skipped?: 'user-managed' } {
-  const startIdx = existing.indexOf(startMarker)
-  const endIdx = existing.indexOf(endMarker)
-
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = existing.slice(0, startIdx)
-    const trailing = existing.slice(endIdx + endMarker.length)
-    const after = trailing.startsWith('\n') ? trailing.slice(1) : trailing
-    return { next: before + block + after }
-  }
-  if (new RegExp(`^\\s*\\[mcp_servers\\.${tableName}\\]`, 'm').test(existing)) {
-    return { next: existing, skipped: 'user-managed' }
-  }
-  if (existing.trim().length > 0) {
-    return { next: `${existing.trimEnd()}\n\n${block}` }
-  }
-  return { next: block }
-}
-
 export function buildCodexStatusLineToml(): string {
   const items = CODEX_STATUS_LINE_ITEMS.map(tomlString).join(', ')
   return ['[tui]', `status_line = [${items}]`, ''].join('\n')
@@ -166,17 +136,11 @@ export async function ensureCodexMcpServer(configPath = getCodexConfigTomlPath()
   const withStatusLine = ensureCodexStatusLineToml(upserted.next)
   const next = withStatusLine.toml
 
-  if (next === existing) {
-    return { path: configPath, changed: false, skipped }
-  }
-
-  await fs.mkdir(path.dirname(configPath), { recursive: true })
-  await fs.writeFile(configPath, next, 'utf-8')
+  const result = await writeConfigIfChanged(configPath, existing, next)
   return {
-    path: configPath,
-    changed: true,
+    ...result,
     skipped,
-    statusLineChanged: withStatusLine.changed,
+    ...(result.changed ? { statusLineChanged: withStatusLine.changed } : {}),
   }
 }
 
@@ -202,13 +166,8 @@ export async function ensureCodexContext7Server(configPath = getCodexConfigTomlP
     'context7'
   )
 
-  if (next === existing) {
-    return { path: configPath, changed: false, skipped }
-  }
-
-  await fs.mkdir(path.dirname(configPath), { recursive: true })
-  await fs.writeFile(configPath, next, 'utf-8')
-  return { path: configPath, changed: true, skipped }
+  const result = await writeConfigIfChanged(configPath, existing, next)
+  return { ...result, skipped }
 }
 
 /** True iff config.toml carries a `[mcp_servers.context7]` table (managed or user). */

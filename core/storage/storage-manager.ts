@@ -7,11 +7,11 @@
  * Subclasses implement specific data types (state, queue, ideas, shipped).
  */
 
-import crypto from 'node:crypto'
 import { syncEventBus } from '../events/sync-events'
 import type { SyncEvent } from '../types/events'
 import { TTLCache } from '../utils/cache'
 import { getTimestamp } from '../utils/date-helper'
+import { hashPayload } from '../utils/hash'
 import { prjctDb } from './database'
 
 function deriveEntityShape(legacyType: string): {
@@ -34,20 +34,6 @@ function entityIdOf(eventData: unknown): string | undefined {
     if (typeof v === 'string' && v.length > 0) return v
   }
   return undefined
-}
-
-function hashPayload(data: unknown): string {
-  const canonical =
-    data && typeof data === 'object' && !Array.isArray(data)
-      ? JSON.stringify(sortKeys(data as Record<string, unknown>))
-      : JSON.stringify(data)
-  return crypto.createHash('sha256').update(canonical).digest('hex')
-}
-
-function sortKeys(obj: Record<string, unknown>): Record<string, unknown> {
-  const sorted: Record<string, unknown> = {}
-  for (const k of Object.keys(obj).sort()) sorted[k] = obj[k]
-  return sorted
 }
 
 /**

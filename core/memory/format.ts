@@ -207,6 +207,31 @@ export function deriveTitle(entry: Pick<MemoryEntry, 'content' | 'type' | 'id' |
 }
 
 /**
+ * One digest/index line: title is usually enough; when the body is longer
+ * and carries a distinct second clause, append a short teaser so weak
+ * models can apply without a second pull. Shared by the SessionStart
+ * knowledge digest and the L0 memory index — they differ only in how much
+ * teaser text they can afford (`minTeaser`/`maxTeaser`).
+ */
+export function formatMemoryDigestLine(
+  e: MemoryEntry,
+  opts: { minTeaser: number; maxTeaser: number }
+): string {
+  const title = deriveTitle(e)
+  const body = (e.content ?? '').replace(/\s+/g, ' ').trim()
+  // If body is essentially the title, skip teaser.
+  if (body.length <= title.length + 8) return `${title}  \`${e.id}\``
+  // Prefer content after first sentence for the teaser.
+  const after = body
+    .slice(title.length)
+    .replace(/^[\s.:;—-]+/, '')
+    .trim()
+  if (after.length < opts.minTeaser) return `${title}  \`${e.id}\``
+  const teaser = after.length > opts.maxTeaser ? `${after.slice(0, opts.maxTeaser - 1)}…` : after
+  return `${title} — ${teaser}  \`${e.id}\``
+}
+
+/**
  * `mem_3135` → `[[mem_3135|<title>]]` (per-entry note, via alias) or
  * `[[gotcha#^mem-3135|<title>]]` (aggregated file block anchor).
  *

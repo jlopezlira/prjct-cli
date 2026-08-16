@@ -410,21 +410,10 @@ class SyncService {
           }
         })()
 
-      // work-cost / archive / context-quality are kept SEQUENTIAL on purpose.
-      // They look independent from their signatures (each takes only
-      // `this.projectId`/`this.projectPath`), but tracing the actual
-      // read/write sets found a real ordering dependency: `archive` deletes
-      // stale rows from the same `tasks`/`memory`-adjacent tables that
-      // `work-cost` (SELECT ... FROM tasks) and `context-quality`
-      // (evaluateRetention scoring) read. Running archive concurrently with
-      // either would make the cost snapshot / quality repair race against
-      // rows mid-deletion — non-deterministic output, not just a perf change.
-      // The CURRENT order (cost/quality reads happen before archive's writes
-      // land) is already correct, not accidental; parallelizing here would
-      // trade correctness for speed. `metrics` above already runs earlier
-      // and touches none of these tables. See spec 1f3bb902 AC5 — the phase
-      // TIMING half of that AC is implemented (phaseTimings, surfaced in
-      // --md/text output above); this half was investigated and rejected.
+      // Kept sequential on purpose: archive deletes rows from the same
+      // tasks/memory tables work-cost and context-quality READ, so running
+      // them concurrently would race against rows mid-deletion. Don't
+      // parallelize this — the current order is correct, not accidental.
       const workCost = await phase('work-cost', () => publishWorkCostSnapshots(this.projectId!))
 
       // 9b. Archive stale data (PRJ-267)

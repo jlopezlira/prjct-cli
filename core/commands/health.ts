@@ -105,10 +105,8 @@ async function detectDimensions(projectPath: string): Promise<HealthDimension[]>
 
 // Dimension execution
 
-// Default budget per dimension. Overridable — a loaded machine (e.g. this
-// process itself running concurrent agent work) can legitimately push a
-// 2864-test suite (~130s isolated) well past a tight default; a fixed
-// timeout with no escape hatch turns transient contention into a false FAIL.
+// Default budget per dimension. Overridable — a loaded machine can push a
+// full suite past a tight default and turn transient contention into a false FAIL.
 const DEFAULT_DIM_TIMEOUT_MS = 5 * 60 * 1000
 
 function dimensionTimeoutMs(): number {
@@ -142,12 +140,8 @@ async function runDimension(projectPath: string, dim: HealthDimension): Promise<
     })
     return { dimension: dim, status: 'pass', durationMs: Date.now() - start }
   } catch (error) {
-    // Node's child_process sets `killed: true` (and usually `signal:
-    // 'SIGTERM'`) when the `timeout` option fires. Without this check the
-    // catch-all below scrapes "first non-empty line of stdout/stderr" —
-    // for a killed test run that's whatever line the reporter happened to
-    // be mid-flush on, which reads as "this file failed" when nothing
-    // actually failed; the run just didn't finish in time.
+    // Node sets `killed: true` when the timeout fires — without this check
+    // we'd scrape a stdout/stderr line that just happened to be mid-flush.
     const errWithMeta = error as {
       killed?: boolean
       signal?: string

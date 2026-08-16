@@ -25,6 +25,14 @@ export const EvalScenarioSchema = z.object({
   actionables: z.array(EvalActionableSchema),
 })
 
+/** Pointers to the on-disk artifacts for a run/comparison — same shape either way. */
+const EvalArtifactsRefSchema = z
+  .object({
+    jsonPath: z.string().optional(),
+    reportPath: z.string().optional(),
+  })
+  .optional()
+
 export const EvalRunSchema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string(),
@@ -57,12 +65,7 @@ export const EvalRunSchema = z.object({
     regressions: z.number().nonnegative(),
     actionables: z.number().nonnegative(),
   }),
-  artifacts: z
-    .object({
-      jsonPath: z.string().optional(),
-      reportPath: z.string().optional(),
-    })
-    .optional(),
+  artifacts: EvalArtifactsRefSchema,
 })
 
 export const EvalComparisonSchema = z.object({
@@ -81,12 +84,7 @@ export const EvalComparisonSchema = z.object({
     improvements: z.number().nonnegative(),
     actionables: z.number().nonnegative(),
   }),
-  artifacts: z
-    .object({
-      jsonPath: z.string().optional(),
-      reportPath: z.string().optional(),
-    })
-    .optional(),
+  artifacts: EvalArtifactsRefSchema,
   scenarios: z.array(
     z.object({
       id: z.string(),

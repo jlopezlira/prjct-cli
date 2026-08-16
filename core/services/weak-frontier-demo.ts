@@ -11,6 +11,7 @@ import { countTokens } from '../tools/context/token-counter'
 import { computeHarnessScore, WORLD_CLASS } from './harness-score'
 import { MINIMAL_ROUTING_BODY } from './routing-block'
 import { buildPrjctSkill } from './skill-generator/prjct-skill-body'
+import { INTENT_FIXTURES } from './weak-model-bench'
 
 export interface DemoRow {
   capability: string
@@ -70,20 +71,6 @@ export function routeIntentBare(signal: string): string {
   if (/\bfix\b|\bbuild\b|\bimplement\b|\bbug\b/.test(s)) return 'work'
   return 'work'
 }
-
-// Keep fixtures aligned with weak-model-bench INTENT_FIXTURES (release gate).
-const INTENT_FIXTURES: Array<{ signal: string; verb: string }> = [
-  { signal: 'sync the project', verb: 'sync' },
-  { signal: 'search for auth decisions', verb: 'search' },
-  { signal: 'remember this decision about caching', verb: 'remember' },
-  { signal: 'fix the login bug', verb: 'work' },
-  { signal: 'what should I work on next', verb: 'next' },
-  { signal: 'ship the feature', verb: 'ship' },
-  { signal: 'implement rate limiting', verb: 'work' },
-  { signal: 'find gotchas on migrations', verb: 'search' },
-  { signal: 'recall package legitimacy rules', verb: 'search' },
-  { signal: 'open a pr for the fix', verb: 'ship' },
-]
 
 function intentHitCounts(): {
   harnessHits: number

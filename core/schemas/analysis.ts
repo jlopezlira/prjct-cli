@@ -10,16 +10,15 @@ import path from 'node:path'
 import { z } from 'zod'
 import { isNotFoundError } from '../types/fs'
 import { fileExists } from '../utils/file-helper'
+import { summarizeChecks } from '../utils/verification-summary'
 import { ModelMetadataSchema } from './model'
 
 // Zod Schemas - Source of Truth
 
 export const AnalysisStatusSchema = z.enum(['draft', 'verified', 'sealed'])
 
-const CodePatternSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  location: z.string().optional(),
+/** Detection provenance shared by patterns and anti-patterns alike. */
+const PatternMetadataSchema = z.object({
   severity: z.enum(['low', 'medium', 'high']).optional(),
   language: z.string().optional(),
   framework: z.string().optional(),
@@ -27,16 +26,21 @@ const CodePatternSchema = z.object({
   confidence: z.number().min(0).max(1).optional(),
 })
 
-const AntiPatternSchema = z.object({
-  issue: z.string(),
-  file: z.string(),
-  suggestion: z.string(),
-  severity: z.enum(['low', 'medium', 'high']).optional(),
-  language: z.string().optional(),
-  framework: z.string().optional(),
-  source: z.enum(['baseline', 'repo', 'context7', 'feedback']).optional(),
-  confidence: z.number().min(0).max(1).optional(),
-})
+const CodePatternSchema = z
+  .object({
+    name: z.string(),
+    description: z.string(),
+    location: z.string().optional(),
+  })
+  .extend(PatternMetadataSchema.shape)
+
+const AntiPatternSchema = z
+  .object({
+    issue: z.string(),
+    file: z.string(),
+    suggestion: z.string(),
+  })
+  .extend(PatternMetadataSchema.shape)
 
 export const AnalysisItemSchema = z.object({
   projectId: z.string(),
@@ -424,16 +428,7 @@ export async function semanticVerify(
     verifyAntiPatternFiles(analysis, projectPath),
   ])
 
-  const failedCount = checks.filter((c) => !c.passed).length
-  const passedCount = checks.filter((c) => c.passed).length
-
-  return {
-    passed: failedCount === 0,
-    checks,
-    totalMs: Date.now() - totalStart,
-    failedCount,
-    passedCount,
-  }
+  return summarizeChecks(checks, totalStart)
 }
 
 // Helper Functions

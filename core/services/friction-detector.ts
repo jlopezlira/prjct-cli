@@ -34,6 +34,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import { projectMemory } from '../memory/project-memory'
+import { projectIdFromPath, textOf } from './hot-path-helpers'
 import { parseTranscriptJsonl, type TranscriptJsonlLine } from './transcript-jsonl'
 
 const SOURCE_TAG = 'friction-detector'
@@ -200,25 +201,6 @@ function classify(text: string): FrictionSignal['category'] | null {
   if (NEGATION_MARKERS.some((re) => re.test(text))) return 'negation'
   if (CORRECTION_MARKERS.some((re) => re.test(text))) return 'correction'
   return null
-}
-
-function textOf(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    // Anthropic content blocks: [{ type: 'text', text: '...' }, ...]
-    return content
-      .map((block) => {
-        if (typeof block === 'string') return block
-        if (block && typeof block === 'object' && 'text' in block) {
-          const t = (block as { text?: unknown }).text
-          return typeof t === 'string' ? t : ''
-        }
-        return ''
-      })
-      .join('\n')
-      .trim()
-  }
-  return ''
 }
 
 function formatSignal(signal: FrictionSignal): string {
@@ -410,20 +392,6 @@ function projectMemoryHashes(projectPath: string): Set<string> {
     return hashes
   } catch {
     return new Set()
-  }
-}
-
-function projectIdFromPath(projectPath: string): string | null {
-  // Lightweight sync read avoiding the full config-manager round trip.
-  try {
-    const fs2 = require('node:fs') as typeof import('node:fs')
-    const path2 = require('node:path') as typeof import('node:path')
-    const file = path2.join(projectPath, '.prjct', 'prjct.config.json')
-    const raw = fs2.readFileSync(file, 'utf-8')
-    const parsed = JSON.parse(raw) as { projectId?: string }
-    return parsed.projectId ?? null
-  } catch {
-    return null
   }
 }
 

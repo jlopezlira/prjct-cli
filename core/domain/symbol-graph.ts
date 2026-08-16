@@ -14,6 +14,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { RESOLVE_EXTENSIONS } from '../constants/file-patterns'
+import { replaceCodeGraph } from '../storage/code-graph-storage'
 import prjctDb from '../storage/database'
 import type {
   CodeSymbol,
@@ -825,24 +826,7 @@ async function extractProject(projectPath: string, onlyFiles?: string[]): Promis
 }
 
 function persistGraph(projectId: string, graph: BuiltGraph): void {
-  prjctDb.transaction(projectId, (db) => {
-    db.prepare('DELETE FROM code_symbols').run()
-    db.prepare('DELETE FROM code_symbol_edges').run()
-    const insSym = db.prepare(
-      `INSERT INTO code_symbols (id, file, kind, name, qname, start_line, end_line, exported)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    const insEdge = db.prepare(
-      `INSERT OR IGNORE INTO code_symbol_edges (src, dst, edge_type, confidence)
-       VALUES (?, ?, ?, ?)`
-    )
-    for (const s of graph.symbols) {
-      insSym.run(s.id, s.file, s.kind, s.name, s.qname, s.startLine, s.endLine, s.exported ? 1 : 0)
-    }
-    for (const e of graph.edges) {
-      insEdge.run(e.src, e.dst, e.edgeType, e.confidence)
-    }
-  })
+  replaceCodeGraph(projectId, graph)
 
   const meta: SymbolGraphMeta = {
     symbolCount: graph.symbols.length,

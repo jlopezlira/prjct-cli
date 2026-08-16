@@ -80,6 +80,21 @@ class PerformanceTracker {
     }
   }
 
+  /** Shared `{avg,min,max,count}` reduction used by both report sections below. */
+  private computeMetricStats(values: number[]): {
+    avg: number
+    min: number
+    max: number
+    count: number
+  } {
+    return {
+      avg: Math.round(values.reduce((a, b) => a + b, 0) / values.length),
+      min: Math.min(...values),
+      max: Math.max(...values),
+      count: values.length,
+    }
+  }
+
   private recordSample(
     projectId: string,
     metric: MetricName,
@@ -262,13 +277,7 @@ class PerformanceTracker {
     )
     if (startupEntries.length > 0) {
       const values = startupEntries.map((e) => e.value)
-      report.startup = {
-        avg: Math.round(values.reduce((a, b) => a + b, 0) / values.length),
-        min: Math.min(...values),
-        max: Math.max(...values),
-        count: values.length,
-        unit: 'ms',
-      }
+      report.startup = { ...this.computeMetricStats(values), unit: 'ms' }
     }
 
     // Memory
@@ -330,13 +339,7 @@ class PerformanceTracker {
 
       report.commandDurations = {}
       for (const [cmd, values] of Object.entries(byCommand)) {
-        report.commandDurations[cmd] = {
-          avg: Math.round(values.reduce((a, b) => a + b, 0) / values.length),
-          min: Math.min(...values),
-          max: Math.max(...values),
-          count: values.length,
-          unit: 'ms',
-        }
+        report.commandDurations[cmd] = { ...this.computeMetricStats(values), unit: 'ms' }
       }
     }
 

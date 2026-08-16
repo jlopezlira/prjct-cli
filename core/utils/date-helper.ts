@@ -79,6 +79,29 @@ export function getDaysAgo(days: number): Date {
   return date
 }
 
+/** ISO-string form of {@link getDaysAgo} — the shape most SQL window queries want. */
+export function sinceIso(days: number): string {
+  return getDaysAgo(days).toISOString()
+}
+
+/** `null` unless `value` is a finite, positive number — collapses the common
+ *  "0/undefined/NaN all mean absent" check into one call. */
+export function nullableNumber(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+/** Whole minutes between two ISO timestamps, or `null` if either is missing/invalid/inverted. */
+export function durationMinutes(
+  start: string | null | undefined,
+  end: string | null | undefined
+): number | null {
+  if (!start || !end) return null
+  const started = Date.parse(start)
+  const ended = Date.parse(end)
+  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) return null
+  return Math.round((ended - started) / 60_000)
+}
+
 /**
  * Get date N days from today
  */
@@ -196,6 +219,23 @@ export function toRelative(date: string | Date): string {
     }
   }
   return RELATIVE_FMT.format(0, 'second')
+}
+
+/**
+ * Parse a `retro`/`skill-adherence`-style window spec: `<n><h|d>` (e.g.
+ * `24h`, `7d`), defaulting to `7d` when `arg` is null. Rejects malformed
+ * input and out-of-range magnitudes (`n <= 0` or `n > 365`) with `null`.
+ *
+ * Just the parsing core — callers build their own richer return shape
+ * (e.g. a resolved `sinceIso`/label) from `{ n, unit }`.
+ */
+export function parseWindowSpec(arg: string | null): { n: number; unit: 'h' | 'd' } | null {
+  const raw = (arg ?? '7d').trim().toLowerCase()
+  const m = raw.match(/^(\d+)\s*([hd])$/)
+  if (!m) return null
+  const n = Number.parseInt(m[1], 10)
+  if (!Number.isFinite(n) || n <= 0 || n > 365) return null
+  return { n, unit: m[2] as 'h' | 'd' }
 }
 
 /**

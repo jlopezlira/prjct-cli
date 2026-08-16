@@ -21,6 +21,7 @@ import path from 'node:path'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
+import { parseWindowSpec } from '../utils/date-helper'
 import { execFileAsync } from '../utils/exec'
 import { fileExists } from '../utils/file-helper'
 import { failHard } from '../utils/md-aware'
@@ -102,12 +103,9 @@ export class RetroCommands extends PrjctCommandsBase {
 // Window parsing
 
 function parseWindow(arg: string | null): ParsedWindow | null {
-  const raw = (arg ?? '7d').trim().toLowerCase()
-  const m = raw.match(/^(\d+)\s*([hd])$/)
-  if (!m) return null
-  const n = Number.parseInt(m[1], 10)
-  if (!Number.isFinite(n) || n <= 0 || n > 365) return null
-  const unit = m[2] as 'h' | 'd'
+  const spec = parseWindowSpec(arg)
+  if (!spec) return null
+  const { n, unit } = spec
 
   const now = new Date()
   if (unit === 'h') {

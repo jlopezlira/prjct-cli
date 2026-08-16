@@ -44,6 +44,7 @@ import {
 } from '../llm'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
+import { flag } from '../utils/cli-flags'
 import { failHard } from '../utils/md-aware'
 import { mdOutput, mdSection, mdStats } from '../utils/md-formatter'
 import out from '../utils/output'
@@ -61,13 +62,6 @@ interface LlmOptions {
   all?: boolean
   authHeader?: string
   authScheme?: string
-}
-
-function flag(parts: string[], name: string): string | undefined {
-  const i = parts.indexOf(`--${name}`)
-  if (i >= 0 && parts[i + 1]) return parts[i + 1]
-  const eq = parts.find((p) => p.startsWith(`--${name}=`))
-  return eq ? eq.slice(name.length + 3) : undefined
 }
 
 function hasFlag(parts: string[], name: string): boolean {

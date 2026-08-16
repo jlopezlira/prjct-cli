@@ -240,13 +240,7 @@ export class ChangelogService {
     lines.push('')
 
     if (entry.sections) {
-      for (const [section, items] of Object.entries(entry.sections)) {
-        lines.push(`### ${section}`)
-        for (const item of items) {
-          lines.push(`- ${item}`)
-        }
-        lines.push('')
-      }
+      this.renderSections(lines, entry.sections)
     } else if (entry.description) {
       lines.push(`### Added`)
       lines.push(`- ${entry.description}`)
@@ -254,6 +248,21 @@ export class ChangelogService {
     }
 
     return lines.join('\n')
+  }
+
+  /**
+   * Append `### Section` / `- item` blocks for each section, one blank
+   * line after each. Shared by both entry formatters, which only differ
+   * in their header format and no-sections fallback.
+   */
+  private renderSections(lines: string[], sections: Record<string, string[]>): void {
+    for (const [section, items] of Object.entries(sections)) {
+      lines.push(`### ${section}`)
+      for (const item of items) {
+        lines.push(`- ${item}`)
+      }
+      lines.push('')
+    }
   }
 
   /**
@@ -269,13 +278,7 @@ export class ChangelogService {
     lines.push('')
 
     if (entry.sections) {
-      for (const [section, items] of Object.entries(entry.sections)) {
-        lines.push(`### ${section}`)
-        for (const item of items) {
-          lines.push(`- ${item}`)
-        }
-        lines.push('')
-      }
+      this.renderSections(lines, entry.sections)
     } else if (entry.description) {
       lines.push(`- ${entry.description}`)
       lines.push('')

@@ -110,12 +110,12 @@ export const TaskHarnessSchema = z.object({
   createdAt: z.string(),
 })
 
-export const CurrentTaskSchema = z.object({
-  id: z.string(), // task_xxxxxxxx
-  description: z.string(),
-  type: TaskTypeSchema.optional(), // feature, bug, improvement, chore
-  startedAt: z.string(), // ISO8601
-  sessionId: z.string(), // sess_xxxxxxxx
+// Business metadata describing a task's progress/context, shared verbatim
+// between the live task and its paused snapshot (PRJ-344). Extracted so an
+// unsynced field can't silently drop data across a pause/resume cycle —
+// CurrentTaskSchema and PreviousTaskSchema both extend this with only their
+// own identity/lifecycle fields.
+const TaskMetadataSchema = z.object({
   featureId: z.string().optional(), // feat_xxxxxxxx
   // Subtask tracking for fragmented tasks
   subtasks: z.array(SubtaskSchema).optional(),
@@ -124,9 +124,6 @@ export const CurrentTaskSchema = z.object({
   // Linear integration - bidirectional sync
   linearId: z.string().optional(), // "PRJ-123" - Linear identifier
   linearUuid: z.string().optional(), // Linear internal UUID for API calls
-  // SDD: linkage to a `prjct spec`. Ship reads this and surfaces the
-  // spec's acceptance_criteria as a checklist in the PR description.
-  linkedSpecId: z.string().optional(),
   // Fibonacci estimation
   estimatedPoints: z.number().optional(), // Fibonacci: 1,2,3,5,8,13,21
   estimatedMinutes: z.number().optional(), // Derived from points
@@ -135,13 +132,23 @@ export const CurrentTaskSchema = z.object({
   // Token usage tracking (input + output)
   tokensIn: z.number().optional(), // Total input tokens consumed
   tokensOut: z.number().optional(), // Total output tokens generated
+  // Transparent auto-harness contract active during the task
+  harness: TaskHarnessSchema.optional(),
+})
+
+export const CurrentTaskSchema = TaskMetadataSchema.extend({
+  id: z.string(), // task_xxxxxxxx
+  description: z.string(),
+  type: TaskTypeSchema.optional(), // feature, bug, improvement, chore
+  startedAt: z.string(), // ISO8601
+  sessionId: z.string(), // sess_xxxxxxxx
+  // SDD: linkage to a `prjct spec`. Ship reads this and surfaces the
+  // spec's acceptance_criteria as a checklist in the PR description.
+  linkedSpecId: z.string().optional(),
   // Extended properties populated during task lifecycle
   parentDescription: z.string().optional(), // Original parent task description
   branch: z.string().optional(), // Git branch used for this task
   prUrl: z.string().optional(), // PR URL if shipped
-  // Transparent auto-harness: created on task start so agents get the expected
-  // evidence/gates without the user running another command.
-  harness: TaskHarnessSchema.optional(),
   // Loop control: turns the agent has spent on THIS cycle. Incremented once per
   // UserPromptSubmit; resets when a new cycle starts. Drives the stuck-loop
   // escalation in the per-turn state block so a weak rig doesn't grind forever.
@@ -164,7 +171,7 @@ export const CurrentTaskSchema = z.object({
   pendingHandoffId: z.string().optional(),
 })
 
-export const PreviousTaskSchema = z.object({
+export const PreviousTaskSchema = TaskMetadataSchema.extend({
   id: z.string(),
   description: z.string(),
   status: z.literal('paused'),
@@ -174,19 +181,6 @@ export const PreviousTaskSchema = z.object({
   // Business metadata preserved across pause/resume (PRJ-344)
   type: TaskTypeSchema.optional(),
   sessionId: z.string().optional(),
-  featureId: z.string().optional(),
-  subtasks: z.array(SubtaskSchema).optional(),
-  currentSubtaskIndex: z.number().optional(),
-  subtaskProgress: SubtaskProgressSchema.optional(),
-  linearId: z.string().optional(),
-  linearUuid: z.string().optional(),
-  estimatedPoints: z.number().optional(),
-  estimatedMinutes: z.number().optional(),
-  modelMetadata: ModelMetadataSchema.optional(),
-  // Token usage tracking preserved across pause/resume
-  tokensIn: z.number().optional(),
-  tokensOut: z.number().optional(),
-  harness: TaskHarnessSchema.optional(),
 })
 
 // Task feedback captured during completion (PRJ-272)

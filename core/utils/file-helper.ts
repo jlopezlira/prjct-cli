@@ -171,6 +171,24 @@ export async function readFile(filePath: string, defaultValue = ''): Promise<str
 }
 
 /**
+ * Read a text file for a merge-with-existing-content flow, treating a
+ * missing file as empty rather than throwing. The common shape idempotent
+ * global-config installers (CLAUDE.md/GEMINI.md merges) need: they must
+ * tell "file absent, write fresh" apart from "file present but empty".
+ */
+export async function readExistingFileOrEmpty(
+  filePath: string
+): Promise<{ content: string; exists: boolean }> {
+  return fs
+    .readFile(filePath, 'utf-8')
+    .then((content) => ({ content, exists: true }))
+    .catch((error) => {
+      if (isNotFoundError(error)) return { content: '', exists: false }
+      throw error
+    })
+}
+
+/**
  * Write text file
  */
 export async function writeFile(filePath: string, content: string): Promise<void> {

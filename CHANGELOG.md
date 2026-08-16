@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.94.0] - 2026-08-16
+
+### Added
+- eliminate duplicate code
+
 ## [3.93.0] - 2026-08-16
 
 ### Added

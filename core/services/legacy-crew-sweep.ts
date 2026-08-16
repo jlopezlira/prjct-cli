@@ -330,6 +330,17 @@ async function sweepCheckpoints(
   }
 }
 
+/** Build a `TeamEnrollment` row from a parsed legacy `team.json` blob. */
+function parseTeamEnrollment(parsed: Record<string, unknown>): TeamEnrollment {
+  return {
+    required: parsed.required === true,
+    minVersion: typeof parsed.minVersion === 'string' ? parsed.minVersion : '0.0.0',
+    enrolledAt:
+      typeof parsed.enrolledAt === 'string' ? parsed.enrolledAt : new Date().toISOString(),
+    enrolledBy: typeof parsed.enrolledBy === 'string' ? parsed.enrolledBy : null,
+  }
+}
+
 async function sweepTeamJson(
   projectPath: string,
   projectId: string,
@@ -348,13 +359,7 @@ async function sweepTeamJson(
       if (flag === null || dbRow === null) {
         if (dbRow === null) {
           const parsed = JSON.parse(content) as Record<string, unknown>
-          const enrollment: TeamEnrollment = {
-            required: parsed.required === true,
-            minVersion: typeof parsed.minVersion === 'string' ? parsed.minVersion : '0.0.0',
-            enrolledAt:
-              typeof parsed.enrolledAt === 'string' ? parsed.enrolledAt : new Date().toISOString(),
-            enrolledBy: typeof parsed.enrolledBy === 'string' ? parsed.enrolledBy : null,
-          }
+          const enrollment: TeamEnrollment = parseTeamEnrollment(parsed)
           teamEnrollmentStorage.set(projectId, enrollment)
           out.teamMigrated = true
           await captureInboxWarning(
@@ -368,13 +373,7 @@ async function sweepTeamJson(
         // Hand-edit: re-adopt into DB then delete (disk is never SoT).
         try {
           const parsed = JSON.parse(content) as Record<string, unknown>
-          const enrollment: TeamEnrollment = {
-            required: parsed.required === true,
-            minVersion: typeof parsed.minVersion === 'string' ? parsed.minVersion : '0.0.0',
-            enrolledAt:
-              typeof parsed.enrolledAt === 'string' ? parsed.enrolledAt : new Date().toISOString(),
-            enrolledBy: typeof parsed.enrolledBy === 'string' ? parsed.enrolledBy : null,
-          }
+          const enrollment: TeamEnrollment = parseTeamEnrollment(parsed)
           teamEnrollmentStorage.set(projectId, enrollment)
         } catch {
           /* keep existing DB row if disk JSON is garbage */

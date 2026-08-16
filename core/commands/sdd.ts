@@ -19,10 +19,11 @@ import { resolveActiveTask } from '../services/task-service'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
 import type { LocalConfig } from '../types/config'
-import { failHard, failWith } from '../utils/md-aware'
+import { failWith } from '../utils/md-aware'
 import { mdOutput } from '../utils/md-formatter'
 import out from '../utils/output'
 import { PrjctCommandsBase } from './base'
+import { parseModeSubcommand, requireProjectConfig } from './mode-command-helpers'
 
 type SddMode = 'off' | 'advisory' | 'strict'
 const SDD_MODES: readonly SddMode[] = ['off', 'advisory', 'strict']
@@ -42,21 +43,17 @@ export class SddCommands extends PrjctCommandsBase {
     projectPath: string = process.cwd(),
     options: MdOption = {}
   ): Promise<CommandResult> {
-    const parts = (input ?? '').trim().split(/\s+/).filter(Boolean)
-    const sub = (parts[0] ?? '').toLowerCase()
-
-    if (!sub || sub === 'status' || sub === 'show') return this.showStatus(projectPath, options)
-    if ((SDD_MODES as readonly string[]).includes(sub)) {
-      return this.setMode(sub as SddMode, projectPath, options)
-    }
-    return failWith(`Unknown sdd subcommand "${sub}". Use: ${SDD_MODES.join('|')}.`, options)
+    const parsed = parseModeSubcommand(input, SDD_MODES)
+    if (parsed.kind === 'status') return this.showStatus(projectPath, options)
+    if (parsed.kind === 'mode') return this.setMode(parsed.mode as SddMode, projectPath, options)
+    return failWith(`Unknown sdd subcommand "${parsed.sub}". Use: ${SDD_MODES.join('|')}.`, options)
   }
 
   /** Mode + the active work cycle's spec station (the pipeline as a checklist). */
   private async showStatus(projectPath: string, options: MdOption): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     const mode = effectiveSddMode(config)
     const status = await (async () => {
@@ -105,9 +102,9 @@ export class SddCommands extends PrjctCommandsBase {
     projectPath: string,
     options: MdOption
   ): Promise<CommandResult> {
-    const config = await configManager.readConfig(projectPath).catch(() => null)
-    if (!config?.projectId)
-      return failHard('No prjct project here — run `prjct init` first.', options)
+    const guard = await requireProjectConfig(projectPath, options)
+    if (!guard.ok) return guard.result
+    const config = guard.value
 
     config.sdd = { mode }
     await configManager.writeConfig(projectPath, config)
