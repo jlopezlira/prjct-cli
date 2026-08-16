@@ -135,6 +135,9 @@ if (_initialFastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
           options: {},
           cwd: process.cwd(),
           stdin: stdinPayload,
+          // Forward the invoking host so the daemon adapts hook output for
+          // it (its own env never carries PRJCT_HOOK_HOST).
+          ...(process.env.PRJCT_HOOK_HOST ? { hookHost: process.env.PRJCT_HOOK_HOST } : {}),
         },
         { timeoutMs: HOOK_REQUEST_TIMEOUT_MS }
       )

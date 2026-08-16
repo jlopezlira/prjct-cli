@@ -3,6 +3,7 @@ import {
   identifyTranscriptModel,
   parseTranscriptJsonl,
   sumTranscriptUsage,
+  sumTranscriptUsageByModel,
   sumTranscriptUsageDetailed,
 } from '../../services/transcript-jsonl'
 
@@ -106,5 +107,58 @@ describe('sumTranscriptUsage', () => {
       ])
     ).toBe('mixed')
     expect(identifyTranscriptModel([{ message: { role: 'assistant' } }])).toBe('unknown')
+  })
+
+  it('reads Kimi wire.jsonl usage.record lines (inputOther/output/inputCacheRead)', () => {
+    const lines = parseTranscriptJsonl(
+      [
+        JSON.stringify({ type: 'metadata', protocol_version: '1.5' }),
+        JSON.stringify({
+          type: 'usage.record',
+          model: 'kimi-code/k3',
+          usage: { inputOther: 4752, output: 421, inputCacheRead: 21248, inputCacheCreation: 0 },
+          time: 1786425032850,
+        }),
+        JSON.stringify({
+          type: 'usage.record',
+          model: 'kimi-code/k3',
+          usage: { inputOther: 1110, output: 2143, inputCacheRead: 25856, inputCacheCreation: 500 },
+          time: 1786425035707,
+        }),
+        // Nested loop-event usage must NOT double-count (no top-level usage).
+        JSON.stringify({
+          type: 'context.append_loop_event',
+          event: { type: 'step.end', usage: { inputOther: 1110, output: 2143 } },
+        }),
+      ].join('\n')
+    )
+    const usage = sumTranscriptUsage(lines)
+    // new input (4752 + 1110 + 500) + max cumulative cache read (25856).
+    expect(usage.tokensIn).toBe(4752 + 1110 + 500 + 25856)
+    expect(usage.tokensOut).toBe(421 + 2143)
+  })
+
+  it('attributes Kimi usage to the top-level model and windows by numeric epoch-ms time', () => {
+    const lines = parseTranscriptJsonl(
+      [
+        JSON.stringify({
+          type: 'usage.record',
+          model: 'kimi-code/k3',
+          usage: { inputOther: 100, output: 10 },
+          time: 1000,
+        }),
+        JSON.stringify({
+          type: 'usage.record',
+          model: 'kimi-code/k3',
+          usage: { inputOther: 200, output: 20 },
+          time: 5000,
+        }),
+      ].join('\n')
+    )
+    const byModel = sumTranscriptUsageByModel(lines)
+    expect(byModel.get('kimi-code/k3')).toEqual({ tokensIn: 300, tokensOut: 30 })
+    // Window starting at t=2000ms excludes the first record (numeric `time`).
+    const windowed = sumTranscriptUsage(lines, { sinceIso: new Date(2000).toISOString() })
+    expect(windowed).toEqual({ tokensIn: 200, tokensOut: 20 })
   })
 })

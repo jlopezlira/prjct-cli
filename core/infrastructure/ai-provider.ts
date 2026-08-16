@@ -459,16 +459,23 @@ export async function detectCodex(): Promise<CodexDetection> {
 // Kimi CLI Detection
 
 /**
- * Detect if Moonshot's Kimi CLI is installed.
+ * Detect if Moonshot's Kimi Code CLI is installed.
  *
- * Detection: the `kimi` CLI command on PATH, or a `~/.kimi/` config directory
- * (Kimi writes config.toml/mcp.json there). A logged-in or configured install
- * counts even when PATH is minimal (hooks/daemon shells).
+ * Detection: the `kimi` CLI command on PATH, or a `~/.kimi-code/` config
+ * directory (Kimi Code writes config.toml/mcp.json there). The legacy
+ * `~/.kimi/` directory still counts as a fallback signal. A configured
+ * install counts even when PATH is minimal (hooks/daemon shells).
  */
 export async function detectKimi(): Promise<KimiDetection> {
-  const configDir = resolveUserPath('.kimi')
-  const [cliPath, dirPresent] = await Promise.all([whichCommand('kimi'), fileExists(configDir)])
-  const installed = !!cliPath || dirPresent
+  const kimiCodeDir = resolveUserPath('.kimi-code')
+  const legacyDir = resolveUserPath('.kimi')
+  const [cliPath, kimiCodePresent, legacyPresent] = await Promise.all([
+    whichCommand('kimi'),
+    fileExists(kimiCodeDir),
+    fileExists(legacyDir),
+  ])
+  const installed = !!cliPath || kimiCodePresent || legacyPresent
+  const configDir = kimiCodePresent || !legacyPresent ? kimiCodeDir : legacyDir
   return {
     installed,
     configPath: installed ? configDir : undefined,

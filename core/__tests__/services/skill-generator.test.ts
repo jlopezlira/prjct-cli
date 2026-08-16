@@ -240,6 +240,19 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(sample).toMatch(/portable|context --md/i)
       expect(sample).not.toContain('my-app')
     })
+
+    it('fans out the compact skill to the shared ~/.agents/skills tier (Kimi Code CLI)', async () => {
+      const result = await fixture.generator.generateAndInstall()
+      const kimiPath = result.generated.find(
+        (g) => g.name === 'prjct-compact' && g.path.includes('.agents/skills/prjct/SKILL.md')
+      )
+      expect(kimiPath).toBeDefined()
+      const content = await fs.readFile(kimiPath!.path, 'utf-8')
+      // Kimi requires name + description frontmatter on directory-form skills.
+      expect(content).toContain('name: prjct')
+      expect(content).toContain('description:')
+      expect(content).toContain('RAG-backed')
+    })
   })
 
   describe('rich context isolation (never in L0)', () => {

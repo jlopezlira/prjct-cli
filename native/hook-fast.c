@@ -312,7 +312,12 @@ int main(int argc, char **argv) {
     char cwd[PATH_MAX + 256];
     if (!getcwd(cwd, sizeof(cwd))) soft_fail();
 
-    /* Build the request line: {"id":"...","command":"hook","args":["<sub>"],"options":{},"cwd":"...","stdin":"..."}\n */
+    /* Build the request line: {"id":"...","command":"hook","args":["<sub>"],"options":{},"cwd":"...","stdin":"..."[,"hookHost":"..."]}\n
+     * hookHost forwards the invoking host's PRJCT_HOOK_HOST (kimi/cursor/
+     * gemini install it inline in their hook command) so the daemon adapts
+     * hook output for the right host — its own env never carries the var.
+     * Mirrors the same field in bin/prjct.ts and generateDaemonShim(). */
+    const char *hook_host = getenv("PRJCT_HOOK_HOST");
     buf_t req;
     if (buf_init(&req, stdin_buf.len + 512) != 0) soft_fail();
     char id[64];
@@ -325,7 +330,13 @@ int main(int argc, char **argv) {
     if (json_escape_append(&req, cwd, strlen(cwd)) != 0) soft_fail();
     if (buf_append_str(&req, "\",\"stdin\":\"") != 0) soft_fail();
     if (json_escape_append(&req, stdin_buf.data, stdin_buf.len) != 0) soft_fail();
-    if (buf_append_str(&req, "\"}\n") != 0) soft_fail();
+    if (buf_append_str(&req, "\"") != 0) soft_fail();
+    if (hook_host && hook_host[0]) {
+        if (buf_append_str(&req, ",\"hookHost\":\"") != 0) soft_fail();
+        if (json_escape_append(&req, hook_host, strlen(hook_host)) != 0) soft_fail();
+        if (buf_append_str(&req, "\"") != 0) soft_fail();
+    }
+    if (buf_append_str(&req, "}\n") != 0) soft_fail();
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) soft_fail();

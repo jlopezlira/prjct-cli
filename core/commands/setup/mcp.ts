@@ -96,9 +96,10 @@ export async function setupMcpServers(
     }
   }
 
-  // Kimi CLI reads MCP servers from ~/.kimi/mcp.json (standard mcpServers
-  // JSON, same shape as Claude). Without this block, Kimi sessions see the
-  // AGENTS.md routing text but have no prjct_* tools behind it.
+  // Kimi Code CLI reads MCP servers from ~/.kimi-code/mcp.json (standard
+  // mcpServers JSON, same shape as Claude; legacy ~/.kimi is the fallback).
+  // Without this block, Kimi sessions see the AGENTS.md routing text but have
+  // no prjct_* tools behind it.
   try {
     const kimi = await detectKimi()
     if (kimi.installed) {
@@ -106,7 +107,7 @@ export async function setupMcpServers(
       if (!options.silent) {
         console.log(
           result.changed
-            ? '✅ prjct Kimi config updated in ~/.kimi/mcp.json'
+            ? `✅ prjct Kimi config updated in ${result.path}`
             : '✅ prjct Kimi config already ready'
         )
       }

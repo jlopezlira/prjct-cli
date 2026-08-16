@@ -173,9 +173,15 @@ It reports concrete support levels:
 | `hosted` | Repo instructions are the portable layer; platform config may be manual. |
 
 Run `prjct agents doctor --md` to see the current machine/project matrix for
-Claude Code, Codex, Gemini CLI, OpenCode, Qwen Code, Kimi CLI, Grok Build,
+Claude Code, Codex, Gemini CLI, OpenCode, Qwen Code, Kimi Code CLI, Grok Build,
 Cursor, Pi, Cline/Roo-family agents, hosted agents, and future
 AGENTS.md/MCP clients.
+
+Kimi Code CLI is `full`: native `[[hooks]]` entries in
+`~/.kimi-code/config.toml`, MCP servers in `~/.kimi-code/mcp.json`, and the
+compact skill at `~/.agents/skills/prjct/SKILL.md` — all installed by
+`prjct install` when Kimi is detected (the legacy `~/.kimi/` directory remains
+a detection fallback only).
 
 Use `prjct agents doctor --fix` inside a prjct project to refresh the portable
 `AGENTS.md` surface and any repo-local IDE rule adapters prjct manages. The
@@ -333,27 +339,27 @@ Seven built-in packs (TypeScript manifests in `core/packs/manifests.ts`, not bas
 
 Slots ship **empty** — the human or the agent fills them on demand.
 
-## Claude Hooks Adapter (opt-in)
+## Hooks Adapter (opt-in) — Claude Code + Kimi Code CLI
 
-`prjct install` refreshes the universal project surface (`AGENTS.md`) when run inside a prjct project, writes the Claude Code hooks adapter to `~/.claude/settings.json`, and repairs detected Codex config in `~/.codex/config.toml` (prjct MCP + TUI `status_line`). Most of the 13 hook subcommands inject `additionalContext`; two guard: the credential guard denies tool calls that would leak secrets, and the package guard denies unknown installs under strict packs. Other agents use the support level shown by `prjct agents doctor`.
+`prjct install` refreshes the universal project surface (`AGENTS.md`) when run inside a prjct project, writes the Claude Code hooks adapter to `~/.claude/settings.json`, writes the native Kimi Code CLI hooks adapter as `[[hooks]]` entries in `~/.kimi-code/config.toml` (marked with a `# prjct-managed` comment each — TOML forbids extra entry fields, and user entries or other tools' blocks stay byte-identical), and repairs detected Codex config in `~/.codex/config.toml` (prjct MCP + TUI `status_line`). Most of the 13 hook subcommands inject `additionalContext` (plain stdout text under Kimi, which appends it to context); two guard: the credential guard denies tool calls that would leak secrets, and the package guard denies unknown installs under strict packs. Kimi applies hook config on the next session (or after `/reload`). Other agents use the support level shown by `prjct agents doctor`.
 
-| Event | Does |
-|---|---|
-| `SessionStart` | Persona; on cold start (startup/clear/compact) also the knowledge digest — top traps + decisions in force, so a freshly-updated model starts grounded |
-| `UserPromptSubmit` | Active project state (task, branch, inbox) |
-| `PreToolUse` (any tool) | Credential guard — **denies** the call when tool arguments contain secret material, so credentials never leave the machine |
-| `PreToolUse` (Bash package installs) | Package legitimacy — flags packages not already in `package.json` before the install runs (strict packs deny) |
-| `PreToolUse` (Bash git commit) | Anti-patterns tagged with touched files |
-| `PreToolUse` (Edit/Write) | The file's preventive memory (gotchas/anti-patterns) right before you edit it — pushes what `prjct guard` makes pull |
-| `PreToolUse` (Grep/Glob) | Injects indexed symbol-graph hits alongside search results (never gates) |
-| `PostToolUse` (Edit/Write) | Silently annotates `files_touched` on active task |
-| `Stop` | Async prompt: "learn anything reusable?"; scans the transcript for durable captures |
-| `SubagentStart` | Persona for fresh-brain subagents (cache-stable, digest-free) |
-| `SubagentStop` | Desktop notification when a subagent finishes (`config.notify`, default on) |
-| `Notification` | Desktop notification when the agent is waiting for input or permission |
-| `CwdChanged` | Re-contextualizes on project switch |
+| Event | Does | Kimi |
+|---|---|---|
+| `SessionStart` | Persona; on cold start (startup/clear/compact) also the knowledge digest — top traps + decisions in force, so a freshly-updated model starts grounded | ✓ |
+| `UserPromptSubmit` | Active project state (task, branch, inbox) | ✓ |
+| `PreToolUse` (any tool) | Credential guard — **denies** the call when tool arguments contain secret material, so credentials never leave the machine | ✓ |
+| `PreToolUse` (Bash package installs) | Package legitimacy — flags packages not already in `package.json` before the install runs (strict packs deny) | ✓ |
+| `PreToolUse` (Bash git commit) | Anti-patterns tagged with touched files | ✓ |
+| `PreToolUse` (Edit/Write) | The file's preventive memory (gotchas/anti-patterns) right before you edit it — pushes what `prjct guard` makes pull | ✓ |
+| `PreToolUse` (Grep/Glob) | Injects indexed symbol-graph hits alongside search results (never gates) | ✓ |
+| `PostToolUse` (Edit/Write) | Silently annotates `files_touched` on active task | ✓ |
+| `Stop` | Async prompt: "learn anything reusable?"; scans the transcript for durable captures | ✓ |
+| `SubagentStart` | Persona for fresh-brain subagents (cache-stable, digest-free) | ✓ |
+| `SubagentStop` | Desktop notification when a subagent finishes (`config.notify`, default on) | ✓ |
+| `Notification` | Desktop notification when the agent is waiting for input or permission | ✓ |
+| `CwdChanged` | Re-contextualizes on project switch | — (no Kimi equivalent; every Kimi payload already carries `cwd`) |
 
-Remove with `prjct claude uninstall` (hooks only) or `prjct uninstall` (everything).
+Remove with `prjct claude uninstall` (Claude hooks only) or `prjct uninstall` (everything — including the prjct-managed `[[hooks]]` entries in `~/.kimi-code/config.toml` and the prjct/context7 servers in Kimi's `mcp.json`).
 
 ## MCP Server
 
@@ -526,7 +532,7 @@ prjct-cli/
 ## Requirements
 
 - Node.js 22.5+ (ships `node:sqlite`) or Bun 1.0+
-- One of: Claude Code, OpenAI Codex, Gemini CLI, Cursor, OpenCode, Cline, Grok Build, Pi, Kimi CLI, or Antigravity
+- One of: Claude Code, OpenAI Codex, Gemini CLI, Cursor, OpenCode, Cline, Grok Build, Pi, Kimi Code CLI, or Antigravity
 
 ## Common questions
 

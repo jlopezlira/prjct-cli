@@ -30,6 +30,9 @@
  * variable, prompt-relevant content.
  */
 
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { DAEMON_PATHS } from '../daemon/protocol'
 import configManager from '../infrastructure/config-manager'
 import { isSyncCurrent, runSelfHeal } from '../infrastructure/self-heal'
 import { deriveTitle, formatMemoryDigestLine } from '../memory/format'
@@ -531,6 +534,39 @@ export async function buildProjectIdentityLine(
 }
 
 /**
+ * Kimi session hand-off stamp.
+ *
+ * Kimi's SessionStart is observation-only: its stdout is NOT appended to
+ * context (the docs only promise that for UserPromptSubmit). So under host
+ * `kimi` this hook emits nothing and instead parks WHAT should have been
+ * injected ('digest' on cold starts, 'persona' on resume) in a per-session
+ * stamp under the daemon run dir (same pattern as the Stop heavy-step
+ * stamps). The prompt hook consumes the stamp on the session's first
+ * UserPromptSubmit and injects the payload there — exactly once.
+ */
+function kimiSessionStampPath(projectId: string, sessionId: string | undefined): string {
+  const safeProject = projectId.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const safeSession = (sessionId ?? 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_')
+  return path.join(DAEMON_PATHS.runDir(), `kimi-session-${safeProject}-${safeSession}.pending`)
+}
+
+/**
+ * Read-and-consume the pending Kimi session injection. Returns what to
+ * inject ('digest' = cold start, 'persona' = resume) or null when nothing
+ * is pending. Exported for the prompt hook + tests.
+ */
+export async function consumeKimiSessionInjection(
+  projectId: string,
+  sessionId: string | undefined
+): Promise<'digest' | 'persona' | null> {
+  const stamp = kimiSessionStampPath(projectId, sessionId)
+  const content = await fs.readFile(stamp, 'utf-8').catch(() => null)
+  if (content === null) return null
+  await fs.rm(stamp, { force: true }).catch(() => undefined)
+  return content.trim() === 'digest' ? 'digest' : 'persona'
+}
+
+/**
  * Top-level entry — read stdin, emit JSON, exit.
  * Never throws; hook failures must not break the host session.
  */
@@ -546,7 +582,7 @@ export function runSessionStartHook(
     {
       event: 'SessionStart',
       projectPath,
-      build: async (input, p) => {
+      build: async (input, p, host) => {
         const config =
           p === projectPath
             ? await cachedConfig
@@ -556,6 +592,19 @@ export function runSessionStartHook(
         // still holds its context, so it stays persona-only for cache safety.
         const source = input.source ?? 'startup'
         const digest = source === 'startup' || source === 'clear' || source === 'compact'
+        // Kimi's SessionStart never reaches the model (observation-only) —
+        // park the payload for the prompt hook's first-turn injection and
+        // emit nothing here (see kimiSessionStampPath above).
+        if (host === 'kimi') {
+          if (config?.projectId) {
+            const stamp = kimiSessionStampPath(config.projectId, input.session_id)
+            await fs
+              .mkdir(path.dirname(stamp), { recursive: true })
+              .then(() => fs.writeFile(stamp, digest ? 'digest' : 'persona'))
+              .catch(() => undefined)
+          }
+          return null
+        }
         return buildSessionContext(p, config, { digest })
       },
       afterEmit: async (_input, p) => {

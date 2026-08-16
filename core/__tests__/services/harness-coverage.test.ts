@@ -34,14 +34,41 @@ describe('harness coverage (organic multi-runtime board)', () => {
 
   it('reports absent when no runtimes are wired', async () => {
     const report = await probeHarnessCoverage(fixture.home)
-    // Claude, Codex, Gemini, Cursor, Grok, OpenCode, Pi
-    expect(report.runtimes.length).toBe(7)
+    // Claude, Codex, Gemini, Cursor, Grok, OpenCode, Pi, Kimi Code CLI
+    expect(report.runtimes.length).toBe(8)
     expect(report.runtimes.map((r) => r.id)).toEqual(
-      expect.arrayContaining(['opencode', 'pi', 'claude', 'grok'])
+      expect.arrayContaining(['opencode', 'pi', 'claude', 'grok', 'kimi-cli'])
     )
     // Without CLIs on PATH in a fresh HOME, detected may still be 0
     expect(report.organicPct).toBeGreaterThanOrEqual(0)
     expect(report.grade).toBeGreaterThanOrEqual(1)
+  })
+
+  it('marks Kimi Code CLI full when TOML hooks + claude-json MCP are present', async () => {
+    const kimiHome = path.join(fixture.home, '.kimi-code')
+    await fs.mkdir(kimiHome, { recursive: true })
+    await fs.writeFile(
+      path.join(kimiHome, 'config.toml'),
+      `# prjct-managed
+[[hooks]]
+event = "Stop"
+command = "command -v prjct >/dev/null 2>&1 && PRJCT_HOOK_HOST=kimi prjct hook stop || exit 0"
+timeout = 10
+`,
+      'utf-8'
+    )
+    await fs.writeFile(
+      path.join(kimiHome, 'mcp.json'),
+      JSON.stringify({ mcpServers: { prjct: { command: 'prjct', args: ['mcp-server'] } } }),
+      'utf-8'
+    )
+
+    const report = await probeHarnessCoverage(fixture.home)
+    const kimi = report.runtimes.find((r) => r.id === 'kimi-cli')
+    expect(kimi?.detected).toBe(true)
+    expect(kimi?.hooksLive).toBe(true)
+    expect(kimi?.mcpLive).toBe(true)
+    expect(kimi?.organic).toBe('full')
   })
 
   it('marks OpenCode full when mcp.prjct is present and Pi full when skill is present', async () => {

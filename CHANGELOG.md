@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.95.0] - 2026-08-16
+
+### Added
+- kimi code full integration
+
 ## [3.94.0] - 2026-08-16
 
 ### Added
