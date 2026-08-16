@@ -178,6 +178,29 @@ function detectKind(text: string): HarnessKind {
   // read-only sweep work — the meta-finding from the 2026-07 harness research
   // was our own triage classifying a 3-way competitive investigation as
   // "do it yourself — no subagents".
+  //
+  // "revisa/review" was missing from this list — a live case ("revisa qué
+  // otras mejoras... podemos hacer") fell through past this check (no match)
+  // and hit 'mejora' in the feature branch below → H2 → discuss-lock fired
+  // on a pure research ask, forcing the full intent→audit-spec ceremony for
+  // something with no code diff. Adding the verb alone would cut the other
+  // way though: "review" is common enough to appear IN a real code-changing
+  // ask ("review and refactor X"), and research is checked before
+  // feature/refactor below — so a bare match would let "review" smuggle a
+  // code-change task past H2 ceremony (the exact gaming risk the strategic
+  // reviewer flagged on this spec). Gate it: research wins only when no
+  // code-intent verb rides along in the same text.
+  const hasCodeIntent = hasAny(text, [
+    'implement',
+    'implementa',
+    'refactor',
+    'restructure',
+    'cleanup',
+    'crear',
+    'agrega',
+    'construir',
+    'build',
+  ])
   if (
     hasAny(text, [
       'research',
@@ -192,7 +215,14 @@ function detectKind(text: string): HarnessKind {
       'survey',
       'explore',
       'explora',
-    ])
+      'revisa',
+      'revisar',
+      'review',
+      'reviewing',
+      'repasa',
+      'repasar',
+    ]) &&
+    !hasCodeIntent
   ) {
     return 'research'
   }

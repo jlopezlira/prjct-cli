@@ -27,6 +27,61 @@ export type LaneName = 'command' | 'hook-state' | 'hook'
 
 const MAX_CONCURRENT_HOOKS = 4
 
+// A slow buildProjectState (git fork + FTS query) ahead of you in this cwd's
+// hook-state chain otherwise stacks its FULL duration onto your observed
+// latency — the root cause of a real 4.4s hook:prompt tail-latency outlier
+// (p50 15ms) measured in this project's own production telemetry, worst
+// under exactly the kind of concurrent-agent burst this session generates.
+// Comfortably under the client's 800ms HOOK_REQUEST_TIMEOUT_MS budget
+// (core/daemon/protocol.ts) so the daemon can proactively hand back the
+// existing `retry: true` signal — which the client already falls back on
+// for a stale-daemon response — before the client's own raw socket timeout
+// fires and the caller learns nothing more useful than "timed out".
+const DEFAULT_HOOK_STATE_TIMEOUT_MS = 500
+
+function hookStateTimeoutMs(): number {
+  const raw = process.env.PRJCT_HOOK_STATE_TIMEOUT_MS
+  const parsed = raw ? Number(raw) : Number.NaN
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HOOK_STATE_TIMEOUT_MS
+}
+
+export class HookStateLaneTimeoutError extends Error {
+  readonly timeoutMs: number
+  constructor(timeoutMs: number) {
+    super(
+      `hook-state lane exceeded ${timeoutMs}ms waiting on this cwd's chain ` +
+        '(a prior prompt/stop hook for the same project is still running). ' +
+        'Set PRJCT_HOOK_STATE_TIMEOUT_MS to tune this bound.'
+    )
+    this.name = 'HookStateLaneTimeoutError'
+    this.timeoutMs = timeoutMs
+  }
+}
+
+/**
+ * Bounds only what THIS caller waits for — never the underlying promise.
+ * `run` keeps executing (and, for hook-state, keeps chaining) exactly as if
+ * this wrapper weren't here; a caller that stops waiting cannot cancel or
+ * reorder it. That's the invariant hook-state's per-cwd exclusivity depends
+ * on: the NEXT queued call for this cwd must still wait for the REAL work to
+ * settle, not for whichever caller gave up first.
+ */
+function raceWithTimeout<T>(run: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new HookStateLaneTimeoutError(timeoutMs)), timeoutMs)
+    run.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
+
 /** Safety bound, mirrors prompt.ts's gitSnapshotCache — a runaway number of
  *  distinct cwds must not grow this map forever. Entries are resolved-promise
  *  refs used only to sequence the NEXT call for that key, so clearing loses
@@ -77,7 +132,10 @@ export class RequestLanes {
       )
       if (this.hookStateChains.size > MAX_HOOK_STATE_CHAINS) this.hookStateChains.clear()
       this.hookStateChains.set(chainKey, settled)
-      return run
+      // `settled` above is already wired to the real `run` regardless of
+      // what the caller does next — bounding the caller's wait here cannot
+      // let a request queued behind this one start early.
+      return raceWithTimeout(run, hookStateTimeoutMs())
     }
 
     const run = this.commandChain.then(work, work)

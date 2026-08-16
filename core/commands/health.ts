@@ -105,11 +105,24 @@ async function detectDimensions(projectPath: string): Promise<HealthDimension[]>
 
 // Dimension execution
 
+// Default budget per dimension. Overridable — a loaded machine (e.g. this
+// process itself running concurrent agent work) can legitimately push a
+// 2864-test suite (~130s isolated) well past a tight default; a fixed
+// timeout with no escape hatch turns transient contention into a false FAIL.
+const DEFAULT_DIM_TIMEOUT_MS = 5 * 60 * 1000
+
+function dimensionTimeoutMs(): number {
+  const raw = process.env.PRJCT_HEALTH_DIM_TIMEOUT_MS
+  const parsed = raw ? Number(raw) : Number.NaN
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_DIM_TIMEOUT_MS
+}
+
 async function runDimension(projectPath: string, dim: HealthDimension): Promise<HealthResult> {
   if (!dim.command) {
     return { dimension: dim, status: 'skipped', durationMs: 0 }
   }
   const start = Date.now()
+  const timeoutMs = dimensionTimeoutMs()
   // Prepend node_modules/.bin so locally-installed binaries (knip,
   // biome, vitest, etc.) resolve regardless of the parent process'
   // PATH. Without this, `prjct health` from a globally-installed
@@ -123,14 +136,34 @@ async function runDimension(projectPath: string, dim: HealthDimension): Promise<
   try {
     await execAsync(dim.command, {
       cwd: projectPath,
-      timeout: 5 * 60 * 1000,
+      timeout: timeoutMs,
       maxBuffer: 16 * 1024 * 1024,
       env,
     })
     return { dimension: dim, status: 'pass', durationMs: Date.now() - start }
   } catch (error) {
-    const stderr = (error as { stderr?: string }).stderr ?? ''
-    const stdout = (error as { stdout?: string }).stdout ?? ''
+    // Node's child_process sets `killed: true` (and usually `signal:
+    // 'SIGTERM'`) when the `timeout` option fires. Without this check the
+    // catch-all below scrapes "first non-empty line of stdout/stderr" —
+    // for a killed test run that's whatever line the reporter happened to
+    // be mid-flush on, which reads as "this file failed" when nothing
+    // actually failed; the run just didn't finish in time.
+    const errWithMeta = error as {
+      killed?: boolean
+      signal?: string
+      stderr?: string
+      stdout?: string
+    }
+    if (errWithMeta.killed) {
+      return {
+        dimension: dim,
+        status: 'fail',
+        durationMs: Date.now() - start,
+        diagnostic: `timed out after ${(timeoutMs / 1000).toFixed(0)}s (raise via PRJCT_HEALTH_DIM_TIMEOUT_MS)`,
+      }
+    }
+    const stderr = errWithMeta.stderr ?? ''
+    const stdout = errWithMeta.stdout ?? ''
     const firstNonEmpty = `${stderr}\n${stdout}`
       .split('\n')
       .map((l) => l.trim())

@@ -4,10 +4,64 @@
  * P1: hunk-level — map unified-diff line ranges to symbols by start_line.
  */
 
+import { createHash } from 'node:crypto'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { loadGraph } from '../domain/import-graph'
 import { fileFanIn, filesCallingInto, hasSymbolIndex, symbolsInFile } from '../domain/symbol-graph'
 import type { ChangeRisk, DetectChangesResult, DetectedChange } from '../types/domain.js'
 import { gitStdout } from '../utils/exec'
+
+// Cache — `ship` (source:'auto'/'working-tree') and `code impact`
+// (source:'committed') independently recompute the full symbol/call-graph
+// walk even when called back-to-back against the identical diff (verified
+// redundant in prjct-cli's own session telemetry). Both route through the
+// long-lived daemon process (ship/code are NOT bin-only commands — see
+// bin/prjct.ts's daemon fast path), so an in-process cache here is actually
+// shared across separate CLI invocations, not just within one process.
+// Keyed on a content-sensitive diff signature: staleness is self-correcting
+// (any real change to the diff produces a different signature → miss), so
+// no TTL is needed — only a small size cap against unbounded growth across
+// a long daemon uptime spanning many projects/branches.
+const DETECT_CHANGES_CACHE_MAX = 20
+const detectChangesCache = new Map<string, { signature: string; result: DetectChangesResult }>()
+
+function sha256Hex(data: string): string {
+  return createHash('sha256').update(data).digest('hex')
+}
+
+/**
+ * Content-sensitive fingerprint of the current diff for `changedFiles`.
+ * Cheap relative to the symbol-graph walk it guards: one scoped `git diff`
+ * call plus a content hash for any untracked files in the set (git diff
+ * shows nothing for untracked paths — they need their own read+hash).
+ */
+async function computeDiffSignature(
+  projectPath: string,
+  source: DetectChangesResult['source'],
+  changedFiles: string[]
+): Promise<string> {
+  if (changedFiles.length === 0) return `${source}:empty`
+  const base = await resolveDiffBase(projectPath, source)
+  const diff = base
+    ? ((await safeGit(projectPath, ['diff', base, '--', ...changedFiles])) ?? '')
+    : ''
+  const untrackedList =
+    (await safeGit(projectPath, [
+      'ls-files',
+      '--others',
+      '--exclude-standard',
+      '--',
+      ...changedFiles,
+    ])) ?? ''
+  const untrackedHashes: string[] = []
+  for (const file of untrackedList.split('\n').filter(Boolean)) {
+    const content = await fs.readFile(path.join(projectPath, file)).catch(() => null)
+    untrackedHashes.push(`${file}:${content ? sha256Hex(content.toString('utf8')) : 'missing'}`)
+  }
+  const parts = [source, [...changedFiles].sort().join(','), diff, untrackedHashes.sort().join(',')]
+  return sha256Hex(parts.join('\n'))
+}
 
 // Typed chokepoint: exit codes stay domain negatives (null — e.g. missing ref,
 // not a repo); git timeout/spawn throws GitInfraError so a broken git can
@@ -239,6 +293,13 @@ export async function detectChanges(
   })()
   const { changedFiles, source } = detected
 
+  const cacheKey = `${projectId}:${source}:${opts.files ? [...opts.files].sort().join(',') : ''}`
+  const signature = await computeDiffSignature(projectPath, source, changedFiles)
+  const cached = detectChangesCache.get(cacheKey)
+  if (cached && cached.signature === signature) {
+    return cached.result
+  }
+
   const importGraph = loadGraph(projectId)
   const hasSymbols = hasSymbolIndex(projectId)
 
@@ -285,13 +346,21 @@ export async function detectChanges(
   const order: Record<ChangeRisk, number> = { critical: 0, high: 1, medium: 2, low: 3 }
   changes.sort((a, b) => order[a.risk] - order[b.risk] || a.file.localeCompare(b.file))
 
-  return {
+  const result: DetectChangesResult = {
     changedFiles,
     affectedFiles: [...affected].sort(),
     changes,
     summary,
     source,
   }
+
+  if (detectChangesCache.size >= DETECT_CHANGES_CACHE_MAX) {
+    const oldestKey = detectChangesCache.keys().next().value
+    if (oldestKey !== undefined) detectChangesCache.delete(oldestKey)
+  }
+  detectChangesCache.set(cacheKey, { signature, result })
+
+  return result
 }
 
 export function formatDetectChangesMd(result: DetectChangesResult): string {

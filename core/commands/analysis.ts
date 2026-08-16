@@ -284,6 +284,17 @@ export class AnalysisCommands extends PrjctCommandsBase {
           mdStatsObj['Context removed'] = result.contextQuality.irrelevantRemoved
           mdStatsObj['Context repairs'] = result.contextQuality.repairEntriesCreated
         }
+        const phaseTimingsSection: string | null =
+          result.phaseTimings && result.phaseTimings.length > 0
+            ? mdSection(
+                'Phase timings (slowest first)',
+                mdList(
+                  [...result.phaseTimings]
+                    .sort((a, b) => b.ms - a.ms)
+                    .map((t) => `${t.phase}: ${(t.ms / 1000).toFixed(2)}s`)
+                )
+              )
+            : null
         const retentionSection: string | null = (() => {
           if (!result.retentionDryRun) return null
           const r = result.retentionDryRun
@@ -347,6 +358,7 @@ export class AnalysisCommands extends PrjctCommandsBase {
         const md = mdOutput(
           mdDone(`Sync Complete`),
           mdStats(mdStatsObj),
+          phaseTimingsSection,
           retentionSection,
           analysisDiffSection,
           projectEvolutionSection,

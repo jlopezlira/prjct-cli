@@ -71,6 +71,34 @@ describe('buildTaskHarness', () => {
     expect(harness.expectedEvidence).toEqual([])
     expect(harness.gates).toEqual([])
   })
+
+  test('classifies a Spanish "revisa" research ask as H1 research, not H2 feature', () => {
+    // Live friction case: this exact phrasing fell through the research
+    // check (missing "revisa"), hit 'mejora' in the feature branch, and
+    // triggered discuss-lock's H2 ceremony on a pure research ask.
+    const harness = buildTaskHarness(
+      'revisa que otras mejoras de eficiencia para los modelos, plan para agentes y sobre todo performance podemos hacer'
+    )
+
+    expect(harness.kind).toBe('research')
+    expect(harness.level).toBe('H1')
+  })
+
+  test('classifies "review" as research when no code-intent verb rides along', () => {
+    const harness = buildTaskHarness('review the current retry logic and report back')
+
+    expect(harness.kind).toBe('research')
+    expect(harness.level).toBe('H1')
+  })
+
+  test('does NOT let "review" smuggle a real code-change task past H2 (gaming guard)', () => {
+    // "review and refactor" is a genuine code-change ask; research must not
+    // win just because a research verb rides in the same sentence.
+    const harness = buildTaskHarness('review and refactor the export pipeline')
+
+    expect(harness.kind).toBe('refactor')
+    expect(harness.level).toBe('H2')
+  })
 })
 
 describe('evaluateHarnessCompletion', () => {

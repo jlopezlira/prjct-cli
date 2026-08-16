@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.93.0] - 2026-08-16
+
+### Added
+- Efficiency improvements: model routing, agent planning, and performance
+
 ## [3.92.0] - 2026-08-15
 
 ### Added

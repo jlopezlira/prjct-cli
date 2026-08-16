@@ -78,6 +78,17 @@ export async function showSyncResult(
   out.list(generatedItems, { bullet: '✓' })
   console.log('')
 
+  // PHASE TIMINGS — top 3 slowest, compact. Full breakdown lives in --md.
+  if (result.phaseTimings && result.phaseTimings.length > 0) {
+    const slowest = [...result.phaseTimings]
+      .sort((a, b) => b.ms - a.ms)
+      .slice(0, 3)
+      .map((t) => `${t.phase} ${(t.ms / 1000).toFixed(1)}s`)
+      .join(', ')
+    console.log(`Slowest phases: ${slowest}`)
+    console.log('')
+  }
+
   // STATUS INDICATOR
   if (result.git.hasChanges) {
     out.warn('Uncommitted changes detected')

@@ -172,6 +172,19 @@ describe('renderAuditDispatch — per-lens model routing (GAP 2)', () => {
     )
     expect(out).not.toContain('model: "haiku"')
   })
+
+  it('the real `design` catalog lens dispatches on the fast model (not just an injected test lens)', async () => {
+    expect(LENS_CATALOG.design.capabilityClass).toBe('fast')
+    const out = await renderAuditDispatch(
+      'spec_3',
+      'T',
+      emptySpecContent('x'),
+      ['architecture', 'design'],
+      'claude'
+    )
+    expect(out).toContain('## Reviewer B — design (UX/DX)')
+    expect(out).toContain('model: "haiku"')
+  })
 })
 
 describe('selectReviewers — DOMAIN experts (GAP 1)', () => {
