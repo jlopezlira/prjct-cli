@@ -31,6 +31,16 @@ export const CATEGORIES: Record<string, CategoryInfo> = {
   },
 }
 
+/**
+ * Bin-only entries hidden from the default `--help` / command list:
+ * internal plumbing (`hook`) and documented compatibility aliases
+ * (`upgrade` → `update`). They stay executable and keep per-command help.
+ */
+const BIN_ONLY_HIDDEN_SURFACES: Record<string, CommandMeta['surface']> = {
+  upgrade: 'legacy',
+  hook: 'internal',
+}
+
 // All command definitions
 export const COMMANDS: CommandMeta[] = [
   // ===== CORE COMMANDS =====
@@ -1526,6 +1536,12 @@ export const COMMANDS: CommandMeta[] = [
   // of the hand-maintained `_binCommands` set — invisible to the registry,
   // help, and the shim-sync derivations. Minimal metadata; `routingMode`
   // is the load-bearing field.
+  //
+  // BIN_ONLY_HIDDEN_SURFACES keeps the default `prjct --help` / command
+  // list free of plumbing: `hook` is internal (called by the hook scripts),
+  // `upgrade` is a documented compatibility alias of `update`. Both stay
+  // executable and keep their per-command help (`prjct help hook`) — same
+  // treatment as the legacy aliases (spec, audit-spec).
   ...(
     [
       [
@@ -1574,6 +1590,7 @@ export const COMMANDS: CommandMeta[] = [
       routing,
       usage: { claude: null, terminal: `prjct ${name}` },
       ...(params ? { params } : {}),
+      ...(BIN_ONLY_HIDDEN_SURFACES[name] ? { surface: BIN_ONLY_HIDDEN_SURFACES[name] } : {}),
       implemented: true,
       hasTemplate: false,
       requiresProject: false,

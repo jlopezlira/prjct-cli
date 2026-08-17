@@ -600,6 +600,17 @@ class StateStorage extends StorageManager<StateJson> {
     return workspace.getActiveTasks(this.workspaceBackend(), projectId)
   }
 
+  /**
+   * Archive zombie workspace tasks whose worktree path no longer exists.
+   * Called by collectActiveTasks after a `git worktree list` cross-check.
+   */
+  async archiveOrphanedWorkspaceTasks(
+    projectId: string,
+    workspaceIds: ReadonlySet<string>
+  ): Promise<WorkspaceTask[]> {
+    return workspace.archiveOrphanedWorkspaceTasks(this.workspaceBackend(), projectId, workspaceIds)
+  }
+
   async getActiveTaskCount(projectId: string): Promise<number> {
     return workspace.getActiveTaskCount(this.workspaceBackend(), projectId)
   }

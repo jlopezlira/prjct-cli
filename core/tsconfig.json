@@ -6,6 +6,8 @@
     "lib": ["ES2022"],
     "strict": true,
     "noEmit": true,
+    "incremental": true,
+    "tsBuildInfoFile": "../node_modules/.cache/core.tsbuildinfo",
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

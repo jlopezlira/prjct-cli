@@ -15,8 +15,10 @@ import path from 'node:path'
 import pathManager from '../../infrastructure/path-manager'
 import type { WorkspaceTask } from '../../schemas/state'
 import { collectActiveTasks, formatActiveTaskList } from '../../services/task-overview'
+import { archiveStorage } from '../../storage/archive-storage'
 import { prjctDb } from '../../storage/database'
 import { stateStorage } from '../../storage/state-storage'
+import { execFileAsync } from '../../utils/exec'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
 const fixture: {
@@ -89,5 +91,65 @@ describe('collectActiveTasks', () => {
     const rendered = formatActiveTaskList(ov)
     expect(rendered).toContain('Active work cycles (2)')
     expect(rendered).toContain('(this worktree)')
+  })
+})
+
+describe('zombie workspace-task sweep', () => {
+  const startWsTask = (
+    id: string,
+    workspaceId: string,
+    description: string,
+    worktreePath?: string
+  ) =>
+    stateStorage.startTaskInWorkspace(
+      fixture.projectId,
+      {
+        id,
+        description,
+        sessionId: `s-${id}`,
+        workspaceId,
+        worktreePath,
+      } as Omit<WorkspaceTask, 'startedAt'>,
+      workspaceId
+    )
+
+  it('archives entries whose worktree path is gone; keeps live and path-less ones', async () => {
+    // Real git repo with one live worktree — the sweep's only source of truth.
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: fixture.projectPath })
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], {
+      cwd: fixture.projectPath,
+    })
+    await execFileAsync('git', ['config', 'user.name', 'Tester'], { cwd: fixture.projectPath })
+    await execFileAsync('git', ['commit', '-q', '--allow-empty', '-m', 'init'], {
+      cwd: fixture.projectPath,
+    })
+    const livePath = path.join(fixture.tmpRoot!, 'live-wt')
+    await execFileAsync('git', ['worktree', 'add', '-q', '-b', 'feat/live', livePath], {
+      cwd: fixture.projectPath,
+    })
+
+    await startWsTask('live-1', 'ws-live', 'live work', await fs.realpath(livePath))
+    await startWsTask('gone-1', 'ws-gone', 'gone work', path.join(fixture.tmpRoot!, 'gone-wt'))
+    await startWsTask('legacy-1', 'ws-legacy', 'no worktreePath recorded')
+
+    const ov = await collectActiveTasks(fixture.projectId, fixture.projectPath)
+    expect(ov.all.map((v) => v.id).sort()).toEqual(['legacy-1', 'live-1'])
+
+    // Removal is persisted, and the zombie landed in the archive table.
+    const remaining = await stateStorage.getActiveTasks(fixture.projectId)
+    expect(remaining.map((t) => t.id).sort()).toEqual(['legacy-1', 'live-1'])
+    const archived = archiveStorage.getArchived(fixture.projectId, 'workspace_task')
+    expect(archived).toHaveLength(1)
+    expect(archived[0]!.summary).toBe('gone work')
+    expect(archived[0]!.reason).toBe('staleness')
+  })
+
+  it('fail-soft: not a git repo → list untouched even when the path is gone', async () => {
+    // fixture.projectPath is a plain tmp dir (no git) → git spawn fails → keep.
+    await startWsTask('gone-1', 'ws-gone', 'gone work', path.join(fixture.tmpRoot!, 'gone-wt'))
+
+    const ov = await collectActiveTasks(fixture.projectId, fixture.projectPath)
+    expect(ov.all.map((v) => v.id)).toEqual(['gone-1'])
+    expect(archiveStorage.getArchived(fixture.projectId, 'workspace_task')).toHaveLength(0)
   })
 })

@@ -8,9 +8,10 @@
  * the per-workspace state observable instead of silently singular.
  */
 
-import type { CurrentTask, TaskHarness } from '../schemas/state'
+import type { CurrentTask, TaskHarness, WorkspaceTask } from '../schemas/state'
 import { stateStorage } from '../storage/state-storage'
 import { getTaskPipelineState, type TaskPipelineState } from '../storage/task-pipeline-storage'
+import { runGit } from '../utils/exec'
 import { deriveWorkspace, MAIN_WORKSPACE_ID } from './workspace-id'
 
 export interface ActiveTaskView {
@@ -54,6 +55,42 @@ function labelFor(workspaceId: string, branch?: string): { shortId: string; labe
 }
 
 /**
+ * Zombie sweep (fail-soft). activeTasks entries outlive their worktree when
+ * the worktree is deleted without completing the cycle — the only other
+ * removal path is an explicit complete. Cross-check each entry's worktreePath
+ * against `git worktree list` (one spawn) and archive the ones whose path is
+ * gone. Gated strictly on path non-existence, never on age: entries without
+ * a worktreePath stay, and any git failure keeps the full list untouched.
+ */
+async function pruneOrphanedWorkspaceTasks(
+  projectId: string,
+  projectPath: string,
+  activeTasks: WorkspaceTask[]
+): Promise<WorkspaceTask[]> {
+  const candidates = activeTasks.filter((t) => t.worktreePath)
+  if (candidates.length === 0) return activeTasks
+
+  const result = await runGit(['worktree', 'list', '--porcelain'], {
+    cwd: projectPath,
+    timeoutMs: 2000,
+  })
+  if (!result.ok) return activeTasks
+
+  const livePaths = new Set(
+    result.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => line.slice('worktree '.length).trim())
+  )
+  const orphaned = candidates.filter((t) => !livePaths.has(t.worktreePath as string))
+  if (orphaned.length === 0) return activeTasks
+
+  const orphanedIds = new Set(orphaned.map((t) => t.workspaceId))
+  await stateStorage.archiveOrphanedWorkspaceTasks(projectId, orphanedIds)
+  return activeTasks.filter((t) => !orphanedIds.has(t.workspaceId))
+}
+
+/**
  * Collect the active task for the caller's worktree plus every other active
  * task in the project. `current` is resolved by deriving the caller's
  * workspaceId from `projectPath`; the main worktree maps onto the singular
@@ -92,7 +129,13 @@ export async function collectActiveTasks(
 
   // Child-worktree tasks (activeTasks[]). Defensive: skip any stray entry
   // tagged as the main workspace so it can never double-count with currentTask.
-  for (const t of snapshot.activeTasks) {
+  // Zombie entries (worktree deleted) are archived by the sweep first.
+  const activeTasks = await pruneOrphanedWorkspaceTasks(
+    projectId,
+    projectPath,
+    snapshot.activeTasks
+  )
+  for (const t of activeTasks) {
     if (t.workspaceId === MAIN_WORKSPACE_ID) continue
     const { shortId, label } = labelFor(t.workspaceId, t.branch)
     views.push({
