@@ -16,11 +16,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DAEMON_PATHS } from '../../daemon/protocol'
 import type { HookIo } from '../../hooks/_runner'
 import { runPromptHook } from '../../hooks/prompt'
 import { runSessionStartHook } from '../../hooks/session-start'
 import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
+import { detectRuntimeAgent } from '../../services/agent-identity'
+import { createHandoff } from '../../storage/handoff-storage'
 import { execFileAsync } from '../../utils/exec'
 
 const fixture: { projectPath: string; projectId: string } = { projectPath: '', projectId: '' }
@@ -92,5 +95,45 @@ describe('kimi session digest hand-off', () => {
     const prompt = ioFor({ prompt: 'hola claude', session_id: 'claude-1' })
     await runPromptHook(fixture.projectPath, prompt.io)
     expect(prompt.output()).not.toContain('# prjct: project context')
+  })
+
+  it('injects a pending handoff cue once, not twice, on the first prompt', async () => {
+    createHandoff({
+      projectId: fixture.projectId,
+      taskId: 'task_handoff_once',
+      taskDescription: 'finish the migration',
+      fromAgent: 'claude',
+      // Target whatever agent this test process detects as — the cue only
+      // surfaces for handoffs pending for the CURRENT runtime agent.
+      toAgent: detectRuntimeAgent(),
+      reason: 'context window full',
+    })
+
+    const start = ioFor({ source: 'startup', session_id: 'session_handoff' }, 'kimi')
+    await runSessionStartHook(fixture.projectPath, start.io)
+
+    const first = ioFor({ prompt: 'retoma la migración', session_id: 'session_handoff' }, 'kimi')
+    await runPromptHook(fixture.projectPath, first.io)
+    // The session digest already carries the handoff cue — the state block
+    // must skip its own probe so the cue lands exactly once in one payload.
+    const occurrences = first.output().split('Handoff pending').length - 1
+    expect(occurrences).toBe(1)
+  })
+
+  it('falls back to a project+host stamp key when session_id is missing', async () => {
+    const start = ioFor({ source: 'startup' }, 'kimi')
+    await runSessionStartHook(fixture.projectPath, start.io)
+
+    const stampFiles = await fs.readdir(DAEMON_PATHS.runDir())
+    const parked = stampFiles.filter(
+      (name) => name.startsWith(`kimi-session-`) && name.includes(fixture.projectId)
+    )
+    expect(parked).toHaveLength(1)
+    // No more shared literal 'unknown' — the fallback is host-scoped.
+    expect(parked[0]).toContain('nosession-kimi')
+
+    const first = ioFor({ prompt: 'sin session id' }, 'kimi')
+    await runPromptHook(fixture.projectPath, first.io)
+    expect(first.output()).toContain('# prjct: project context')
   })
 })

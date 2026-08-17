@@ -3,6 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -98,6 +99,53 @@ describe('installGeminiHooks', () => {
     const r2 = await installGeminiHooks(fixture.settingsPath)
     expect(r2.hooksWritten).toBe(0)
     expect(r2.alreadyPresent).toBe(geminiHookMaps().length)
+  })
+
+  it('installs the native hook-fast chain with PRJCT_HOOK_HOST=gemini in every stage', async () => {
+    await installGeminiHooks(fixture.settingsPath)
+    const body = JSON.parse(await fs.readFile(fixture.settingsPath, 'utf-8')) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>
+    }
+    const cmd = body.hooks.SessionStart.flatMap((b) => b.hooks)[0]?.command ?? ''
+
+    // No host-only vars anywhere (Gemini refuses commands that reference
+    // unset vars).
+    expect(cmd).not.toContain('$PPID')
+
+    const nativeBinPath = path.resolve(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'dist',
+      'bin',
+      `hook-fast-${process.platform}-${process.arch}`
+    )
+    const shimPath = path.resolve(__dirname, '..', '..', '..', 'dist', 'bin', 'prjct.mjs')
+    if (process.platform !== 'win32' && existsSync(nativeBinPath) && existsSync(shimPath)) {
+      // Native first, then direct runtime+shim, then portable — the host env
+      // rides in front of ALL THREE (the native binary forwards it to the
+      // daemon as hookHost).
+      expect(cmd).toContain('|| { command -v prjct')
+      expect(cmd).toContain('PRJCT_HOOK_HOST=gemini prjct hook session-start')
+      expect(cmd).toContain('|| exit 0')
+      expect(cmd).toContain(`PRJCT_HOOK_HOST=gemini "${nativeBinPath}" session-start`)
+      expect(cmd.indexOf(`"${nativeBinPath}" session-start`)).toBeLessThan(
+        cmd.indexOf('hook session-start')
+      )
+      expect(cmd.indexOf('hook session-start')).toBeLessThan(cmd.indexOf('command -v prjct'))
+      expect(cmd.split('PRJCT_HOOK_HOST=gemini').length - 1).toBe(3)
+    } else if (existsSync(shimPath)) {
+      expect(cmd).toContain('|| { command -v prjct')
+      expect(cmd).toContain('PRJCT_HOOK_HOST=gemini prjct hook session-start')
+      expect(cmd).toContain('|| exit 0')
+      expect(cmd.startsWith('PRJCT_HOOK_HOST=gemini ')).toBe(true)
+      expect(cmd.split('PRJCT_HOOK_HOST=gemini').length - 1).toBe(2)
+    } else {
+      // No dist build (e.g. CI unit shard) → portable form only.
+      expect(cmd).toContain('command -v prjct >/dev/null 2>&1 && PRJCT_HOOK_HOST=gemini prjct hook')
+      expect(cmd).toContain('|| exit 0')
+    }
   })
 })
 

@@ -27,6 +27,7 @@ export const KNOWN_AGENTS = new Set([
   'opencode',
   'pi',
   'antigravity',
+  'kimi',
   'unknown',
 ])
 

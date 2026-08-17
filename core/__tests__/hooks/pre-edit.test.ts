@@ -41,10 +41,10 @@ async function freshProject(): Promise<void> {
  * Drive the hook with a captured-IO bridge (the same shape the daemon uses)
  * and return the emitted stdout payload.
  */
-async function runWith(toolInput: Record<string, unknown>): Promise<string> {
+async function runWith(toolInput: Record<string, unknown>, sessionId?: string): Promise<string> {
   const chunks: string[] = []
   await runPreEditHook(fixture.projectPath, {
-    input: { tool_name: 'Edit', tool_input: toolInput },
+    input: { tool_name: 'Edit', tool_input: toolInput, session_id: sessionId },
     sink: (chunk: string) => {
       chunks.push(chunk)
     },
@@ -182,6 +182,31 @@ describe('pre-edit hook', () => {
     })
     const out = await runWith({ file_path: '/abs/repo/core/state.ts' })
     expect(out.trim()).toBe('{}')
+  })
+
+  test('heads-up dedupes per (session, file, trap-set) — no re-injection on every Edit', async () => {
+    await projectMemory.remember(fixture.projectPath, {
+      type: 'gotcha',
+      content: 'this module mutates shared state — clone before writing',
+      tags: { file: 'core/state.ts' },
+    })
+    const first = await runWith({ file_path: '/abs/repo/core/state.ts' }, 'sess-a')
+    expect(first).toContain('heads-up before editing')
+    // Same session, same file, same traps → silent.
+    const second = await runWith({ file_path: '/abs/repo/core/state.ts' }, 'sess-a')
+    expect(second.trim()).toBe('{}')
+    // A different session still gets the heads-up.
+    const otherSession = await runWith({ file_path: '/abs/repo/core/state.ts' }, 'sess-b')
+    expect(otherSession).toContain('heads-up before editing')
+    // A newly-recorded trap re-arms the heads-up for the original session.
+    await projectMemory.remember(fixture.projectPath, {
+      type: 'anti-pattern',
+      content: 'never call init() twice here',
+      tags: { file: 'core/state.ts' },
+    })
+    const rearmed = await runWith({ file_path: '/abs/repo/core/state.ts' }, 'sess-a')
+    expect(rearmed).toContain('heads-up before editing')
+    expect(rearmed).toContain('never call init() twice')
   })
 })
 

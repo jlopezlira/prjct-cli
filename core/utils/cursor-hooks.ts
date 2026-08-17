@@ -17,6 +17,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { resolveUserPath } from '../infrastructure/user-home'
+import { hookCommandChain } from '../services/hook-command'
 import { PRJCT_HOOKS } from '../services/settings-installer'
 
 const MANAGED_MARKER = '_prjctManaged' as const
@@ -128,8 +129,11 @@ export function cursorHookMaps(): CursorHookMap[] {
 }
 
 function hookCommand(subcommand: string): string {
-  const bin = process.env.PRJCT_BIN ?? 'prjct'
-  return `command -v ${bin} >/dev/null 2>&1 && PRJCT_HOOK_HOST=cursor ${bin} hook ${subcommand} || exit 0`
+  // Shared native/direct/portable chain; PRJCT_HOOK_HOST=cursor is inlined
+  // in every stage — the native hook-fast binary forwards it to the daemon
+  // as `hookHost` (native/hook-fast.c), so Cursor output adaptation works
+  // on the fast path too.
+  return hookCommandChain(subcommand, 'PRJCT_HOOK_HOST=cursor')
 }
 
 function isPrjctHandler(h: CursorHookHandler): boolean {

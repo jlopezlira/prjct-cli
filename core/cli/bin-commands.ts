@@ -195,10 +195,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const result =
       args[0] === 'start'
         ? await commands.start()
-        : await commands.setup({
-            force: args.includes('--force'),
-            nonInteractive: args.includes('--non-interactive') || args.includes('--yes'),
-          })
+        : await commands.setup({ force: args.includes('--force') })
     if (result.message) console.log(result.message)
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'context') {
@@ -207,30 +204,37 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
 
     if (projectId) {
       const done = await ctx.trackSession('context')
-      // Strip --md and --json flags before passing to context tools
+      // --md / --json select the output format; strip them before dispatch
       const contextArgs = args.slice(1).filter((a) => a !== '--md' && a !== '--json')
       const mdMode = args.includes('--md')
+      const jsonMode = args.includes('--json')
 
       if (contextArgs.length === 0) {
         // No subcommand: return project context
         const { ContextCommands } = await import('../commands/context')
         const contextCmds = new ContextCommands()
-        const result = await contextCmds.context(null, projectPath, { md: mdMode })
+        const result = await contextCmds.context(null, projectPath, { md: mdMode && !jsonMode })
         process.exitCode = result.success ? 0 : 1
       } else {
         const { runContextTool } = await import('../tools/context')
         const result = await runContextTool(contextArgs, projectId, projectPath)
-        // tiers / artifacts / project prefer markdown for agents when --md is set
-        if (
-          mdMode &&
-          (result.tool === 'tiers' || result.tool === 'artifacts' || result.tool === 'project') &&
+        // --md prints the tool's markdown rendering when it has one
+        // (memory/learnings/skills/tiers/project/artifacts all do); when it
+        // doesn't, say so and fall back to JSON. --json always wins, so
+        // scripts get the stable machine-readable envelope either way.
+        const markdown =
           result.result &&
           typeof result.result === 'object' &&
           'markdown' in result.result &&
           typeof (result.result as { markdown?: unknown }).markdown === 'string'
-        ) {
-          console.log((result.result as { markdown: string }).markdown)
+            ? (result.result as { markdown: string }).markdown
+            : null
+        if (mdMode && !jsonMode && result.tool !== 'error' && markdown !== null) {
+          console.log(markdown)
         } else {
+          if (mdMode && !jsonMode && result.tool !== 'error') {
+            console.error('--md is not supported for this tool; output is JSON')
+          }
           console.log(JSON.stringify(result, null, 2))
         }
         process.exitCode = result.tool === 'error' ? 1 : 0

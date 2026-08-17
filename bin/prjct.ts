@@ -121,7 +121,12 @@ if (_initialFastCommand === 'hook' && process.env.PRJCT_NO_DAEMON !== '1') {
   const socketPath = DAEMON_PATHS.socket()
   if (isDaemonNamedPipe(socketPath) || fs.existsSync(socketPath)) {
     const subcommand = _initialFastArgs[1]
-    const stdinPayload = readStdinSync(1000)
+    // If an earlier chain stage (native hook-fast / daemon shim) already
+    // consumed stdin and punted, the payload waits in the run-dir spill
+    // file — take it from there instead of the drained pipe.
+    const { consumeHookStdinSpill } = await import('../core/hooks/stdin-spill')
+    const stdinPayload =
+      (subcommand ? consumeHookStdinSpill(process.cwd(), subcommand) : null) ?? readStdinSync(1000)
     try {
       const { sendRequest } = await import('../core/daemon/client')
       const { HOOK_REQUEST_TIMEOUT_MS } = await import('../core/daemon/protocol')
@@ -248,6 +253,23 @@ const { REGISTERED_VERBS_SET, BIN_COMMANDS_SET } = await import('../core/command
 const { isRemovedVerb } = await import('../core/commands/removed-verbs')
 const _binCommands = BIN_COMMANDS_SET
 
+// Per-command help: `prjct <verb> --help` (or `-h`) routes to the help
+// system instead of dying in the verb's option parser ("Missing required
+// parameter"). Runs BEFORE the GTD auto-route (unknown verbs keep the loud
+// misrouted-command error) and BEFORE the daemon fast path (daemon-served
+// verbs never ship --help over the socket). Bare `prjct --help` has no
+// command token, so it still falls through to the bin dispatcher.
+if (
+  _initialFastCommand &&
+  _initialFastCommand !== 'help' &&
+  (REGISTERED_VERBS_SET.has(_initialFastCommand) || _binCommands.has(_initialFastCommand)) &&
+  (_initialFastArgs.includes('--help') || _initialFastArgs.includes('-h'))
+) {
+  const { getHelp } = await import('../core/utils/help')
+  console.log(getHelp(_initialFastCommand))
+  process.exit(0)
+}
+
 // v2 auto-route: if the first positional isn't a known verb, treat free-text
 // argv as GTD-style inbox capture → `prjct capture "<argv>"`.
 // A lone command-shaped token is different: it is almost always a typo or a
@@ -255,7 +277,7 @@ const _binCommands = BIN_COMMANDS_SET
 // bogus inbox item. Explicit verbs still win. Capture remains zero-ceremony
 // for multi-word notes; tasks still use `prjct task "..."` explicitly. Must
 // run BEFORE the daemon fast path so rewritten `capture` routes there.
-const { command: _fastCommand, args: _fastArgs } = (() => {
+const { command: _fastCommand, args: _fastArgs } = await (async () => {
   if (
     !_initialFastCommand ||
     _binCommands.has(_initialFastCommand) ||
@@ -276,8 +298,13 @@ const { command: _fastCommand, args: _fastArgs } = (() => {
     /^[a-z][a-z0-9:-]+$/.test(positionals[0]) &&
     !isRemovedVerb(positionals[0])
   ) {
+    // Lazy import: the typo path is rare, so the manifest + edit-distance
+    // machinery stays off the hot startup path for valid commands.
+    const { findClosestCommand } = await import('../core/commands/closest-command')
+    const suggestion = findClosestCommand(positionals[0])
     process.stderr.write(
       `prjct: '${positionals[0]}' is not a known command in this install. ` +
+        (suggestion ? `Did you mean \`prjct ${suggestion}\`? ` : '') +
         'If you meant a command, upgrade prjct with `prjct upgrade` ' +
         '(or `prjct update` on older installs).\n'
     )

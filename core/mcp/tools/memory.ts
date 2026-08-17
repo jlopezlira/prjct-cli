@@ -55,14 +55,12 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
         'Save durable project memory in English. Use tags.topic for evolving subjects; matching topics supersede older entries.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        type: z
-          .string()
-          .describe('Memory type, such as fact, decision, learning, or a custom type'),
-        content: z.string().describe('Freeform memory text'),
+        type: z.string().describe('e.g. fact, decision, learning, or a custom type'),
+        content: z.string(),
         tags: z
           .record(z.string(), z.string())
           .optional()
-          .describe('Key:value metadata, such as {domain: "auth"}'),
+          .describe('k:v metadata, e.g. {domain: "auth"}'),
         source: z.string().optional().describe('Originating task id'),
         force: z.boolean().optional().describe('Allow content rejected as secret-like'),
       }),
@@ -131,12 +129,9 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         topic: z.string().optional().describe('Keyword to match over content + tag values'),
-        types: z.array(z.string()).optional().describe('Restrict to these types'),
-        tags: z
-          .record(z.string(), z.string())
-          .optional()
-          .describe('Require exact match on these k:v pairs'),
-        limit: z.number().optional().default(25).describe('Max entries (default 25)'),
+        types: z.array(z.string()).optional(),
+        tags: z.record(z.string(), z.string()).optional().describe('Exact k:v match'),
+        limit: z.number().optional().default(25),
       }),
     },
     safeMcpCall(
@@ -175,8 +170,8 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
         'Find ranked memory related to a free-text description; returns compact, resolvable cues.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        description: z.string().describe('Free-text description to find similar memories for'),
-        limit: z.number().optional().default(10).describe('Max results (default 10)'),
+        description: z.string(),
+        limit: z.number().optional().default(10),
       }),
     },
     safeMcpCall(
@@ -211,8 +206,8 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
         'Before editing a file, retrieve preventive gotchas and recurring failures. Empty means clear to edit.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        file: z.string().describe('File to check (absolute or repo-relative)'),
-        limit: z.number().optional().default(3).describe('Max preventive entries (default 3)'),
+        file: z.string().describe('Absolute or repo-relative path'),
+        limit: z.number().optional().default(3),
       }),
     },
     safeMcpCall(
@@ -243,7 +238,7 @@ export function registerMemoryTools(server: McpServer, options: { extended?: boo
       description: 'Delete a memory by stable id from prjct_mem_list.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        id: z.string().describe('Memory id (e.g. "mem_42" or "ship_7")'),
+        id: z.string().describe('e.g. "mem_42" or "ship_7"'),
       }),
     },
     safeMcpCall('prjct_mem_forget', async (args: { projectPath?: string; id: string }) => {

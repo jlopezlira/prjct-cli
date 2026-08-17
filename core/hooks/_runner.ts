@@ -58,8 +58,13 @@ export interface RunHookOptions<I> {
   build?: (input: I, projectPath: string, host: HookHost) => Promise<string | null>
   /** Optional side-effects that run AFTER emit. The runner already
    *  swallows errors thrown here via safeRun; explicit try/catch is
-   *  only needed when you want to keep going after a sub-step fails. */
-  afterEmit?: (input: I, projectPath: string) => Promise<void>
+   *  only needed when you want to keep going after a sub-step fails.
+   *  `host` is the EFFECTIVE invoking host — same contract as `build`
+   *  (forwarded over the daemon wire in io mode, env in process mode):
+   *  afterEmit logic that branches on host MUST use it, never
+   *  currentHookHost(), because the daemon's own env never carries
+   *  PRJCT_HOOK_HOST. */
+  afterEmit?: (input: I, projectPath: string, host: HookHost) => Promise<void>
 }
 
 /**
@@ -102,7 +107,7 @@ export async function runHook<I = Record<string, unknown>>(
       const host = io.hookHost ?? currentHookHost()
       const input = io.input as I
       if (io.afterEmitOnly) {
-        if (opts.afterEmit) io.detachAfterEmit(() => opts.afterEmit!(input, projectPath))
+        if (opts.afterEmit) io.detachAfterEmit(() => opts.afterEmit!(input, projectPath, host))
         return
       }
       const decision = opts.decide ? await opts.decide(input, projectPath) : null
@@ -114,7 +119,7 @@ export async function runHook<I = Record<string, unknown>>(
       }
       const context = opts.build ? await opts.build(input, projectPath, host) : null
       io.sink(payloadLine(adaptHookOutputForHost(buildHookOutput(opts.event, context), host)))
-      if (opts.afterEmit) io.detachAfterEmit(() => opts.afterEmit!(input, projectPath))
+      if (opts.afterEmit) io.detachAfterEmit(() => opts.afterEmit!(input, projectPath, host))
     } catch {
       io.sink('{}\n')
     }
@@ -131,6 +136,6 @@ export async function runHook<I = Record<string, unknown>>(
     }
     const context = opts.build ? await opts.build(input, projectPath, currentHookHost()) : null
     emit(buildHookOutput(opts.event, context))
-    if (opts.afterEmit) await opts.afterEmit(input, projectPath)
+    if (opts.afterEmit) await opts.afterEmit(input, projectPath, currentHookHost())
   })
 }

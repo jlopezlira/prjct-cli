@@ -13,6 +13,7 @@ import {
   collectDuplicateIds,
   collectRetentionInputs,
   evaluateRetention,
+  evaluateRetentionShared,
   type RetentionInputs,
   scoreEntry,
   shouldEmbedEntry,
@@ -399,5 +400,97 @@ describe('evaluateRetention — end to end over storage', () => {
       .allEntriesForIndex(fixture.projectId)
       .filter((e) => e.id === 'mem_888001')
     if (result.merged > 0) expect(after).toHaveLength(0)
+  })
+})
+
+describe('evaluateRetentionShared — one evaluation per sync window', () => {
+  it('reuses a single report until a memory write invalidates it', async () => {
+    await projectMemory.remember(fixture.tmpRoot, {
+      type: 'decision',
+      content: 'shared-eval seed decision about the storage layer',
+      projectId: fixture.projectId,
+    })
+
+    const first = evaluateRetentionShared(fixture.projectId, NOW)
+    // Same sync window (time bucket), no writes → the SAME report object,
+    // i.e. context-quality / applyRetention / triageInbox share one evaluation.
+    const again = evaluateRetentionShared(fixture.projectId, NOW + 5_000)
+    expect(again).toBe(first)
+
+    await projectMemory.remember(fixture.tmpRoot, {
+      type: 'learning',
+      content: 'a fresh learning that moves the vault stamp',
+      projectId: fixture.projectId,
+    })
+    const afterWrite = evaluateRetentionShared(fixture.projectId, NOW + 10_000)
+    expect(afterWrite).not.toBe(first)
+    expect(afterWrite.evaluated).toBe(first.evaluated + 1)
+  })
+
+  it('a raw-SQL delete invalidates the memo too (no write-path hook needed)', () => {
+    prjctDb.run(
+      fixture.projectId,
+      `INSERT INTO memory_entries (
+        id, project_id, type, title, content, provenance, content_hash,
+        user_triggered, revision_count, created_at, updated_at, deleted_at
+      ) VALUES (?, ?, 'inbox', 't', ?, 'declared', ?, 0, 0, ?, ?, NULL)`,
+      'mem_777001',
+      fixture.projectId,
+      'raw inserted inbox row for memo invalidation coverage',
+      'hash-memo-1',
+      NOW,
+      NOW
+    )
+    const before = evaluateRetentionShared(fixture.projectId, NOW)
+    expect(evaluateRetentionShared(fixture.projectId, NOW + 1_000)).toBe(before)
+
+    prjctDb.run(fixture.projectId, 'DELETE FROM memory_entries WHERE id = ?', 'mem_777001')
+    const after = evaluateRetentionShared(fixture.projectId, NOW + 2_000)
+    expect(after).not.toBe(before)
+    expect(after.evaluated).toBe(before.evaluated - 1)
+  })
+
+  it('applyRetention + triageInbox ride the same evaluation in a quiet window', async () => {
+    await projectMemory.remember(fixture.tmpRoot, {
+      type: 'decision',
+      content: 'quiet-window decision that stays active under retention',
+      projectId: fixture.projectId,
+    })
+    const shared = evaluateRetentionShared(fixture.projectId, NOW)
+    const applied = applyRetention(fixture.projectId, { dryRun: true, nowMs: NOW })
+    // dry-run mutates nothing, so triage must observe the identical evaluation.
+    expect(applied.evaluated).toBe(shared.evaluated)
+    expect(applied.referenceSize).toBe(shared.referenceSize)
+    const triaged = triageInbox(fixture.projectId, NOW)
+    expect(triaged.merged + triaged.archived + triaged.junkForgotten).toBe(0)
+  })
+})
+
+describe('allEntriesForIndex — per-sync vault snapshot', () => {
+  it('serves consistent repeats and reflects remember/forget immediately', async () => {
+    await projectMemory.remember(fixture.tmpRoot, {
+      type: 'fact',
+      content: 'snapshot seed fact about the vault read model',
+      projectId: fixture.projectId,
+    })
+    const a = projectMemory.allEntriesForIndex(fixture.projectId)
+    const b = projectMemory.allEntriesForIndex(fixture.projectId)
+    expect(b).toEqual(a)
+    // Defensive copy: in-place caller mutations cannot corrupt the snapshot.
+    expect(b).not.toBe(a)
+
+    await projectMemory.remember(fixture.tmpRoot, {
+      type: 'fact',
+      content: 'a brand new fact that must be visible without reload lag',
+      projectId: fixture.projectId,
+    })
+    const afterRemember = projectMemory.allEntriesForIndex(fixture.projectId)
+    expect(afterRemember.length).toBe(a.length + 1)
+
+    const victim = afterRemember[0]!
+    expect(projectMemory.forget(fixture.projectId, victim.id)).toBe(true)
+    const afterForget = projectMemory.allEntriesForIndex(fixture.projectId)
+    expect(afterForget.find((e) => e.id === victim.id)).toBeUndefined()
+    expect(afterForget.length).toBe(a.length)
   })
 })

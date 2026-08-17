@@ -385,6 +385,13 @@ export const AGENT_RUNTIME_REGISTRY: readonly AgentRuntimeDefinition[] = [
     status: 'stable',
     detectsBy: { projectDirs: ['.cursor'], projectFiles: ['.cursorrules'] },
     contextFiles: ['AGENTS.md', '.cursor/rules/prjct.mdc'],
+    mcpTargets: [
+      {
+        format: 'claude-json',
+        pathHint: '~/.cursor/mcp.json (configured in-app; prjct does not write it)',
+        writable: false,
+      },
+    ],
     projectRuleTargets: [
       {
         relativePath: '.cursor/rules/prjct.mdc',
@@ -410,6 +417,13 @@ export const AGENT_RUNTIME_REGISTRY: readonly AgentRuntimeDefinition[] = [
     status: 'stable',
     detectsBy: { projectDirs: ['.cline', '.clinerules'], projectFiles: ['.clinerules'] },
     contextFiles: ['AGENTS.md', '.clinerules/'],
+    mcpTargets: [
+      {
+        format: 'generic',
+        pathHint: 'Cline MCP settings (VS Code extension; configured in-app)',
+        writable: false,
+      },
+    ],
     supports: {
       agentsMd: true,
       mcp: true,

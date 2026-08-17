@@ -30,6 +30,7 @@
 import { spawn } from 'node:child_process'
 import { readStdinRaw } from './_shared'
 import { getHookRunner } from './registry'
+import { consumeHookStdinSpill } from './stdin-spill'
 
 /** Env flag: this process only exists to finish afterEmit (parent already responded). */
 const AFTER_EMIT_ENV = 'PRJCT_HOOK_AFTER_EMIT'
@@ -38,8 +39,14 @@ const AFTER_EMIT_ENV = 'PRJCT_HOOK_AFTER_EMIT'
  * Sync-read stdin (the hook event JSON) within `timeoutMs`. Thin raw-string
  * wrapper around `_shared.ts`'s `readStdinRaw` — see that function for the
  * fd/EAGAIN/Atomics.wait rationale. Mirrors bin/prjct.ts `readStdinSync`.
+ *
+ * When a previous chain stage (native hook-fast or the daemon shim) already
+ * consumed stdin and punted, the payload waits in the run-dir spill file —
+ * take it from there instead of the drained pipe (see stdin-spill.ts).
  */
-function readStdinSync(timeoutMs: number): string {
+function readStdinSync(timeoutMs: number, subcommand?: string): string {
+  const spilled = subcommand ? consumeHookStdinSpill(process.cwd(), subcommand) : null
+  if (spilled !== null) return spilled
   return readStdinRaw(timeoutMs).toString('utf-8')
 }
 
@@ -84,7 +91,7 @@ async function main(): Promise<void> {
       if (!isAfterEmitWorker) process.stdout.write('{}\n')
       process.exit(0)
     }
-    const stdinPayload = readStdinSync(1000)
+    const stdinPayload = readStdinSync(1000, subcommand)
     const input = (() => {
       try {
         return stdinPayload ? (JSON.parse(stdinPayload) as unknown) : {}

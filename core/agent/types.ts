@@ -39,6 +39,13 @@ export interface AgentRunOptions {
   systemAppend?: string
   onStep?: (event: AgentStepEvent) => void
   timeoutMsPerGenerate?: number
+  /**
+   * Work cycle this run is bound to (from prepareOwnedAgentWorkContext).
+   * When both are set, accumulated completion.usage is recorded against the
+   * task so owned runs show up in `prjct performance`. Fail-soft.
+   */
+  projectId?: string
+  taskId?: string
 }
 
 export type AgentStepEvent =

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DAEMON_PATHS } from '../../daemon/protocol'
 import pathManager from '../../infrastructure/path-manager'
 import { projectMemory } from '../../memory/project-memory'
 import {
@@ -78,6 +79,42 @@ describe('runSessionCleanup', () => {
     expect(r.inboxArchived).toBe(0)
     expect(r.archivesPruned).toBe(0)
     expect(r.checkpointsRemoved).toBe(0)
+    expect(r.stampsRemoved).toBe(0)
+  })
+
+  it('sweeps hook stamps older than 24h from the run dir', async () => {
+    const runDir = DAEMON_PATHS.runDir()
+    await fs.mkdir(runDir, { recursive: true })
+    const staleStamp = path.join(runDir, 'prompt-state-staleproj-deadbeef.hash')
+    const staleGit = path.join(runDir, 'prompt-git-deadbeef.json')
+    const staleAfterEmit = path.join(runDir, 'prompt-afteremit-staleproj-deadbeef.json')
+    const staleStop = path.join(runDir, 'stop-heavy-staleproj.stamp')
+    const staleKimi = path.join(runDir, 'kimi-session-staleproj-nosession-kimi.pending')
+    const freshStamp = path.join(runDir, 'prompt-state-freshproj-alive.hash')
+    const notAStamp = path.join(runDir, 'daemon.pid')
+    for (const file of [
+      staleStamp,
+      staleGit,
+      staleAfterEmit,
+      staleStop,
+      staleKimi,
+      freshStamp,
+      notAStamp,
+    ]) {
+      await fs.writeFile(file, 'x')
+    }
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1000)
+    for (const file of [staleStamp, staleGit, staleAfterEmit, staleStop, staleKimi]) {
+      await fs.utimes(file, old, old)
+    }
+
+    const r = await runSessionCleanup(fixture.projectId)
+    expect(r.stampsRemoved).toBe(5)
+    const remaining = await fs.readdir(runDir)
+    expect(remaining).toContain('prompt-state-freshproj-alive.hash')
+    expect(remaining).toContain('daemon.pid')
+    expect(remaining).not.toContain('prompt-state-staleproj-deadbeef.hash')
+    expect(remaining).not.toContain('kimi-session-staleproj-nosession-kimi.pending')
   })
 
   it('archives inbox entries older than the threshold', async () => {
@@ -146,6 +183,7 @@ describe('recordCleanupReport', () => {
       archivesPruned: 0,
       checkpointsRemoved: 0,
       context7CacheRotated: false,
+      stampsRemoved: 0,
     })
     const events = prjctDb.query<{ type: string }>(
       fixture.projectId,
@@ -160,6 +198,7 @@ describe('recordCleanupReport', () => {
       archivesPruned: 1,
       checkpointsRemoved: 0,
       context7CacheRotated: false,
+      stampsRemoved: 0,
     })
     const events = prjctDb.query<{ type: string; data: string }>(
       fixture.projectId,

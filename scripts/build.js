@@ -342,9 +342,10 @@ function generateDaemonShim() {
   //   - On a `retry` response (daemon refused because its CODE IS STALE — the
   //     request did NOT execute, so there are zero side effects): the generic
   //     path re-runs DIRECTLY in-process (set PRJCT_NO_DAEMON=1 so the imported
-  //     core skips the dying daemon) on the fresh code; the hook path degrades
-  //     to the fail-soft `{}` no-op (it can't re-read consumed stdin, and a
-  //     hook is best-effort). This is the definitive fix for the recurring
+  //     core skips the dying daemon) on the fresh code; the hook path re-spills
+  //     the payload to the run dir and punts (exit 89, no output) so the next
+  //     `||` chain stage re-runs the hook from the spill — see
+  //     core/hooks/stdin-spill.ts. This is the definitive fix for the recurring
   //     stale-daemon trap — output is never served from an outdated build.
   //
   // This blocked the bin/prjct.ts hardening from commit d08727b8 from
@@ -352,7 +353,7 @@ function generateDaemonShim() {
   // execute via dist/bin/prjct.mjs). Any future change to the fallback
   // policy MUST update both this string and bin/prjct.ts + protocol.ts.
   return `#!/usr/bin/env node
-import{connect}from"node:net";import{existsSync,readSync}from"node:fs";import{isatty}from"node:tty";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{join,resolve}from"node:path";import{spawn}from"node:child_process";
+import{connect}from"node:net";import{existsSync,mkdirSync,readFileSync,readSync,statSync,unlinkSync,writeFileSync}from"node:fs";import{isatty}from"node:tty";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{dirname,join,resolve}from"node:path";import{spawn}from"node:child_process";
 const cliHome=process.env.PRJCT_CLI_HOME?resolve(process.env.PRJCT_CLI_HOME):join(homedir(),".prjct-cli");
 const namedPipe=process.platform==="win32";
 const sockPath=namedPipe?"\\\\.\\pipe\\prjct-"+createHash("sha1").update(resolve(cliHome)).digest("hex").slice(0,16)+"-daemon":join(cliHome,"run","daemon.sock");
@@ -370,16 +371,28 @@ const cmd=args.find(a=>!a.startsWith("-"));
 const skip=new Set(${JSON.stringify(deriveShimSkipSet())});
 function refuse(m){console.error("prjct: daemon dropped the request ("+m+"). Retry: prjct "+args.join(" "));process.exit(1)}
 function isSafeRetry(e){const c=e&&e.code||"",m=e&&e.message||"";return c==="ECONNREFUSED"||c==="ENOENT"||c==="EACCES"||c==="EPERM"||m.includes("ECONNREFUSED")||m.includes("ENOENT")||m.includes("EACCES")||m.includes("EPERM")}
-// Hook fast path: forward the event (stdin) to the warm daemon and write its
-// response raw. Hooks must never disturb the host session, so ANY failure
-// (connect error, timeout, closed socket) degrades to the empty no-op {} and
-// exit 0 — the same fail-soft contract the in-process hook runner honors.
+// Hook stdin spill (mirrors core/hooks/stdin-spill.ts — keep fnv1a-32,
+// filename shape, sanitizer and 30s freshness window IN LOCKSTEP with it and
+// with native/hook-fast.c): when an earlier chain stage (native hook-fast,
+// or this shim itself on a prior stage) already consumed stdin and punted,
+// the payload waits at <cliHome>/run/hook-stdin-<fnv1a32hex(cwd)>-<sub>.json.
+const fnv1a=(s)=>Buffer.from(s,"utf8").reduce((a,b)=>Math.imul(a^b,16777619)>>>0,2166136261).toString(16).padStart(8,"0");
+const spillPath=(sub)=>{const s=(sub||"").toLowerCase().replace(/[^a-z0-9-]/g,"");return s?join(cliHome,"run","hook-stdin-"+fnv1a(process.cwd())+"-"+s+".json"):null};
+const readSpill=(sub)=>{const p=spillPath(sub);if(!p)return null;try{const st=statSync(p);if(Date.now()-st.mtimeMs>3e4){unlinkSync(p);return null}const d=readFileSync(p,"utf8");unlinkSync(p);return d}catch{return null}};
+const writeSpill=(sub,data)=>{const p=spillPath(sub);if(!p)return;try{mkdirSync(dirname(p),{recursive:true});writeFileSync(p,data)}catch{}};
+// Hook fast path: forward the event (stdin, or the spill an earlier chain
+// stage left behind) to the warm daemon and write its response raw. Hooks
+// must never disturb the host session, so ANY failure (connect error,
+// timeout, closed socket, stale-code retry) RE-SPILLS the payload and punts
+// (exit 89, no output) — the next || chain stage re-runs the hook from the
+// spill. Invoked outside a chain (manual "prjct hook X"), exit 89 + empty
+// stdout is the same host-visible no-op the old {} emit was.
 const hookCompletion=new AbortController();
 function sendHook(sub,data){
   if(hookCompletion.signal.aborted)return;hookCompletion.abort();
   const msg=JSON.stringify({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data,...(process.env.PRJCT_HOOK_HOST?{hookHost:process.env.PRJCT_HOOK_HOST}:{})})+"\\n";
   const sock=connect(sockPath);const chunks=[],completion=new AbortController();
-  const soft=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();process.stdout.write("{}\\n");process.exit(0)}};
+  const soft=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();writeSpill(sub,data);process.exit(89)}};
   const t=setTimeout(soft,800);
   sock.on("connect",()=>sock.write(msg));
   sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));if(r.retry){soft();return}completion.abort();clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(r.exitCode!=null?r.exitCode:0)}});
@@ -395,8 +408,9 @@ if(cmd==="hook"){
     // unrecoverable read error yields whatever was read so far (the hook
     // treats a blank result as {}). The host-side hook timeout
     // (settings-installer HOOK_TIMEOUT_SECONDS) remains the backstop for a
-    // pathological host that never closes stdin.
-    sendHook(sub,readStdinSync(1000));
+    // pathological host that never closes stdin. A fresh spill file (native
+    // hook-fast punted) takes precedence over the drained pipe.
+    sendHook(sub,readSpill(sub)??readStdinSync(1000));
   }else{
     // Cold path (daemon disabled/unreachable): run the hook from the dedicated
     // hooks bundle, NOT the full core. cold-entry emits host JSON then detaches

@@ -10,6 +10,7 @@ import path from 'node:path'
 import { projectMemory } from '../../memory/project-memory'
 import {
   isAutoSource,
+  purgeOrphanRememberEvents,
   purgeSoftDeleted,
   runVaultPurge,
   trimAutoSourceCap,
@@ -210,5 +211,106 @@ describe('distill-then-hard-delete', () => {
       "SELECT COUNT(*) AS c FROM memory_entries WHERE id = 'mem_7701'"
     )
     expect(c?.c).toBe(0)
+  })
+})
+
+describe('purgeOrphanRememberEvents', () => {
+  const insertEvent = (type: string, timestampIso: string): number =>
+    Number(
+      prjctDb.run(
+        fixture.projectId,
+        'INSERT INTO events (type, timestamp) VALUES (?, ?)',
+        type,
+        timestampIso
+      ).lastInsertRowid
+    )
+
+  const insertEntry = (id: string, deletedAt: number | null) => {
+    const now = Date.now()
+    prjctDb.run(
+      fixture.projectId,
+      `INSERT INTO memory_entries (
+        id, project_id, type, title, content, provenance, content_hash,
+        user_triggered, revision_count, created_at, updated_at, deleted_at
+      ) VALUES (?, ?, 'context', 't', ?, 'extracted', ?, 0, 0, ?, ?, ?)`,
+      id,
+      fixture.projectId,
+      `entry body for ${id} in orphan event purge test`,
+      `hash-${id}`,
+      now,
+      now,
+      deletedAt
+    )
+  }
+
+  const eventSurvives = (id: number): boolean =>
+    (prjctDb.get<{ c: number }>(
+      fixture.projectId,
+      'SELECT COUNT(*) AS c FROM events WHERE id = ?',
+      id
+    )?.c ?? 0) === 1
+
+  it('purges orphans, keeps events with live entries / recent / other types', () => {
+    const oldIso = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    const recentIso = new Date(Date.now() - 86_400_000).toISOString()
+
+    const orphan = insertEvent('memory.remember.a', oldIso)
+    const withLive = insertEvent('memory.remember.b', oldIso)
+    insertEntry(`mem_${withLive}`, null)
+    const withSoftDeleted = insertEvent('memory.remember.c', oldIso)
+    insertEntry(`mem_${withSoftDeleted}`, Date.now() - 60 * 86_400_000)
+    const recentOrphan = insertEvent('memory.remember.d', recentIso)
+    const otherType = insertEvent('memory.other', oldIso)
+
+    const purged = purgeOrphanRememberEvents(fixture.projectId, 30, 100)
+    expect(purged).toBe(2)
+    expect(eventSurvives(orphan)).toBe(false)
+    expect(eventSurvives(withSoftDeleted)).toBe(false)
+    expect(eventSurvives(withLive)).toBe(true)
+    expect(eventSurvives(recentOrphan)).toBe(true)
+    expect(eventSurvives(otherType)).toBe(true)
+  })
+
+  it('uses idx_events_type_ts (range predicate, not a full scan)', () => {
+    insertEvent('memory.remember.explain', new Date().toISOString())
+    // Mirrors the query in purge.ts — keep in sync if the SQL changes.
+    const plan = prjctDb.query<{ detail: string }>(
+      fixture.projectId,
+      `EXPLAIN QUERY PLAN SELECT e.id FROM events e
+       WHERE e.type >= 'memory.remember.' AND e.type < 'memory.remember/'
+         AND e.timestamp < ?
+         AND NOT EXISTS (
+           SELECT 1 FROM memory_entries m
+           WHERE m.id = 'mem_' || e.id AND m.deleted_at IS NULL
+         )
+       ORDER BY e.id ASC
+       LIMIT ?`,
+      new Date().toISOString(),
+      500
+    )
+    expect(plan.some((r) => r.detail.includes('idx_events_type_ts'))).toBe(true)
+    expect(plan.some((r) => r.detail.includes('SCAN e'))).toBe(false)
+  })
+})
+
+describe('partial index on memory_entries(deleted_at)', () => {
+  it('migration applies the partial index and the purge scan uses it', () => {
+    const idx = prjctDb.get<{ sql: string }>(
+      fixture.projectId,
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ix_memory_entries_deleted_at'"
+    )
+    expect(idx).toBeDefined()
+    expect(idx?.sql).toContain('WHERE deleted_at IS NOT NULL')
+
+    const plan = prjctDb.query<{ detail: string }>(
+      fixture.projectId,
+      `EXPLAIN QUERY PLAN SELECT id FROM memory_entries
+       WHERE deleted_at IS NOT NULL AND deleted_at < ?
+       ORDER BY deleted_at ASC
+       LIMIT ?`,
+      Date.now(),
+      100
+    )
+    expect(plan.some((r) => r.detail.includes('ix_memory_entries_deleted_at'))).toBe(true)
   })
 })

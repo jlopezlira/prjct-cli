@@ -12,6 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -135,6 +136,51 @@ command = "prjct hook stop"
     expect(content.split('prjct hook stop').length - 1).toBe(1)
     expect(content).toContain('# prjct-managed')
     expect(r.hooksWritten).toBeGreaterThan(0)
+  })
+
+  it('installs the native hook-fast chain with PRJCT_HOOK_HOST=kimi in every stage', async () => {
+    await installKimiHooks(fixture.configPath)
+    const content = await fs.readFile(fixture.configPath, 'utf-8')
+    // Pull the Stop hook command out of its TOML entry.
+    const commandLine = content
+      .split('\n')
+      .find((line) => line.startsWith('command = ') && line.includes('stop'))
+    expect(commandLine).toBeDefined()
+    // TOML-escaped quotes (\\") — unescape for assertions.
+    const cmd = (commandLine ?? '').replace(/\\"/g, '"')
+
+    const nativeBinPath = path.resolve(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'dist',
+      'bin',
+      `hook-fast-${process.platform}-${process.arch}`
+    )
+    const shimPath = path.resolve(__dirname, '..', '..', '..', 'dist', 'bin', 'prjct.mjs')
+    if (process.platform !== 'win32' && existsSync(nativeBinPath) && existsSync(shimPath)) {
+      // Native first, then the direct runtime+shim, then portable — and the
+      // host env rides in front of ALL THREE (the native binary forwards it
+      // to the daemon as hookHost).
+      expect(cmd).toContain(`PRJCT_HOOK_HOST=kimi "${nativeBinPath}" stop`)
+      expect(cmd).toContain(`PRJCT_HOOK_HOST=kimi `)
+      expect(cmd.indexOf(`"${nativeBinPath}" stop`)).toBeLessThan(cmd.indexOf('hook stop'))
+      expect(cmd.indexOf('hook stop')).toBeLessThan(cmd.indexOf('command -v prjct'))
+      expect(cmd.split('PRJCT_HOOK_HOST=kimi').length - 1).toBe(3)
+    } else if (existsSync(shimPath)) {
+      // Direct runtime+shim, then the braced portable fallback.
+      expect(cmd).toContain('|| { command -v prjct')
+      expect(cmd).toContain('PRJCT_HOOK_HOST=kimi prjct hook stop')
+      expect(cmd).toContain('|| exit 0')
+      expect(cmd.startsWith('command = "PRJCT_HOOK_HOST=kimi ')).toBe(true)
+      expect(cmd.split('PRJCT_HOOK_HOST=kimi').length - 1).toBe(2)
+    } else {
+      // No dist build (e.g. CI unit shard on a fresh checkout) → portable
+      // form only, no braced fallback stage.
+      expect(cmd).toContain('command -v prjct >/dev/null 2>&1 && PRJCT_HOOK_HOST=kimi prjct hook')
+      expect(cmd).toContain('|| exit 0')
+    }
   })
 })
 

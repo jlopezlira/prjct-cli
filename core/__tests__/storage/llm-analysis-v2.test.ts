@@ -102,6 +102,21 @@ describe('llm_analysis relational children (C3)', () => {
     expect(prjctDb.query(fixture.projectId, 'SELECT id FROM analysis_domain').length).toBe(2)
   })
 
+  it('dedupes insights shared by projectInsights and architecture.insights', () => {
+    const analysis = makeAnalysis()
+    analysis.projectInsights = ['Same insight', 'only project']
+    analysis.architecture.insights = ['same insight', 'only arch']
+    llmAnalysisStorage.save(fixture.projectId, analysis)
+
+    const titles = prjctDb
+      .query<{ title: string }>(
+        fixture.projectId,
+        "SELECT title FROM analysis_finding WHERE kind = 'insight' ORDER BY sort_order"
+      )
+      .map((r) => r.title)
+    expect(titles).toEqual(['Same insight', 'only project', 'only arch'])
+  })
+
   it('getActiveRelational reads findings/conventions/stack from child tables', () => {
     llmAnalysisStorage.save(fixture.projectId, makeAnalysis())
     const rel = llmAnalysisStorage.getActiveRelational(fixture.projectId)

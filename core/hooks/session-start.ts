@@ -544,9 +544,16 @@ export async function buildProjectIdentityLine(
  * stamps). The prompt hook consumes the stamp on the session's first
  * UserPromptSubmit and injects the payload there — exactly once.
  */
-function kimiSessionStampPath(projectId: string, sessionId: string | undefined): string {
+function kimiSessionStampPath(
+  projectId: string,
+  sessionId: string | undefined,
+  host: string = 'kimi'
+): string {
   const safeProject = projectId.replace(/[^a-zA-Z0-9._-]/g, '_')
-  const safeSession = (sessionId ?? 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_')
+  // Missing session_id used to collapse to the literal 'unknown', so every
+  // concurrent session of one host shared a single stamp and clobbered each
+  // other's parked payload. Namespace the fallback per project+host instead.
+  const safeSession = (sessionId ?? `nosession-${host}`).replace(/[^a-zA-Z0-9._-]/g, '_')
   return path.join(DAEMON_PATHS.runDir(), `kimi-session-${safeProject}-${safeSession}.pending`)
 }
 
@@ -557,9 +564,10 @@ function kimiSessionStampPath(projectId: string, sessionId: string | undefined):
  */
 export async function consumeKimiSessionInjection(
   projectId: string,
-  sessionId: string | undefined
+  sessionId: string | undefined,
+  host: string = 'kimi'
 ): Promise<'digest' | 'persona' | null> {
-  const stamp = kimiSessionStampPath(projectId, sessionId)
+  const stamp = kimiSessionStampPath(projectId, sessionId, host)
   const content = await fs.readFile(stamp, 'utf-8').catch(() => null)
   if (content === null) return null
   await fs.rm(stamp, { force: true }).catch(() => undefined)
@@ -597,7 +605,7 @@ export function runSessionStartHook(
         // emit nothing here (see kimiSessionStampPath above).
         if (host === 'kimi') {
           if (config?.projectId) {
-            const stamp = kimiSessionStampPath(config.projectId, input.session_id)
+            const stamp = kimiSessionStampPath(config.projectId, input.session_id, host)
             await fs
               .mkdir(path.dirname(stamp), { recursive: true })
               .then(() => fs.writeFile(stamp, digest ? 'digest' : 'persona'))

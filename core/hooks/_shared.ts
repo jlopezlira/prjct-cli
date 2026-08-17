@@ -84,7 +84,8 @@ export function currentHookHost(): HookHost {
 /**
  * Host-specific rewrite of Claude-shaped hook payloads.
  * - gemini: BeforeTool/decision deny (geminicli.com/docs/hooks)
- * - cursor: camelCase events + snake_case additional_context (community 2026)
+ * - cursor: camelCase events + snake_case additional_context
+ *   (cursor.com/docs/agent/hooks, verified 2026-08-16)
  * - codex: Claude-compatible shapes (hooks.json mirrors Claude)
  * - kimi: plain-text context on stdout; deny JSON is already Kimi's contract
  *
@@ -167,11 +168,15 @@ function adaptForCursor(
   const hso = out.hookSpecificOutput
   if (hso?.additionalContext) {
     const event = mapClaudeEventToCursor(hso.hookEventName)
-    // Forum reports: additional_context (snake) is what Cursor logs/surfaces.
+    // Official Cursor hooks schema (https://cursor.com/docs/agent/hooks, verified
+    // 2026-08-16) documents ONLY snake_case `additional_context` — top-level for
+    // sessionStart/postToolUse; camelCase `additionalContext` is Claude Code's
+    // field and appears nowhere in Cursor's schema, so it was dropped. The
+    // nested hookSpecificOutput copy stays as cheap insurance: whether Cursor's
+    // Claude-compat loader reads that envelope is undocumented.
     return {
       hookSpecificOutput: {
         hookEventName: event,
-        additionalContext: hso.additionalContext,
         additional_context: hso.additionalContext,
       },
       additional_context: hso.additionalContext,

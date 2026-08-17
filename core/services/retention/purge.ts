@@ -104,11 +104,15 @@ export function purgeOrphanRememberEvents(
 ): number {
   const cutoffIso = new Date(Date.now() - olderThanDays * 86_400_000).toISOString()
   try {
-    // Events whose id has no live memory_entries mem_<id>
+    // Events whose id has no live memory_entries mem_<id>.
+    // Range predicate instead of LIKE: SQLite LIKE is case-insensitive by
+    // default, which cannot use idx_events_type_ts (full scan + per-row
+    // NOT EXISTS probe). `'.'` is 0x2E and `'/'` is 0x2F, so the range
+    // covers exactly the 'memory.remember.' prefix under BINARY collation.
     const rows = prjctDb.query<{ id: number }>(
       projectId,
       `SELECT e.id FROM events e
-       WHERE e.type LIKE 'memory.remember.%'
+       WHERE e.type >= 'memory.remember.' AND e.type < 'memory.remember/'
          AND e.timestamp < ?
          AND NOT EXISTS (
            SELECT 1 FROM memory_entries m
@@ -200,7 +204,9 @@ export function vaultHealth(projectId: string): VaultHealth {
   const rememberEvents =
     prjctDb.get<{ c: number }>(
       projectId,
-      "SELECT COUNT(*) AS c FROM events WHERE type LIKE 'memory.remember.%'"
+      // Range predicate (not LIKE): LIKE is case-insensitive in SQLite and
+      // defeats idx_events_type_ts; '.'=0x2E and '/'=0x2F bound the prefix.
+      "SELECT COUNT(*) AS c FROM events WHERE type >= 'memory.remember.' AND type < 'memory.remember/'"
     )?.c ?? 0
 
   const autoSourceLive = (() => {

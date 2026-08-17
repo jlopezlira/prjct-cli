@@ -7,6 +7,7 @@
  * wall-clock hard cap → fail-open; SQL LIMIT on recall.
  */
 
+import { createHash } from 'node:crypto'
 import configManager from '../infrastructure/config-manager'
 import type { MemoryEntry } from '../memory/entries'
 import { deriveTitle, flatDetail, preventiveLabel } from '../memory/format'
@@ -35,9 +36,40 @@ const MAX_CHARS = 1200
 /** Per-invocation cache so decide + build share one recall (P0-3). */
 const preventiveRecallCache = new Map<string, MemoryEntry[]>()
 
+/**
+ * Per-session heads-up dedupe (same pattern as promptPayloadHashes in
+ * prompt.ts): the same file with the same trap set is surfaced ONCE per
+ * session — re-injecting the identical ~1200-char block on every Edit is
+ * pure context burn. Keyed by (project, session, file) — memory ids are
+ * content-derived, so projectId must be in the key or two projects sharing
+ * an identical trap + a session-less host ('unknown') would false-dedupe.
+ * The hash covers the hit ids so a newly-recorded trap re-arms the heads-up.
+ */
+const headsUpHashes = new Map<string, string>()
+
+function headsUpAlreadyShown(
+  projectId: string,
+  sessionId: string,
+  filePath: string,
+  hits: MemoryEntry[]
+): boolean {
+  const key = `${projectId}\0${sessionId}\0${filePath}`
+  const hash = createHash('sha1')
+    .update(hits.map((e) => e.id).join('\0'))
+    .digest('hex')
+  if (headsUpHashes.get(key) === hash) return true
+  if (headsUpHashes.size > 64) headsUpHashes.clear()
+  headsUpHashes.set(key, hash)
+  return false
+}
+
 interface HookInput extends SecretHookInput {
   tool_name?: string
   tool_input?: { file_path?: string; [key: string]: unknown }
+  /** Claude/Kimi/Gemini session identity. */
+  session_id?: string
+  /** Cursor session identity. */
+  conversation_id?: string
 }
 
 function recallPreventiveOnce(projectId: string, filePath: string): MemoryEntry[] {
@@ -87,7 +119,11 @@ function headsUpMessage(hits: MemoryEntry[], base: string): string {
   return safeTruncate(lines.join('\n'), MAX_CHARS)
 }
 
-async function buildPreEditContext(projectPath: string, filePath: string): Promise<string | null> {
+async function buildPreEditContext(
+  projectPath: string,
+  filePath: string,
+  sessionId: string
+): Promise<string | null> {
   const started = Date.now()
   const config = await configManager.readConfig(projectPath)
   if (!config?.projectId) return null
@@ -146,6 +182,8 @@ async function buildPreEditContext(projectPath: string, filePath: string): Promi
   // mode=off or gate none: classic heads-up (deny already handled in decide)
   // Trap-surface SLO: always list every preventive id when present.
   if (mode === 'off' || verdict.action === 'none' || hits.length > 0) {
+    // Once per (project, session, file, trap-set) — never re-injects.
+    if (headsUpAlreadyShown(config.projectId, sessionId, filePath, hits)) return null
     return headsUpMessage(hits, base)
   }
 
@@ -235,7 +273,11 @@ export function runPreEditHook(projectPath: string = process.cwd(), io?: HookIo)
         try {
           const filePath = input.tool_input?.file_path?.trim()
           if (!filePath) return null
-          return buildPreEditContext(p, filePath)
+          return buildPreEditContext(
+            p,
+            filePath,
+            input.session_id?.trim() || input.conversation_id?.trim() || 'unknown'
+          )
         } finally {
           clearPreventiveCache()
         }

@@ -585,7 +585,7 @@ jobs:
 
       # M5: standalone binaries via `bun build --compile`. Embeds the bun
       # runtime so users can install prjct without npm/node/bun. The
-      # install-via-claude.sh script auto-detects platform and downloads
+      # install-standalone.sh script auto-detects platform and downloads
       # the right asset; npm install -g remains the documented fallback.
       #
       # The --define for process.env.PRJCT_VERSION is critical: at
@@ -634,7 +634,7 @@ jobs:
             Paste this into Claude Code (or any AI agent):
 
             ```bash
-            curl -sSL https://raw.githubusercontent.com/prjct-app/cli/main/scripts/install-via-claude.sh | bash
+            curl -sSL https://raw.githubusercontent.com/prjct-app/cli/main/scripts/install-standalone.sh | bash
             ```
 
             The script downloads the standalone binary for your platform

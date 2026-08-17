@@ -66,6 +66,13 @@ const KIMI_FIRST_PROMPT_BUDGET = STATE_BUDGET + 2100
  * genuine grind, not honest iteration.
  */
 const STUCK_TURN_THRESHOLD = 15
+/**
+ * Show the short loop-discipline cue only every N turns of a cycle. The old
+ * per-turn paragraph re-shipped identical bytes on EVERY prompt while a cycle
+ * was open — pure prescription against this hook's contract (see header).
+ * Escalation past STUCK_TURN_THRESHOLD stays with the alignment card.
+ */
+const LOOP_CUE_INTERVAL = 10
 /** FTS candidates fetched before the preventive-type filter picks ONE. */
 const CUE_CANDIDATES = 8
 const GUIDANCE_BUDGET = 420
@@ -120,7 +127,8 @@ interface HookInput {
  */
 export async function buildProjectState(
   projectPath: string,
-  preloaded?: LocalConfig | null
+  preloaded?: LocalConfig | null,
+  opts: { skipHandoff?: boolean } = {}
 ): Promise<string | null> {
   const config = preloaded !== undefined ? preloaded : await configManager.readConfig(projectPath)
   if (!config?.projectId) return null
@@ -128,7 +136,7 @@ export async function buildProjectState(
   // Kick the secondary probes (queue / ship / inbox / handoff / git) FIRST so
   // their forks overlap the active-work block instead of queueing behind it —
   // a cold `git status` fork is the slowest single probe here (~20-40ms).
-  const secondaryPromise = collectSecondarySignals(config, projectPath)
+  const secondaryPromise = collectSecondarySignals(config, projectPath, opts)
 
   const lines: string[] = ['# prjct: project state']
   // Active work — most useful single fact. Resolved PER worktree so a parallel
@@ -141,11 +149,9 @@ export async function buildProjectState(
       lines.push(
         `- Active work cycle: "${overview.current.description}" (${startedAgo}) [${overview.current.label}]`
       )
-      if ((config.land?.mode ?? 'advisory') !== 'off') {
-        lines.push(
-          '  ↳ Before session end: `prjct land` · hand-off `prjct remember context "Session close: …"`'
-        )
-      }
+      // Session-close land reminder lives in SessionStart (buildLandCue),
+      // once per session — repeating it on every prompt was per-turn
+      // prescription against this hook's contract.
       // Read-only turn state. Reuses collectActiveTasks' already-fetched
       // mainTaskRaw instead of a second stateStorage.getCurrentTask fetch —
       // same doc, same daemon-mode SQLite read, just once instead of twice.
@@ -162,9 +168,14 @@ export async function buildProjectState(
           return { turns: 0, currentTask: null, loopVerdict: null }
         }
       })()
-      if (!loopVerdict?.stopped && turns < STUCK_TURN_THRESHOLD) {
+      if (
+        !loopVerdict?.stopped &&
+        turns > 0 &&
+        turns % LOOP_CUE_INTERVAL === 0 &&
+        turns < STUCK_TURN_THRESHOLD
+      ) {
         lines.push(
-          '  ↳ Stay on this goal. Each turn, before acting: is this step ADVANCING it? If you have hit the same wall twice, or you are exploring rather than progressing, STOP — re-plan, split the cycle, or ask the user. Do not loop; finish the cycle, then `prjct status done`.'
+          `  ↳ Turn ${turns} on this cycle — still advancing the goal? If stuck, re-plan or split; do not loop.`
         )
       }
       // Token budget — uses post-bump task (no extra SQLite read).
@@ -263,18 +274,24 @@ export async function buildProjectState(
  */
 function collectSecondarySignals(
   config: LocalConfig,
-  projectPath: string
+  projectPath: string,
+  opts: { skipHandoff?: boolean } = {}
 ): Promise<Array<string | null>> {
   return Promise.all([
-    (async (): Promise<string | null> => {
-      try {
-        const { formatPendingHandoffCue } = await import('../services/agent-switch')
-        const cue = formatPendingHandoffCue(config.projectId)
-        return cue ? `- ${cue.replace(/\n/g, '\n- ')}` : null
-      } catch {
-        return null
-      }
-    })(),
+    // skipHandoff: the session context riding this same payload (Kimi first
+    // prompt) already carries the pending-handoff cue — probing again here
+    // would inject it twice in one payload.
+    opts.skipHandoff
+      ? Promise.resolve(null)
+      : (async (): Promise<string | null> => {
+          try {
+            const { formatPendingHandoffCue } = await import('../services/agent-switch')
+            const cue = formatPendingHandoffCue(config.projectId)
+            return cue ? `- ${cue.replace(/\n/g, '\n- ')}` : null
+          } catch {
+            return null
+          }
+        })(),
     (async (): Promise<string | null> => {
       try {
         const pending = await queueStorage.getActiveTasks(config.projectId)
@@ -565,6 +582,62 @@ async function dedupePromptPayload(
   return payload
 }
 
+function promptAfterEmitStampPath(projectId: string, projectPath: string): string {
+  return path.join(
+    DAEMON_PATHS.runDir(),
+    `prompt-afteremit-${promptHashKey(projectId, projectPath)}.json`
+  )
+}
+
+/**
+ * Persist the afterEmit record next to the payload hash in the run dir. The
+ * cold path's detached afterEmit worker is a SEPARATE process where the
+ * `promptAfterEmit` WeakMap is empty — without this record the worker had to
+ * re-run the entire prompt build (buildProjectState + FTS queries) just to
+ * recover surfacedIds/bumpTurn. Awaited (not fire-and-forget) so the file is
+ * on disk before the parent can exit and spawn the worker.
+ */
+async function persistPromptAfterEmit(
+  projectId: string,
+  projectPath: string,
+  payload: string,
+  record: PromptAfterEmit
+): Promise<void> {
+  const stamp = promptAfterEmitStampPath(projectId, projectPath)
+  const hash = createHash('sha256').update(payload).digest('hex')
+  await fs
+    .mkdir(path.dirname(stamp), { recursive: true })
+    .then(() => fs.writeFile(stamp, JSON.stringify({ hash, record })))
+    .catch(() => undefined)
+}
+
+/**
+ * Read the parent's persisted afterEmit record. Valid only when its payload
+ * hash still matches the emitted-payload stamp — a mismatch means the record
+ * belongs to a different prompt (race or stale file) and the caller falls
+ * back to recomputing. Fail-soft: any error returns null.
+ */
+async function readPersistedPromptAfterEmit(
+  projectId: string,
+  projectPath: string
+): Promise<PromptAfterEmit | null> {
+  try {
+    const key = promptHashKey(projectId, projectPath)
+    const runDir = DAEMON_PATHS.runDir()
+    const [rawRecord, emittedHash] = await Promise.all([
+      fs.readFile(path.join(runDir, `prompt-afteremit-${key}.json`), 'utf-8'),
+      fs.readFile(path.join(runDir, `prompt-state-${key}.hash`), 'utf-8'),
+    ])
+    const parsed = JSON.parse(rawRecord) as { hash?: string; record?: PromptAfterEmit }
+    const record = parsed.record
+    if (!record || parsed.hash !== emittedHash.trim()) return null
+    if (record.projectId !== projectId || !Array.isArray(record.surfacedIds)) return null
+    return record
+  } catch {
+    return null
+  }
+}
+
 async function captureGitUncached(projectPath: string): Promise<GitSnapshot> {
   const empty: GitSnapshot = { branch: '', modified: 0, staged: 0, untracked: 0, ahead: 0 }
   const safe = async (args: string[]): Promise<string> => {
@@ -672,6 +745,18 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         if (!prompt) return null
         const config = await configManager.readConfig(p)
         if (!config?.projectId) return null
+        // Kimi: SessionStart stdout never reaches the model, so the persona /
+        // cold-start digest parked by the session-start hook is injected HERE,
+        // on the session's first prompt only (stamp consumed = deduped).
+        // Consumed BEFORE the state build: when the session context rides
+        // this payload it already carries the pending-handoff cue, so the
+        // state block skips its own handoff probe (no double injection).
+        const kimiInjection =
+          host === 'kimi'
+            ? await consumeKimiSessionInjection(config.projectId, input.session_id, host).catch(
+                () => null
+              )
+            : null
         // PUSH→PULL: the per-turn hook starts with lean project-state facts
         // (active work, branch, working tree) so the agent can disambiguate
         // intent without asking. General memory and improvement signals are
@@ -680,16 +765,9 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         // recall tools. Pushing keyword-matched memory into every prompt
         // matched on stopwords/noise and burned the context window with
         // entries the turn never needed.
-        const state = await buildProjectState(p, config)
-        // Kimi: SessionStart stdout never reaches the model, so the persona /
-        // cold-start digest parked by the session-start hook is injected HERE,
-        // on the session's first prompt only (stamp consumed = deduped).
-        const kimiInjection =
-          host === 'kimi'
-            ? await consumeKimiSessionInjection(config.projectId, input.session_id).catch(
-                () => null
-              )
-            : null
+        const state = await buildProjectState(p, config, {
+          skipHandoff: Boolean(kimiInjection),
+        })
         const sessionContext = kimiInjection
           ? await buildSessionContext(p, config, { digest: kimiInjection === 'digest' }).catch(
               () => null
@@ -702,7 +780,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         // and authored guidance. State leads; all sections share one budget.
         const { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
           computePromptGuidance(config.projectId, prompt, base, budget)
-        promptAfterEmit.set(input as object, {
+        const afterEmitRecord: PromptAfterEmit = {
           projectId: config.projectId,
           projectPath: p,
           bumpTurn: Boolean(state?.includes('Active work cycle:')),
@@ -711,7 +789,12 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
             ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
           ],
           guidanceRuleId,
-        })
+        }
+        promptAfterEmit.set(input as object, afterEmitRecord)
+        // Hand the record to the cold path's detached afterEmit worker (a
+        // separate process — the WeakMap above is empty there) so it never
+        // recomputes the whole prompt build to recover surfacedIds/bumpTurn.
+        await persistPromptAfterEmit(config.projectId, p, prioritized, afterEmitRecord)
         return dedupePromptPayload(config.projectId, p, prioritized)
       },
       afterEmit: async (input, p) => {
@@ -752,6 +835,11 @@ async function rebuildPromptAfterEmit(
   if (!prompt) return null
   const config = await configManager.readConfig(projectPath).catch(() => null)
   if (!config?.projectId) return null
+  // Fast path: the parent process persisted the record next to the payload
+  // hash — read it instead of recomputing the entire prompt build below.
+  const persisted = await readPersistedPromptAfterEmit(config.projectId, projectPath)
+  if (persisted) return persisted
+  // Fallback (record missing/stale): recompute from live state.
   const [task, state] = await Promise.all([
     stateStorage.getCurrentTask(config.projectId).catch(() => null),
     buildProjectState(projectPath, config),

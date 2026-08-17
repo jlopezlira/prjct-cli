@@ -124,6 +124,8 @@ export class AgentCommands extends PrjctCommandsBase {
         maxSteps,
         onStep,
         systemAppend: workCtx.systemAppend || undefined,
+        projectId: workCtx.projectId ?? undefined,
+        taskId: workCtx.taskId,
       })
 
       if (!result.success) {

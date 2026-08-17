@@ -57,7 +57,7 @@ function makeSide(label: string, runner: string, bin: string): Side {
     CI: '1',
     NO_COLOR: '1',
   }
-  execFileSync(runner, [bin, 'setup', '--non-interactive', '--md'], {
+  execFileSync(runner, [bin, 'setup', '--md'], {
     cwd: proj,
     env,
     stdio: 'ignore',

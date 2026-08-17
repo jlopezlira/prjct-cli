@@ -100,10 +100,31 @@ describe('UserPromptSubmit — project state', () => {
     } as Parameters<typeof stateStorage.startTask>[1])
     const r = await buildProjectState(fixture.projectPath)
     expect(r).toContain('Active work cycle: "fix auth race condition"')
-    // Goal discipline injected with the cycle — keeps a weaker rig on the goal
-    // and out of loops (the agentic capability the harness gives the model).
-    expect(r).toContain('Stay on this goal')
-    expect(r).toContain('Do not loop')
+    // Zero per-turn prescription: the land reminder moved to SessionStart
+    // (buildLandCue, once per session) and the loop paragraph is now a
+    // cadenced cue — neither ships at turn 0.
+    expect(r).not.toContain('Before session end')
+    expect(r).not.toContain('Stay on this goal')
+    expect(r).not.toContain('on this cycle —')
+  })
+
+  it('shows the loop-discipline cue only every LOOP_CUE_INTERVAL turns', async () => {
+    await freshProject()
+    await stateStorage.startTask(fixture.projectId, {
+      id: `t-${Date.now()}`,
+      description: 'cadenced loop cue',
+      startedAt: new Date().toISOString(),
+      sessionId: 's',
+      turnCount: 9,
+    } as Parameters<typeof stateStorage.startTask>[1])
+    const nine = await buildProjectState(fixture.projectPath)
+    expect(nine).not.toContain('on this cycle —')
+
+    const task = await stateStorage.getCurrentTask(fixture.projectId)
+    expect(task).not.toBeNull()
+    await stateStorage.bumpTurnCount(fixture.projectId)
+    const ten = await buildProjectState(fixture.projectPath)
+    expect(ten).toContain('Turn 10 on this cycle — still advancing the goal?')
   })
 
   it('escalates from goal-discipline to stop-looping once a cycle grinds past the threshold', async () => {
@@ -118,8 +139,9 @@ describe('UserPromptSubmit — project state', () => {
     const r = await buildProjectState(fixture.projectPath)
     expect(r).toContain('turns on this cycle')
     expect(r).toContain('STOP looping')
-    // The escalation REPLACES the calm discipline line — not both.
+    // The escalation REPLACES the cadenced cue — not both.
     expect(r).not.toContain('Stay on this goal')
+    expect(r).not.toContain('on this cycle — still advancing')
   })
 
   it('bumpTurnCount increments the active cycle from zero', async () => {
@@ -218,6 +240,75 @@ describe('UserPromptSubmit — project state', () => {
     // Dedupe suppresses tokens, not accounting: the turn still increments.
     await second.pending[0]!()
     expect((await stateStorage.getCurrentTask(fixture.projectId))?.turnCount).toBe(2)
+  })
+
+  it('cold-path afterEmit worker replays the persisted record instead of recomputing', async () => {
+    await freshProject()
+    await stateStorage.startTask(fixture.projectId, {
+      id: `t-${Date.now()}`,
+      description: 'cold afterEmit replay',
+      startedAt: new Date().toISOString(),
+      sessionId: 's',
+    } as Parameters<typeof stateStorage.startTask>[1])
+
+    // Parent process: builds + emits, persists the afterEmit record, and (as
+    // in cold-entry) does NOT run afterEmit itself — the detached worker does.
+    const parentChunks: string[] = []
+    await runPromptHook(fixture.projectPath, {
+      input: { prompt: 'continue the current work' },
+      sink: (chunk) => parentChunks.push(chunk),
+      detachAfterEmit: () => {},
+    })
+    expect(parentChunks.join('')).toContain('cold afterEmit replay')
+    expect((await stateStorage.getCurrentTask(fixture.projectId))?.turnCount ?? 0).toBe(0)
+
+    // Detached worker: afterEmitOnly with a FRESH input object — the WeakMap
+    // cache is empty in this "process", so the persisted record must be used.
+    const workerPending: Array<() => Promise<void>> = []
+    await runPromptHook(fixture.projectPath, {
+      afterEmitOnly: true,
+      input: { prompt: 'continue the current work' },
+      sink: () => {},
+      detachAfterEmit: (fn) => workerPending.push(fn),
+    })
+    expect(workerPending).toHaveLength(1)
+    await workerPending[0]!()
+    expect((await stateStorage.getCurrentTask(fixture.projectId))?.turnCount).toBe(1)
+  })
+
+  it('cold-path afterEmit falls back to recompute when the record is stale', async () => {
+    await freshProject()
+    await stateStorage.startTask(fixture.projectId, {
+      id: `t-${Date.now()}`,
+      description: 'cold afterEmit fallback',
+      startedAt: new Date().toISOString(),
+      sessionId: 's',
+    } as Parameters<typeof stateStorage.startTask>[1])
+
+    // Emit once so the payload-hash stamp exists, then delete the record file
+    // — the worker must still do its accounting via the recompute fallback.
+    await runPromptHook(fixture.projectPath, {
+      input: { prompt: 'continue the current work' },
+      sink: () => {},
+      detachAfterEmit: () => {},
+    })
+    const { DAEMON_PATHS } = await import('../../daemon/protocol')
+    const runDir = DAEMON_PATHS.runDir()
+    for (const name of await fs.readdir(runDir).catch(() => [] as string[])) {
+      if (name.startsWith('prompt-afteremit-')) {
+        await fs.rm(path.join(runDir, name), { force: true })
+      }
+    }
+
+    const workerPending: Array<() => Promise<void>> = []
+    await runPromptHook(fixture.projectPath, {
+      afterEmitOnly: true,
+      input: { prompt: 'continue the current work' },
+      sink: () => {},
+      detachAfterEmit: (fn) => workerPending.push(fn),
+    })
+    await workerPending[0]!()
+    expect((await stateStorage.getCurrentTask(fixture.projectId))?.turnCount).toBe(1)
   })
 })
 
