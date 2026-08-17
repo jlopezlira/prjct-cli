@@ -20,7 +20,7 @@
 
 import { memoryFingerprint } from '../../memory/content-fingerprint'
 import type { MemoryEntry } from '../../memory/entries'
-import { cosineSimilarity, embedLocalText } from '../embeddings'
+import { dot, embedLocalText } from '../embeddings'
 
 /** Near-duplicate threshold: sim ≥ this ⇒ excess treated as ~0. */
 export const NEAR_DUP_SIM = 0.92
@@ -91,7 +91,9 @@ export function excessAgainstIndex(
   const nearest = index.entries.reduce(
     (best, ref, indexPosition) => {
       if (excludeId && ref.id === excludeId) return best
-      const similarity = cosineSimilarity(cand, index.vectors[indexPosition]!)
+      // embedLocal L2-normalizes both sides, so dot IS the cosine — skipping
+      // cosineSimilarity's per-pair l2Norm recomputation (hot: n×|R| pairs).
+      const similarity = dot(cand, index.vectors[indexPosition]!)
       return similarity > best.maxSim ? { maxSim: similarity, nearestId: ref.id } : best
     },
     { maxSim: 0, nearestId: null as string | null }

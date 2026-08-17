@@ -2,6 +2,9 @@
  * Help System - Structured help output for prjct CLI
  *
  * Provides consistent, well-formatted help text for all commands.
+ * Every command list/detail below is derived from the COMMANDS manifest
+ * (core/commands/command-data.ts) — there is NO hand-maintained duplicate
+ * list to drift out of sync with the registry.
  *
  * @see PRJ-133
  */
@@ -12,89 +15,21 @@ import type { CommandMeta } from '../types/commands'
 import { VERSION } from './version'
 
 /**
- * Terminal commands that run directly in the shell
+ * Terminal commands that run directly in the shell. Derived from the
+ * manifest: a command is terminal-facing when it is handled by the bin
+ * dispatcher (`routingMode: 'bin-only'` — the daemon never sees it) or
+ * when it simply has no in-agent (`p.`) usage. Legacy aliases and
+ * internal commands stay hidden.
  */
-const TERMINAL_COMMANDS = [
-  {
-    name: 'start',
-    description: 'First-time setup wizard',
-    example: 'prjct start',
-  },
-  {
-    name: 'init',
-    description: 'Initialize project in current directory',
-    example: 'prjct init',
-  },
-  {
-    name: 'sync',
-    description: 'Refresh RAG indexes and context quality',
-    example: 'prjct sync',
-  },
-  {
-    name: 'search',
-    description: 'Search project memory (decisions, learnings, gotchas)',
-    example: 'prjct search "auth refresh"',
-    options: ['--md'],
-  },
-  {
-    name: 'forget',
-    description: 'Delete a project memory entry by id',
-    example: 'prjct forget mem_1234',
-    options: ['--md'],
-  },
-  {
-    name: 'close',
-    description: 'Resolve a memory entry (leaves rotation + audit)',
-    example: 'prjct close mem_1234 --reason "fixed"',
-    options: ['--reason', '--md'],
-  },
-  {
-    name: 'dream',
-    description: 'Consolidate memory + rebuild L0 index (auto-dream)',
-    example: 'prjct dream --force',
-    options: ['--force', '--dry-run', '--md'],
-  },
-  {
-    name: 'watch',
-    description: 'Auto-sync on file changes',
-    example: 'prjct watch',
-    options: ['--verbose', '--debounce=<ms>', '--interval=<sec>'],
-  },
-  {
-    name: 'hooks',
-    description: 'Manage git hooks for auto-sync',
-    example: 'prjct hooks install',
-    subcommands: ['install', 'uninstall', 'status'],
-  },
-  {
-    name: 'doctor',
-    description: 'Check system health and dependencies',
-    example: 'prjct doctor',
-  },
-  {
-    name: 'context',
-    description: 'Memory-bound context tools for AI',
-    example: 'prjct context memory "auth"',
-    subcommands: ['memory', 'learnings'],
-  },
-  {
-    name: 'stop',
-    description: 'Stop the background daemon',
-    example: 'prjct stop',
-    options: ['--force'],
-  },
-  {
-    name: 'restart',
-    description: 'Restart the background daemon',
-    example: 'prjct restart',
-  },
-  {
-    name: 'uninstall',
-    description: 'Complete system removal of prjct',
-    example: 'prjct uninstall --backup',
-    options: ['--force', '--backup', '--dry-run', '--keep-package'],
-  },
-]
+function terminalCommands(): CommandMeta[] {
+  return COMMANDS.filter(
+    (c) =>
+      Boolean(c.usage?.terminal) &&
+      (c.routingMode === 'bin-only' || !c.usage?.claude) &&
+      c.surface !== 'legacy' &&
+      c.surface !== 'internal'
+  )
+}
 
 /**
  * Global CLI flags
@@ -123,12 +58,15 @@ function formatMainHelp(): string {
   lines.push(`  ${chalk.green('2.')} cd my-project && prjct init`)
   lines.push(`  ${chalk.green('3.')} Open in Claude Code / Gemini CLI / Cursor`)
   lines.push(`  ${chalk.green('4.')} p. work "improve auth"   ${chalk.dim('# Start a work cycle')}`)
+  lines.push(
+    chalk.dim('     p. = the in-agent command router; from a shell use `prjct work "…"` instead')
+  )
   lines.push('')
 
-  // Terminal Commands
+  // Terminal Commands (derived from the manifest — cannot drift from it)
   lines.push(chalk.bold('TERMINAL COMMANDS'))
   lines.push(chalk.dim('─'.repeat(60)))
-  for (const cmd of TERMINAL_COMMANDS) {
+  for (const cmd of terminalCommands()) {
     const name = `prjct ${cmd.name}`.padEnd(22)
     lines.push(`  ${name} ${cmd.description}`)
   }
@@ -151,6 +89,9 @@ function formatMainHelp(): string {
       `  ${chalk.dim(`... and ${coreCommands.length - 10} more (run 'prjct help commands')`)}`
     )
   }
+  lines.push(
+    chalk.dim('  These also run from the terminal (`prjct work "…"`) — see prjct help <command>.')
+  )
   lines.push('')
 
   // Global Flags
@@ -160,47 +101,24 @@ function formatMainHelp(): string {
     lines.push(`  ${flag.flag.padEnd(22)} ${flag.description}`)
   }
   lines.push('')
+  lines.push(
+    chalk.dim(
+      '  Short flags are per-command: -v is --version globally but verbose in `prjct watch`;'
+    )
+  )
+  lines.push(
+    chalk.dim('  -f is force (stop/uninstall), follow (daemon logs) or foreground (daemon start);')
+  )
+  lines.push(chalk.dim('  -n is dry-run (uninstall) but line count (daemon logs).'))
+  lines.push('')
 
   // More Info
   lines.push(chalk.bold('MORE INFO'))
   lines.push(chalk.dim('─'.repeat(60)))
   lines.push(`  Documentation:  ${chalk.cyan('https://prjct.app')}`)
   lines.push(`  GitHub:         ${chalk.cyan('https://github.com/prjct-app/cli')}`)
-  lines.push(`  Per-command:    prjct help <command>`)
+  lines.push(`  Per-command:    prjct help <command>  (or: prjct <command> --help)`)
   lines.push('')
-
-  return lines.join('\n')
-}
-
-function formatTerminalCommandHelp(commandName: string): string | null {
-  const cmd = TERMINAL_COMMANDS.find((c) => c.name === commandName)
-  if (!cmd) return null
-
-  const lines: string[] = []
-
-  lines.push('')
-  lines.push(`${chalk.cyan.bold(`prjct ${cmd.name}`)} - ${cmd.description}`)
-  lines.push('')
-
-  lines.push(chalk.bold('USAGE'))
-  lines.push(`  ${cmd.example}`)
-  lines.push('')
-
-  if (cmd.options) {
-    lines.push(chalk.bold('OPTIONS'))
-    for (const opt of cmd.options) {
-      lines.push(`  ${opt}`)
-    }
-    lines.push('')
-  }
-
-  if (cmd.subcommands) {
-    lines.push(chalk.bold('SUBCOMMANDS'))
-    for (const sub of cmd.subcommands) {
-      lines.push(`  ${sub}`)
-    }
-    lines.push('')
-  }
 
   return lines.join('\n')
 }
@@ -213,10 +131,7 @@ function manifestListLabel(cmd: CommandMeta): string {
   return cmd.usage?.claude ? `p. ${cmd.name}` : `prjct ${cmd.name}`
 }
 
-function formatAgentCommandHelp(commandName: string): string | null {
-  const cmd = COMMANDS.find((c) => c.name === commandName)
-  if (!cmd) return null
-
+function formatManifestCommandHelp(cmd: CommandMeta): string {
   const lines: string[] = []
 
   lines.push('')
@@ -266,13 +181,8 @@ function formatAgentCommandHelp(commandName: string): string | null {
 }
 
 function formatCommandHelp(commandName: string): string {
-  // Try terminal command first
-  const terminalHelp = formatTerminalCommandHelp(commandName)
-  if (terminalHelp) return terminalHelp
-
-  // Try agent command
-  const agentHelp = formatAgentCommandHelp(commandName)
-  if (agentHelp) return agentHelp
+  const cmd = COMMANDS.find((c) => c.name === commandName)
+  if (cmd) return formatManifestCommandHelp(cmd)
 
   // Command not found
   return `

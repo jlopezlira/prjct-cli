@@ -40,7 +40,9 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
     'prjct_session_resume',
     {
       description:
-        'Resume after a fresh window: active cycle, last hand-off, journal, and next actions.',
+        'Resume after a fresh window: active cycle, last hand-off, journal, and next actions. ' +
+        'Rarely needed — this state is auto-injected into the conversation on every turn by the ' +
+        'session/prompt hooks; pull it only for crash recovery or cross-checking.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
       }),
@@ -82,7 +84,10 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
   s.registerTool(
     'prjct_task_status',
     {
-      description: 'Read active work across worktrees plus queued work.',
+      description:
+        'Read active work across worktrees plus queued work. ' +
+        'Rarely needed — active work is auto-injected into the conversation on every turn by the ' +
+        'prompt hook; pull it only for crash recovery or cross-checking.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
       }),
@@ -127,11 +132,11 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
         'Start a gated work cycle and return predicted file risks and context. Link a spec only when durable intent is required.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        description: z.string().describe('What the work cycle is — a short intent phrase'),
+        description: z.string().describe('Short intent phrase'),
         linked_spec_id: z
           .string()
           .optional()
-          .describe('Intent/spec id to link for high-stakes work (e.g. "spec_12")'),
+          .describe('Spec id for high-stakes work, e.g. "spec_12"'),
         skip_hooks: z
           .boolean()
           .optional()
@@ -216,9 +221,7 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
         'Transition the active cycle status. Use prjct_cost_add instead for token usage.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        status: z
-          .enum(['done', 'completed', 'paused', 'active', 'resume', 'in_progress'])
-          .describe('New status'),
+        status: z.enum(['done', 'completed', 'paused', 'active', 'resume', 'in_progress']),
       }),
     },
     safeMcpCall('prjct_task_set_status', async (args: { projectPath: string; status: string }) => {
@@ -255,10 +258,7 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
         'Read stored architecture, stack, conventions, risks, and insights. mode:"archive" includes superseded analyses.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        mode: z
-          .enum(['active', 'archive'])
-          .optional()
-          .describe('"active" (default) = current analysis; "archive" = superseded history'),
+        mode: z.enum(['active', 'archive']).optional(),
       }),
     },
     safeMcpCall(

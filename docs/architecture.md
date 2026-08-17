@@ -12,9 +12,11 @@ core/
                                 spawned as subprocesses from bin/prjct
   commands/                     CLI command handlers (work/intent aliases,
                                 sync, ship, remember, search, guard, insights)
-  hooks/                        7 Claude Code hook subcommands (session-start,
-                                prompt, pre-commit, post-edit, stop,
-                                subagent-start, cwd-changed)
+  hooks/                        14 hook subcommands dispatched by `prjct hook`
+                                (session-start, prompt, pre-bash, pre-commit,
+                                pre-secrets, pre-package, pre-edit, pre-search,
+                                post-edit, stop, subagent-start, subagent-stop,
+                                notification, cwd-changed)
   packs/                        Pack manifests + manager (persona, memory
                                 types, workflow slots, hook signals)
   memory/                       projectMemory — unified surface over SQLite

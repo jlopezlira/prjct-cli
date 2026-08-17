@@ -46,8 +46,16 @@ function writeAnalysisChildren(db: SqliteDatabase, analysisId: string, a: LLMAna
     addFinding('risk_area', r.path, `${r.reason} — ${r.risk}`, r.severity)
   for (const rf of a.refactorSuggestions ?? [])
     addFinding('refactor', rf.description, rf.benefit, null)
-  for (const ins of a.projectInsights ?? []) addFinding('insight', ins, null, null)
-  for (const ins2 of a.architecture?.insights ?? []) addFinding('insight', ins2, null, null)
+  // Insights live in two fields (projectInsights + architecture.insights) and the
+  // thin-notes merge writes new lines into both — dedupe case-insensitively so the
+  // relational rows don't carry the same insight twice.
+  const seenInsights = new Set<string>()
+  for (const ins of [...(a.projectInsights ?? []), ...(a.architecture?.insights ?? [])]) {
+    const key = ins.toLowerCase()
+    if (seenInsights.has(key)) continue
+    seenInsights.add(key)
+    addFinding('insight', ins, null, null)
+  }
 
   const conv = db.prepare(
     'INSERT INTO analysis_convention (id, analysis_id, rule, sort_order) VALUES (?, ?, ?, ?)'

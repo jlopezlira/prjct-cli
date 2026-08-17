@@ -50,7 +50,7 @@ import { recordTaskTokenUsage } from '../services/work-cost-service'
 import { instructionFailureStorage } from '../storage/instruction-failure-storage'
 import { resolveKimiTranscriptPath } from '../utils/kimi-session'
 import { type HookIo, runHook } from './_runner'
-import { currentHookHost } from './_shared'
+import type { HookHost } from './_shared'
 
 interface HookInput {
   transcript_path?: string
@@ -145,17 +145,19 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
     {
       event: 'Stop',
       projectPath,
-      afterEmit: async (input, p) => {
+      afterEmit: async (input, p, host: HookHost) => {
         const config = await configManager.readConfig(p).catch(() => null)
         if (!config?.projectId) return
-        const runtime = resolveInstructionRuntime()
+        // The daemon's env never carries PRJCT_HOOK_HOST — the runner threads
+        // the wire's hookHost through, so telemetry lands on the real runtime.
+        const runtime = resolveInstructionRuntime({ hookHost: host })
 
         // Kimi's Stop payload has no `transcript_path`; resolve the session's
         // wire.jsonl from `session_id` instead. Fail-soft: undefined just
         // skips every transcript-dependent step below.
         const transcriptPath =
           input.transcript_path ??
-          (currentHookHost() === 'kimi' && input.session_id
+          (host === 'kimi' && input.session_id
             ? await resolveKimiTranscriptPath(input.session_id).catch(() => undefined)
             : undefined)
 

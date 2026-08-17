@@ -30,11 +30,11 @@ line('## 1. Token footprint — recurring harness cost')
 const skill = fs.readFileSync('templates/skills/prjct/SKILL.md', 'utf8')
 const skillTok = countTokens(skill)
 const mapTok = countTokens(_routing.FULL_BLOCK)
-// Representative per-turn state block (active cycle + goal discipline + git + queue).
+// Representative per-turn state block (active cycle + git + queue). The loop
+// discipline cue is cadenced (every 10 turns), not per-turn, so it's excluded.
 const stateBlock = [
   '# prjct: project state',
   '- Active work cycle: "implement rate limiting on the auth endpoints" (2h ago) [main]',
-  '  ↳ Stay on this goal. Each turn, before acting: is this step ADVANCING it? If you have hit the same wall twice, or you are exploring rather than progressing, STOP — re-plan, split the cycle, or ask the user. Do not loop; finish the cycle, then `prjct status done`.',
   '- Pending: 2 · Next: "wire the redis client"',
   '- Branch: feat/x — working tree 3 modified, 1 staged',
   '- Last shipped: v3.9.0 (today)',

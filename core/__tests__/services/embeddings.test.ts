@@ -16,8 +16,10 @@ import { isModelMemory } from '../../memory/entries'
 import { projectMemory } from '../../memory/project-memory'
 import {
   cosineSimilarity,
+  dot,
   type EmbeddingProvider,
   embeddingService,
+  embedLocalText,
   LOCAL_EMBEDDING_MODEL,
   LocalSubwordEmbeddingProvider,
   resolveActiveProvider,
@@ -251,6 +253,21 @@ describe('cosineSimilarity', () => {
   })
   it('is 0 against a zero vector (no NaN)', () => {
     expect(cosineSimilarity([0, 0, 0], [1, 2, 3])).toBe(0)
+  })
+})
+
+describe('dot', () => {
+  it('sums the shared-prefix products across array and typed-array shapes', () => {
+    expect(dot([1, 2, 3], [4, 5, 6])).toBe(32)
+    expect(dot(Float64Array.from([1, 2]), Float32Array.from([3, 4]))).toBe(11)
+    // min-length parity with the old walk: the extra tail is ignored
+    expect(dot([1, 1, 1, 99], [1, 1])).toBe(2)
+  })
+  it('equals cosine for embedLocalText vectors (they are L2-normalized)', () => {
+    const a = embedLocalText('retention reference model over project memory')
+    const b = embedLocalText('retention reference model over project memory!')
+    expect(dot(a, Float64Array.from(b))).toBeCloseTo(cosineSimilarity(a, b), 10)
+    expect(dot(a, Float64Array.from(a))).toBeCloseTo(1, 10)
   })
 })
 

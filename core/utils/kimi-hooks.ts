@@ -23,6 +23,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { resolveUserPath } from '../infrastructure/user-home'
+import { hookCommandChain } from '../services/hook-command'
 import { HOOK_TIMEOUT_SECONDS, PRJCT_HOOKS } from '../services/settings-installer'
 import { writeConfigIfChanged } from './mcp-config'
 
@@ -71,14 +72,14 @@ export function kimiHookMaps(): KimiHookMap[] {
 }
 
 /**
- * Portable command with the host env inline (same idiom as the Cursor/Gemini
- * installers). Deliberately NOT settings-installer's native/direct fast
- * chain: the native hook-fast binary builds its daemon request in C and
- * cannot forward PRJCT_HOOK_HOST, and Kimi output adaptation depends on it.
+ * Shared native/direct/portable chain with the host env inlined in EVERY
+ * stage (see core/services/hook-command.ts). The native hook-fast binary
+ * DOES forward PRJCT_HOOK_HOST to the daemon (native/hook-fast.c reads the
+ * env and sends it as `hookHost` on the wire), so Kimi output adaptation
+ * works on the native path exactly as on the portable one.
  */
 function hookCommand(subcommand: string): string {
-  const bin = process.env.PRJCT_BIN ?? 'prjct'
-  return `command -v ${bin} >/dev/null 2>&1 && PRJCT_HOOK_HOST=kimi ${bin} hook ${subcommand} || exit 0`
+  return hookCommandChain(subcommand, 'PRJCT_HOOK_HOST=kimi')
 }
 
 interface KimiHookEntry {

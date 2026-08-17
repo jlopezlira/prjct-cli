@@ -3,6 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { existsSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -92,6 +93,44 @@ describe('installCursorHooks', () => {
     const cmds = body.hooks.stop.map((h) => h.command)
     expect(cmds.some((c) => c.includes('foreign-stop'))).toBe(true)
     expect(cmds.some((c) => c.includes('prjct hook stop'))).toBe(true)
+  })
+
+  it('installs the native hook-fast chain with PRJCT_HOOK_HOST=cursor in every stage', async () => {
+    await installCursorHooks(fixture.hooksPath)
+    const body = JSON.parse(await fs.readFile(fixture.hooksPath, 'utf-8')) as {
+      hooks: Record<string, Array<{ command: string }>>
+    }
+    const cmd = body.hooks.stop[0]?.command ?? ''
+
+    // Portable guarded fallback stays intact as the last stage.
+    expect(cmd).toContain('|| { command -v prjct')
+    expect(cmd).toContain('PRJCT_HOOK_HOST=cursor prjct hook stop')
+    expect(cmd).toContain('|| exit 0')
+
+    const nativeBinPath = path.resolve(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'dist',
+      'bin',
+      `hook-fast-${process.platform}-${process.arch}`
+    )
+    const shimPath = path.resolve(__dirname, '..', '..', '..', 'dist', 'bin', 'prjct.mjs')
+    if (process.platform !== 'win32' && existsSync(nativeBinPath) && existsSync(shimPath)) {
+      // Native first, then direct runtime+shim, then portable — the host env
+      // rides in front of ALL THREE (the native binary forwards it to the
+      // daemon as hookHost).
+      expect(cmd).toContain(`PRJCT_HOOK_HOST=cursor "${nativeBinPath}" stop`)
+      expect(cmd.indexOf(`"${nativeBinPath}" stop`)).toBeLessThan(cmd.indexOf('hook stop'))
+      expect(cmd.indexOf('hook stop')).toBeLessThan(cmd.indexOf('command -v prjct'))
+      expect(cmd.split('PRJCT_HOOK_HOST=cursor').length - 1).toBe(3)
+    } else if (existsSync(shimPath)) {
+      expect(cmd.startsWith('PRJCT_HOOK_HOST=cursor ')).toBe(true)
+      expect(cmd.split('PRJCT_HOOK_HOST=cursor').length - 1).toBe(2)
+    } else {
+      expect(cmd).toContain('command -v prjct >/dev/null 2>&1 && PRJCT_HOOK_HOST=cursor prjct hook')
+    }
   })
 })
 

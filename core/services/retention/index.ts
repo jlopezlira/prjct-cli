@@ -19,7 +19,7 @@ import { loadIndex as loadBm25Index } from '../../domain/bm25'
 import { memoryFingerprint } from '../../memory/content-fingerprint'
 import { collectSupersededIds, isModelMemory, type MemoryEntry } from '../../memory/entries'
 import { classifyCapturePrecision } from '../../memory/precision-classifier'
-import { projectMemory } from '../../memory/project-memory'
+import { memoryVaultStamp, projectMemory } from '../../memory/project-memory'
 import { archiveStorage } from '../../storage/archive-storage'
 import prjctDb from '../../storage/database'
 import { isJunkCaptureContent } from '../capture-junk'
@@ -325,6 +325,38 @@ export function evaluateRetention(projectId: string, nowMs: number): RetentionRe
   return report
 }
 
+/**
+ * One evaluation per sync instead of three. Context-quality, applyRetention
+ * and triageInbox each used to reload the vault + BM25 index and rebuild the
+ * 150-vector reference index (~n×|R| cosine pairs) independently.
+ *
+ * Validity window: (projectId, 60s time bucket, vault stamp). Any memory
+ * write moves memoryVaultStamp → implicit invalidation, so a report is never
+ * reused across a mutation; the bucket absorbs Date.now() drift between the
+ * three call sites (age-based score terms move by seconds — verdicts don't
+ * flip) and bounds reuse to a single sync window.
+ */
+const RETENTION_MEMO_BUCKET_MS = 60_000
+const retentionMemo = new Map<string, { bucket: number; stamp: string; report: RetentionReport }>()
+
+export function evaluateRetentionShared(projectId: string, nowMs: number): RetentionReport {
+  const bucket = Math.floor(nowMs / RETENTION_MEMO_BUCKET_MS)
+  const stamp = (() => {
+    try {
+      return memoryVaultStamp(projectId)
+    } catch {
+      return null
+    }
+  })()
+  if (stamp !== null) {
+    const hit = retentionMemo.get(projectId)
+    if (hit && hit.bucket === bucket && hit.stamp === stamp) return hit.report
+  }
+  const report = evaluateRetention(projectId, nowMs)
+  if (stamp !== null) retentionMemo.set(projectId, { bucket, stamp, report })
+  return report
+}
+
 export function shouldEmbedEntry(entry: MemoryEntry, retention?: RetentionResult | null): boolean {
   if (!isModelMemory(entry)) return false
   if (entry.content.trim().length === 0) return false
@@ -413,7 +445,7 @@ export function applyRetention(
   const maxArchive = options.maxArchive ?? DEFAULT_MAX_ARCHIVE
   const maxDelete = options.maxDelete ?? DEFAULT_MAX_DELETE
 
-  const report = evaluateRetention(projectId, nowMs)
+  const report = evaluateRetentionShared(projectId, nowMs)
   // Honest counts: only ids we can actually remove (mem_* / ship_*). Orphan
   // shapes (if any) do not inflate wouldArchive / wouldDelete vs archived.
   const toArchive = report.flagged.filter(
@@ -555,7 +587,7 @@ export function triageInbox(
 
   const R = buildReferenceModel(projectMemory.allEntriesForIndex(projectId))
   const refIndex = buildReferenceIndex(R)
-  const report = evaluateRetention(projectId, nowMs)
+  const report = evaluateRetentionShared(projectId, nowMs)
 
   const mergedIds: string[] = []
   const archivedIds: string[] = []

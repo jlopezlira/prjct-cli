@@ -136,8 +136,6 @@ export interface CleanupOptions {
 export interface SetupOptions {
   /** Force re-setup even if already configured */
   force?: boolean
-  /** Skip interactive prompts */
-  nonInteractive?: boolean
 }
 
 /**

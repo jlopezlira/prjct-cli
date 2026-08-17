@@ -17,6 +17,7 @@ import type {
   SyncResult,
   UninstallResult,
 } from '../types/infrastructure'
+import type { AIProviderConfig } from '../types/provider'
 import { fileExists } from '../utils/file-helper'
 import { getActiveProvider } from './ai-provider'
 import { installGlobalConfig as installGlobalConfigImpl } from './command-installer/global-config'
@@ -24,8 +25,10 @@ import { resolveUserHome, resolveUserPath } from './user-home'
 
 // Re-export the installGlobalConfig used by external callers (e.g. update.ts).
 // Defined here as a thin wrapper rather than a re-export for clarity.
-export async function installGlobalConfig(): Promise<GlobalConfigResult> {
-  return installGlobalConfigImpl()
+export async function installGlobalConfig(
+  resolvedProvider?: AIProviderConfig
+): Promise<GlobalConfigResult> {
+  return installGlobalConfigImpl(resolvedProvider)
 }
 
 export class CommandInstaller {
@@ -33,18 +36,18 @@ export class CommandInstaller {
   configPath = ''
   private _initialized = false
 
-  private async ensureInit(): Promise<void> {
+  private async ensureInit(resolvedProvider?: AIProviderConfig): Promise<void> {
     if (this._initialized) return
 
-    const activeProvider = await getActiveProvider()
+    const activeProvider = resolvedProvider ?? (await getActiveProvider())
 
     this.configPath = activeProvider.configDir ?? ''
     this.commandsPath = this.configPath ? path.join(this.configPath, 'commands') : ''
     this._initialized = true
   }
 
-  async detectActiveProvider(): Promise<boolean> {
-    await this.ensureInit()
+  async detectActiveProvider(resolvedProvider?: AIProviderConfig): Promise<boolean> {
+    await this.ensureInit(resolvedProvider)
     return fileExists(this.configPath)
   }
 
@@ -116,8 +119,8 @@ export class CommandInstaller {
   /**
    * Sync commands - cleanup legacy router + update global config
    */
-  async syncCommands(): Promise<SyncResult> {
-    const providerDetected = await this.detectActiveProvider()
+  async syncCommands(resolvedProvider?: AIProviderConfig): Promise<SyncResult> {
+    const providerDetected = await this.detectActiveProvider(resolvedProvider)
 
     if (!providerDetected) {
       return {
@@ -185,8 +188,8 @@ export class CommandInstaller {
     return false
   }
 
-  async installGlobalConfig(): Promise<GlobalConfigResult> {
-    return installGlobalConfigImpl()
+  async installGlobalConfig(resolvedProvider?: AIProviderConfig): Promise<GlobalConfigResult> {
+    return installGlobalConfigImpl(resolvedProvider)
   }
 
   /**

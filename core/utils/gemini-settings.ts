@@ -14,6 +14,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { resolveUserPath } from '../infrastructure/user-home'
+import { hookCommandChain } from '../services/hook-command'
 import { PRJCT_HOOKS } from '../services/settings-installer'
 import { MCP_SERVER_PRESETS } from './mcp-config'
 
@@ -130,13 +131,15 @@ export function geminiHookMaps(): GeminiHookMap[] {
 }
 
 function hookCommand(subcommand: string): string {
-  const bin = process.env.PRJCT_BIN ?? 'prjct'
-  // Host env remaps deny/context for Gemini schema.
+  // Host env remaps deny/context for Gemini schema. It is inlined in EVERY
+  // stage of the shared chain — the native hook-fast binary forwards it to
+  // the daemon as `hookHost` (native/hook-fast.c), the runtime stages read
+  // it from their own env.
   // CRITICAL: never reference $PPID or other host-only vars. Gemini runs hooks
   // with a sanitized env and refuses commands that require unset vars
   // ("required env var(s) not set: ${PPID}") — which would skip the
   // credential MUST. Only GEMINI_* / explicit PRJCT_* are portable here.
-  return `command -v ${bin} >/dev/null 2>&1 && PRJCT_HOOK_HOST=gemini ${bin} hook ${subcommand} || exit 0`
+  return hookCommandChain(subcommand, 'PRJCT_HOOK_HOST=gemini')
 }
 
 function isPrjctHandler(h: GeminiHookHandler): boolean {

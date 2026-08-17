@@ -8,15 +8,27 @@
  * bun-based shim pays on every single hook fire, for the single most common
  * case: a warm daemon, a hook command, a normal response.
  *
- * On ANY uncertainty — socket missing, connect failure, timeout, malformed
- * response, or the daemon reporting `retry` (its code is stale) — this
- * binary exits non-zero WITHOUT writing anything to stdout. It never prints
- * partial output before deciding to punt, so a caller chaining with `||`
- * (see core/services/settings-installer.ts hookCommand()) safely falls
- * through to the existing bun-based shim, which has the full cold-path,
- * non-hook-command, and Windows logic. This binary deliberately does NOT
- * reimplement any of that — it is an additive speed layer, never the only
- * path.
+ * On ANY uncertainty BEFORE stdin is read — socket missing, connect not yet
+ * attempted — this binary exits non-zero WITHOUT writing anything to stdout,
+ * so a caller chaining with `||` (see core/services/hook-command.ts
+ * hookCommandChain()) safely falls through to the bun-based shim with the
+ * stdin pipe untouched.
+ *
+ * Once stdin HAS been read, the next stage's pipe is drained — so before
+ * punting (daemon timeout, stale-code `retry`, malformed response) the
+ * payload is SPILLED to a deterministic scratch file in the daemon run dir
+ * (`hook-stdin-<fnv1a32(cwd)>-<subcommand>.json`; see
+ * core/hooks/stdin-spill.ts) and this binary exits non-zero with no output.
+ * Every portable stdin reader (daemon shim, cold-entry, bin fast path)
+ * checks for a fresh spill before reading stdin, so the fallback re-runs
+ * the hook with the real event payload instead of silently degrading to
+ * `{}`. Only when the spill itself fails (disk full, missing run dir) does
+ * this binary fall back to the old self-resolving `{}` + exit 0 contract.
+ * It never prints partial output before deciding to punt.
+ *
+ * The bun-based shim keeps the full cold-path, non-hook-command, and
+ * Windows logic. This binary deliberately does NOT reimplement any of that
+ * — it is an additive speed layer, never the only path.
  *
  * Wire protocol matches core/types/daemon.ts DaemonRequest/DaemonResponse
  * exactly (newline-terminated JSON over the Unix socket) — see
@@ -55,6 +67,10 @@
 
 #define STDIN_TIMEOUT_MS 1000
 #define RESPONSE_TIMEOUT_MS 800
+/* session-start fires ONCE per session and does the heaviest build, so it
+ * earns a wider response budget than per-turn events — still far below the
+ * 10s host-side hook timeout (settings-installer HOOK_TIMEOUT_SECONDS). */
+#define SESSION_START_RESPONSE_TIMEOUT_MS 4000
 #define MAX_STDIN_BYTES (1 * 1024 * 1024)
 #define MAX_RESPONSE_BYTES (4 * 1024 * 1024)
 
@@ -62,13 +78,10 @@ static void fall_through(void) {
     exit(FALLTHROUGH_EXIT);
 }
 
-/* Once stdin has been read, this process is the ONLY one that will ever see
- * those bytes — a shell `||` fallback re-runs the NEXT command against the
- * same (now-drained) stdin pipe, which would silently hand it an empty
- * payload instead of the real prompt/tool-input. So any failure AFTER
- * stdin consumption must self-resolve here (matching the bun shim's own
- * `soft()` contract: emit `{}` and exit 0), never fall through. Only
- * failures BEFORE stdin is touched (no daemon socket) are safe to punt. */
+/* Last-resort self-resolution: emit the empty-JSON no-op and exit 0. Used
+ * ONLY when stdin was consumed but the payload could NOT be spilled for the
+ * next chain stage (see punt() below) — e.g. the run dir is gone or the
+ * disk is full. Matches the bun shim's own `soft()` contract. */
 static void soft_fail(void) {
     fputs("{}\n", stdout);
     fflush(stdout);
@@ -111,6 +124,63 @@ static int buf_append(buf_t *b, const char *s, size_t n) {
 
 static int buf_append_str(buf_t *b, const char *s) {
     return buf_append(b, s, strlen(s));
+}
+
+/* fnv1a-32 over the raw bytes of `s`. MUST match fnv1a32hex() in
+ * core/hooks/stdin-spill.ts exactly — both sides compute the spill path
+ * independently (a C process cannot export env vars to the next command in
+ * a shell `||` chain, so the path must be deterministic). */
+static unsigned int fnv1a32(const char *s) {
+    unsigned int h = 2166136261u;
+    while (*s) {
+        h ^= (unsigned char)*s++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+/* Spill the consumed stdin payload to
+ * `<run_dir>/hook-stdin-<fnv1a32hex(cwd)>-<subcommand>.json` so the NEXT
+ * stage of the shell `||` chain can re-read it (its stdin pipe is already
+ * drained). Returns 0 on success. The run dir is known to exist (the
+ * daemon socket stat succeeded there before stdin was read). */
+static int spill_stdin(const char *run_dir, const char *cwd, const char *subcommand,
+                       const buf_t *stdin_buf) {
+    /* Sanitize the subcommand to lowercase [a-z0-9-] — mirrors
+     * sanitizeSubcommand() in core/hooks/stdin-spill.ts. */
+    char sub[64];
+    size_t j = 0;
+    for (const char *p = subcommand; *p && j < sizeof(sub) - 1; p++) {
+        char c = *p;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') sub[j++] = c;
+    }
+    sub[j] = '\0';
+    if (j == 0) return -1;
+
+    char path[PATH_MAX + 256];
+    snprintf(path, sizeof(path), "%s/hook-stdin-%08x-%s.json", run_dir, fnv1a32(cwd), sub);
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+    size_t off = 0;
+    while (off < stdin_buf->len) {
+        ssize_t n = write(fd, stdin_buf->data + off, stdin_buf->len - off);
+        if (n <= 0) { close(fd); unlink(path); return -1; }
+        off += (size_t)n;
+    }
+    if (close(fd) != 0) { unlink(path); return -1; }
+    return 0;
+}
+
+/* Failure AFTER stdin was consumed: spill the payload for the next chain
+ * stage and punt (exit 89, no output) so the shell `||` fallback re-runs
+ * the hook with the real event payload. Only when the spill itself fails
+ * do we self-resolve to the `{}` no-op — the old always-soft contract. */
+static void punt(const char *run_dir, const char *cwd, const char *subcommand,
+                 const buf_t *stdin_buf) {
+    if (spill_stdin(run_dir, cwd, subcommand, stdin_buf) == 0) fall_through();
+    soft_fail();
 }
 
 /* ---------- JSON string escaping (for building the request) ---------- */
@@ -292,25 +362,31 @@ int main(int argc, char **argv) {
     if (!home || !*home) fall_through();
 
     const char *cli_home_env = getenv("PRJCT_CLI_HOME");
+    char run_dir[PATH_MAX + 128];
     char sock_path[PATH_MAX + 256];
     if (cli_home_env && *cli_home_env) {
-        snprintf(sock_path, sizeof(sock_path), "%s/run/daemon.sock", cli_home_env);
+        snprintf(run_dir, sizeof(run_dir), "%s/run", cli_home_env);
     } else {
-        snprintf(sock_path, sizeof(sock_path), "%s/.prjct-cli/run/daemon.sock", home);
+        snprintf(run_dir, sizeof(run_dir), "%s/.prjct-cli/run", home);
     }
+    snprintf(sock_path, sizeof(sock_path), "%s/daemon.sock", run_dir);
 
     struct stat st;
     if (stat(sock_path, &st) != 0) fall_through(); /* no daemon listening */
 
-    /* ---- Phase 2: stdin consumption starts here. From this point on,
-     * EVERY failure must self-resolve via soft_fail(), never fall_through()
-     * — see soft_fail()'s docstring for why. */
+    /* ---- Phase 2: stdin consumption starts here. From this point on the
+     * pipe is drained for any later chain stage, so failures PUNT: spill the
+     * payload to the run dir and exit non-zero (no output) so the shell `||`
+     * fallback re-reads it from the spill file (core/hooks/stdin-spill.ts).
+     * soft_fail() (`{}` + exit 0) remains only for the cases where no spill
+     * is possible — getcwd failure (no path key) or a failed spill write. */
+    char cwd[PATH_MAX + 256];
+    if (!getcwd(cwd, sizeof(cwd))) fall_through(); /* nothing read yet */
+
+#define PUNT() punt(run_dir, cwd, subcommand, &stdin_buf)
     buf_t stdin_buf;
     if (buf_init(&stdin_buf, 4096) != 0) fall_through(); /* nothing read yet */
-    if (read_stdin_with_timeout(&stdin_buf, STDIN_TIMEOUT_MS) != 0) soft_fail();
-
-    char cwd[PATH_MAX + 256];
-    if (!getcwd(cwd, sizeof(cwd))) soft_fail();
+    if (read_stdin_with_timeout(&stdin_buf, STDIN_TIMEOUT_MS) != 0) PUNT();
 
     /* Build the request line: {"id":"...","command":"hook","args":["<sub>"],"options":{},"cwd":"...","stdin":"..."[,"hookHost":"..."]}\n
      * hookHost forwards the invoking host's PRJCT_HOOK_HOST (kimi/cursor/
@@ -319,60 +395,65 @@ int main(int argc, char **argv) {
      * Mirrors the same field in bin/prjct.ts and generateDaemonShim(). */
     const char *hook_host = getenv("PRJCT_HOOK_HOST");
     buf_t req;
-    if (buf_init(&req, stdin_buf.len + 512) != 0) soft_fail();
+    if (buf_init(&req, stdin_buf.len + 512) != 0) PUNT();
     char id[64];
     snprintf(id, sizeof(id), "hf-%ld-%d", (long)time(NULL), (int)getpid());
-    if (buf_append_str(&req, "{\"id\":\"") != 0) soft_fail();
-    if (json_escape_append(&req, id, strlen(id)) != 0) soft_fail();
-    if (buf_append_str(&req, "\",\"command\":\"hook\",\"args\":[\"") != 0) soft_fail();
-    if (json_escape_append(&req, subcommand, strlen(subcommand)) != 0) soft_fail();
-    if (buf_append_str(&req, "\"],\"options\":{},\"cwd\":\"") != 0) soft_fail();
-    if (json_escape_append(&req, cwd, strlen(cwd)) != 0) soft_fail();
-    if (buf_append_str(&req, "\",\"stdin\":\"") != 0) soft_fail();
-    if (json_escape_append(&req, stdin_buf.data, stdin_buf.len) != 0) soft_fail();
-    if (buf_append_str(&req, "\"") != 0) soft_fail();
+    if (buf_append_str(&req, "{\"id\":\"") != 0) PUNT();
+    if (json_escape_append(&req, id, strlen(id)) != 0) PUNT();
+    if (buf_append_str(&req, "\",\"command\":\"hook\",\"args\":[\"") != 0) PUNT();
+    if (json_escape_append(&req, subcommand, strlen(subcommand)) != 0) PUNT();
+    if (buf_append_str(&req, "\"],\"options\":{},\"cwd\":\"") != 0) PUNT();
+    if (json_escape_append(&req, cwd, strlen(cwd)) != 0) PUNT();
+    if (buf_append_str(&req, "\",\"stdin\":\"") != 0) PUNT();
+    if (json_escape_append(&req, stdin_buf.data, stdin_buf.len) != 0) PUNT();
+    if (buf_append_str(&req, "\"") != 0) PUNT();
     if (hook_host && hook_host[0]) {
-        if (buf_append_str(&req, ",\"hookHost\":\"") != 0) soft_fail();
-        if (json_escape_append(&req, hook_host, strlen(hook_host)) != 0) soft_fail();
-        if (buf_append_str(&req, "\"") != 0) soft_fail();
+        if (buf_append_str(&req, ",\"hookHost\":\"") != 0) PUNT();
+        if (json_escape_append(&req, hook_host, strlen(hook_host)) != 0) PUNT();
+        if (buf_append_str(&req, "\"") != 0) PUNT();
     }
-    if (buf_append_str(&req, "}\n") != 0) soft_fail();
+    if (buf_append_str(&req, "}\n") != 0) PUNT();
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) soft_fail();
+    if (fd < 0) PUNT();
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    if (strlen(sock_path) >= sizeof(addr.sun_path)) { close(fd); soft_fail(); }
+    if (strlen(sock_path) >= sizeof(addr.sun_path)) { close(fd); PUNT(); }
     strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) { close(fd); soft_fail(); }
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) { close(fd); PUNT(); }
 
     /* Response timeout via SO_RCVTIMEO — Unix domain socket connects are
      * local and effectively instantaneous (or fail immediately), so only
-     * the response wait needs a deadline. */
+     * the response wait needs a deadline. session-start fires once per
+     * session and does the heaviest build, so it earns a wider budget. */
+    const int response_budget_ms =
+        strcmp(subcommand, "session-start") == 0
+            ? SESSION_START_RESPONSE_TIMEOUT_MS
+            : RESPONSE_TIMEOUT_MS;
     struct timeval rcvtimeo;
-    rcvtimeo.tv_sec = RESPONSE_TIMEOUT_MS / 1000;
-    rcvtimeo.tv_usec = (RESPONSE_TIMEOUT_MS % 1000) * 1000;
+    rcvtimeo.tv_sec = response_budget_ms / 1000;
+    rcvtimeo.tv_usec = (response_budget_ms % 1000) * 1000;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
     size_t written = 0;
     while (written < req.len) {
         ssize_t n = write(fd, req.data + written, req.len - written);
-        if (n <= 0) { close(fd); soft_fail(); }
+        if (n <= 0) { close(fd); PUNT(); }
         written += (size_t)n;
     }
 
     buf_t resp;
-    if (buf_init(&resp, 4096) != 0) { close(fd); soft_fail(); }
+    if (buf_init(&resp, 4096) != 0) { close(fd); PUNT(); }
     for (;;) {
         char chunk[65536];
         ssize_t n = read(fd, chunk, sizeof(chunk));
-        if (n < 0) { close(fd); soft_fail(); } /* includes EAGAIN/EWOULDBLOCK from SO_RCVTIMEO */
-        if (n == 0) { close(fd); soft_fail(); } /* daemon closed without a full line */
-        if (resp.len + (size_t)n > MAX_RESPONSE_BYTES) { close(fd); soft_fail(); }
-        if (buf_append(&resp, chunk, (size_t)n) != 0) { close(fd); soft_fail(); }
+        if (n < 0) { close(fd); PUNT(); } /* includes EAGAIN/EWOULDBLOCK from SO_RCVTIMEO */
+        if (n == 0) { close(fd); PUNT(); } /* daemon closed without a full line */
+        if (resp.len + (size_t)n > MAX_RESPONSE_BYTES) { close(fd); PUNT(); }
+        if (buf_append(&resp, chunk, (size_t)n) != 0) { close(fd); PUNT(); }
         if (memchr(resp.data, '\n', resp.len)) break;
     }
     close(fd);
@@ -388,11 +469,11 @@ int main(int argc, char **argv) {
     p = find_key(resp.data, body_end, "retry");
     if (p) {
         while (p < body_end && *p == ' ') p++;
-        /* Daemon's code is stale; request did NOT execute. Hooks can't
-         * re-read consumed stdin to retry elsewhere (same reason the bun
-         * shim's own sendHook() treats hook retry as a soft {} no-op
-         * instead of re-running in-process, see scripts/build.js). */
-        if (p + 4 <= body_end && memcmp(p, "true", 4) == 0) soft_fail();
+        /* Daemon's code is stale; request did NOT execute. Punt with the
+         * payload spilled so the fallback re-runs the hook on the FRESH
+         * code — the bun shim's own sendHook() can't do this (it has no
+         * run-dir spill step) and degrades to a soft {} no-op instead. */
+        if (p + 4 <= body_end && memcmp(p, "true", 4) == 0) PUNT();
     }
 
     long exit_code = 0;
@@ -408,9 +489,9 @@ int main(int argc, char **argv) {
     if (p) {
         while (p < body_end && *p == ' ') p++;
         buf_t out;
-        if (buf_init(&out, resp.len) != 0) soft_fail();
+        if (buf_init(&out, resp.len) != 0) PUNT();
         const char *after = parse_json_string(p, body_end, &out);
-        if (!after) soft_fail(); /* malformed — degrade to {}, don't guess */
+        if (!after) PUNT(); /* malformed — let the fallback re-run, don't guess */
         fwrite(out.data, 1, out.len, stdout);
         fflush(stdout);
         return (int)exit_code;
@@ -422,3 +503,4 @@ int main(int argc, char **argv) {
      * present, either way exits with the daemon's stated code). */
     return (int)exit_code;
 }
+#undef PUNT

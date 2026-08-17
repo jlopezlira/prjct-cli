@@ -2,14 +2,17 @@
  * Owned agent loop + path safety + mock LLM tool calls.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import fsPromises from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { buildSystemPrompt, resolveSafePath, runAgent } from '../../agent'
 import { PathDeniedError } from '../../agent/paths'
+import pathManager from '../../infrastructure/path-manager'
 import type { ChatCompletionResult, LlmGenerateOptions, LlmProfile, LlmProvider } from '../../llm'
+import { TASK_TOKENS_EVENT } from '../../services/work-cost-service'
+import { prjctDb } from '../../storage/database'
 
 function mockProvider(
   script: Array<(opts: LlmGenerateOptions) => ChatCompletionResult>,
@@ -195,5 +198,104 @@ describe('runAgent', () => {
     })
     expect(ctx.workStarted).toBe(false)
     expect(ctx.root).toBe('/tmp/not-a-prjct-project-xyz')
+  })
+})
+
+describe('runAgent — token usage recording', () => {
+  const dbFixture = { tmpRoot: '', projectId: '' }
+  const original = pathManager.getGlobalProjectPath.bind(pathManager)
+
+  beforeEach(async () => {
+    dbFixture.tmpRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-usage-'))
+    dbFixture.projectId = `agentusage-${Math.random().toString(36).slice(2, 10)}`
+    pathManager.getGlobalProjectPath = (id: string) => path.join(dbFixture.tmpRoot, id)
+    prjctDb.getDb(dbFixture.projectId)
+  })
+
+  afterEach(async () => {
+    prjctDb.close()
+    pathManager.getGlobalProjectPath = original
+    await fsPromises.rm(dbFixture.tmpRoot, { recursive: true, force: true })
+  })
+
+  function tokenEvents(): Array<Record<string, unknown>> {
+    return prjctDb
+      .query<{ data: string }>(
+        dbFixture.projectId,
+        'SELECT data FROM events WHERE type = ?',
+        TASK_TOKENS_EVENT
+      )
+      .map((r) => JSON.parse(r.data))
+  }
+
+  test('accumulates completion.usage across generates and records it on the task', async () => {
+    const root = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-usage-run-'))
+    const provider = mockProvider([
+      () => ({
+        content: null,
+        tool_calls: [
+          {
+            id: '1',
+            type: 'function',
+            function: { name: 'write', arguments: JSON.stringify({ path: 'a.ts', content: 'x' }) },
+          },
+        ],
+        model: 'mock-model',
+        usage: { prompt_tokens: 100, completion_tokens: 40 },
+      }),
+      () => ({
+        content: 'done',
+        tool_calls: [],
+        model: 'mock-model',
+        usage: { prompt_tokens: 250, completion_tokens: 60 },
+      }),
+    ])
+    try {
+      const result = await runAgent({
+        intent: 'make a file',
+        root,
+        provider,
+        projectId: dbFixture.projectId,
+        taskId: 'task-usage',
+      })
+      expect(result.success).toBe(true)
+      const events = tokenEvents()
+      expect(events.length).toBe(1)
+      expect(events[0].tokensIn).toBe(350)
+      expect(events[0].tokensOut).toBe(100)
+      expect(events[0].taskId).toBe('task-usage')
+      expect(events[0].model).toBe('mock-model')
+      expect(events[0].source).toBe('agent-loop')
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test('fail-soft: no usage on the wire and no bound task both record nothing', async () => {
+    const root = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'prjct-agent-usage-none-'))
+    const noUsage = mockProvider([() => ({ content: 'ok', tool_calls: [], model: 'mock-model' })])
+    try {
+      const r1 = await runAgent({
+        intent: 'hi',
+        root,
+        provider: noUsage,
+        projectId: dbFixture.projectId,
+        taskId: 'task-no-usage',
+      })
+      expect(r1.success).toBe(true)
+      const withUsage = mockProvider([
+        () => ({
+          content: 'ok',
+          tool_calls: [],
+          model: 'mock-model',
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+      ])
+      const r2 = await runAgent({ intent: 'hi', root, provider: withUsage })
+      expect(r2.success).toBe(true)
+      expect(tokenEvents().length).toBe(0)
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true })
+    }
   })
 })

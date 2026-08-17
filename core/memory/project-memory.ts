@@ -39,6 +39,62 @@ import {
 } from './entries'
 import { REMEMBER_ACTION_PREFIX, REMEMBER_EVENT_PREFIX } from './events'
 
+/**
+ * Cheap content stamp over the three tables `allEntriesForIndex` reads
+ * (memory_entries + memory_entry_tags + shipped_features). Any write that can
+ * change the read model — insert (count/rowid), soft delete (deleted_at),
+ * hard delete (count), tag write (count/rowid) — moves the stamp, so caches
+ * keyed by it invalidate implicitly without hooking every write path.
+ * In-place UPDATEs of unselected columns (topic_key, revision_count) cannot
+ * alter the mapped entries and intentionally do not move the stamp.
+ */
+export function memoryVaultStamp(projectId: string): string {
+  const row = prjctDb.get<{
+    memCount: number
+    memMaxRowid: number | null
+    memDeleted: number
+    memMaxDeleted: number | null
+    tagCount: number
+    tagMaxRowid: number | null
+    shipCount: number
+    shipMaxRowid: number | null
+  }>(
+    projectId,
+    `SELECT
+       (SELECT COUNT(*) FROM memory_entries) AS memCount,
+       (SELECT MAX(rowid) FROM memory_entries) AS memMaxRowid,
+       (SELECT COUNT(deleted_at) FROM memory_entries) AS memDeleted,
+       (SELECT MAX(deleted_at) FROM memory_entries) AS memMaxDeleted,
+       (SELECT COUNT(*) FROM memory_entry_tags) AS tagCount,
+       (SELECT MAX(rowid) FROM memory_entry_tags) AS tagMaxRowid,
+       (SELECT COUNT(*) FROM shipped_features) AS shipCount,
+       (SELECT MAX(rowid) FROM shipped_features) AS shipMaxRowid`
+  )
+  if (!row) return 'empty'
+  return [
+    row.memCount,
+    row.memMaxRowid ?? 0,
+    row.memDeleted,
+    row.memMaxDeleted ?? 0,
+    row.tagCount,
+    row.tagMaxRowid ?? 0,
+    row.shipCount,
+    row.shipMaxRowid ?? 0,
+  ].join(':')
+}
+
+/**
+ * Per-process snapshot of the allEntriesForIndex read model, keyed by
+ * projectId and validated against memoryVaultStamp on every access. One sync
+ * reads the vault ~10× (context-quality, retention, triage, purge, health,
+ * distill); only the first read pays the full load.
+ */
+interface VaultSnapshot {
+  stamp: string
+  entries: MemoryEntry[]
+}
+const vaultSnapshots = new Map<string, VaultSnapshot>()
+
 interface RecallOpts {
   /** Fuzzy-match against content + tag values */
   topic?: string
@@ -1007,12 +1063,19 @@ export const projectMemory = {
 
   allEntriesForIndex(projectId: string): MemoryEntry[] {
     try {
+      const stamp = memoryVaultStamp(projectId)
+      const hit = vaultSnapshots.get(projectId)
+      // Shallow copy: callers may sort/filter the array in place; the shared
+      // snapshot itself must stay immutable.
+      if (hit && hit.stamp === stamp) return [...hit.entries]
       const entries = loadV2Entries(projectId, 'ORDER BY created_at DESC, rowid DESC')
       const shipped = prjctDb.query<ShippedRow>(
         projectId,
         'SELECT id, name, type, shipped_at, data FROM shipped_features ORDER BY shipped_at DESC'
       )
-      return [...entries, ...shipped.map(shippedRowToEntry)]
+      const all = [...entries, ...shipped.map(shippedRowToEntry)]
+      vaultSnapshots.set(projectId, { stamp, entries: all })
+      return [...all]
     } catch {
       return []
     }

@@ -191,7 +191,17 @@ note "installed v$NEW (via $INSTALLED_VIA)"
 # ---------------------------------------------------------------------------
 
 step "Wiring hooks + global CLAUDE.md (lookup-first)…"
-PRJCT_NONINTERACTIVE=1 prjct setup --quiet 2>/dev/null || warn "setup encountered non-fatal warnings; check 'prjct doctor' if anything looks off"
+# Capture stderr to a temp file so a failing setup doesn't leave the user
+# blind — show the tail of it alongside the friendly fallback message.
+SETUP_ERR="$(mktemp "${TMPDIR:-/tmp}/prjct-setup.XXXXXX")"
+if ! PRJCT_NONINTERACTIVE=1 prjct setup --quiet 2>"$SETUP_ERR"; then
+  warn "setup encountered non-fatal warnings; check 'prjct doctor' if anything looks off"
+  if [ -s "$SETUP_ERR" ]; then
+    note "setup stderr (last 10 lines):"
+    tail -n 10 "$SETUP_ERR" | while IFS= read -r line; do note "$line"; done
+  fi
+fi
+rm -f "$SETUP_ERR"
 
 # ---------------------------------------------------------------------------
 # 5. Register cwd if it's a git repo

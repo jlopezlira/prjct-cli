@@ -28,7 +28,7 @@ import commandInstaller from '../infrastructure/command-installer'
 import configManager from '../infrastructure/config-manager'
 import pathManager from '../infrastructure/path-manager'
 import { analysisStorage } from '../storage/analysis-storage'
-import type { ProjectSyncResult, SyncOptions } from '../types/project-sync'
+import type { ProjectSyncResult, SyncMetrics, SyncOptions } from '../types/project-sync'
 import type { Context7Status } from '../types/services.js'
 import type { VerificationReport } from '../types/sync-verifier'
 import { readJson } from '../utils/file-helper'
@@ -363,15 +363,9 @@ class SyncService {
           activeAnalysis?.antiPatterns?.filter((a) => a.severity === 'high').length || 0,
       }
 
-      // 9. Record metrics for value dashboard
-      const duration = Date.now() - startTime
-      const syncMetrics = await phase('metrics', () =>
-        recordSyncMetrics(this.projectId!, stats, duration)
-      )
-      const developerSnapshotCaptured = syncMetrics.developerSnapshotCaptured === true
-
       // 9a. Project style model — recalculate every sync (dual evolution with
-      // developer snapshot above). Progressive delta + history + memory bridge.
+      // developer snapshot captured by the floating metrics phase below).
+      // Progressive delta + history + memory bridge.
       const projectStyle: import('../types/project-sync').ProjectStyleSyncSummary | undefined =
         await (async () => {
           try {
@@ -414,6 +408,112 @@ class SyncService {
       // tasks/memory tables work-cost and context-quality READ, so running
       // them concurrently would race against rows mid-deletion. Don't
       // parallelize this — the current order is correct, not accidental.
+      //
+      // The phases launched below are different: install-global,
+      // install-agent-surfaces and verify only touch global config files /
+      // project markdown surfaces / run checks — never the project SQLite —
+      // and recordSyncMetrics only READS the tables archive mutates (its
+      // writes land in metrics / velocity_sprints /
+      // developer_profile_snapshots). They start now as floating work
+      // (same pattern as startPostIndexWork at the index phase) and settle
+      // after the retention chain. Failures are absorbed into debug
+      // telemetry by startPostIndexWork — never an unhandled rejection in
+      // the long-lived daemon. Each phase still records its own honest
+      // wall-clock timing via runSyncPhase; the settlement log marks them
+      // `overlapped: true` so they aren't mistaken for sequential time.
+      const floatingWork: PostIndexWork[] = []
+      const floatingResults: {
+        syncMetrics?: SyncMetrics & { developerSnapshotCaptured?: boolean }
+        verification?: VerificationReport
+      } = {}
+      const floatPhase = <T>(
+        name: string,
+        run: () => Promise<T>,
+        onSettled: (result: T) => void
+      ): void => {
+        floatingWork.push(
+          startPostIndexWork(
+            async () => {
+              onSettled(await phase(name, run))
+            },
+            {
+              onComplete: ({ totalMs, error }) => {
+                log.debug('sync floating phase settled', {
+                  phase: name,
+                  overlapped: true,
+                  totalMs,
+                  ...(error === undefined ? {} : { error: getErrorMessage(error) }),
+                })
+              },
+            }
+          )
+        )
+      }
+
+      // 9. Record metrics for value dashboard — overlaps the chain below.
+      const duration = Date.now() - startTime
+      floatPhase(
+        'metrics',
+        () => recordSyncMetrics(this.projectId!, stats, duration),
+        (result) => {
+          floatingResults.syncMetrics = result
+        }
+      )
+
+      // 10. Update global config and commands (CLI does EVERYTHING)
+      // This ensures `prjct sync` from terminal updates global CLAUDE.md and
+      // commands. The provider resolved at the top of sync is threaded down
+      // so the install skips a redundant `<cli> --version` re-detection.
+      floatPhase(
+        'install-global',
+        async () => {
+          await commandInstaller.installGlobalConfig(activeProvider ?? undefined)
+          await commandInstaller.syncCommands(activeProvider ?? undefined)
+        },
+        () => {}
+      )
+
+      floatPhase(
+        'install-agent-surfaces',
+        async () => {
+          // Never creates the FIRST PRJCT.md/AGENTS.md/CLAUDE.md (that still
+          // requires explicit `prjct agents doctor --fix` — clean-repo
+          // doctrine). But once a project has opted in, every sync now keeps
+          // that surface current and migrates any stale/legacy inline block
+          // to the pointer shape, so agents never read a drifted contract.
+          // CLAUDE.md specifically stays gated on actual detection (never
+          // forced on a project that doesn't use Claude) — re-detecting on
+          // every sync means it appears once Claude actually shows up on this
+          // machine/project, not just at whatever moment the surface was
+          // first adopted.
+          const { detectInstalledAgents } = await import('../workflows/onboarding/detection')
+          const agents = await detectInstalledAgents(this.projectPath).catch(() => [])
+          await writeProjectAgentSurfaces(this.projectPath, { refreshIfAdopted: true, agents })
+        },
+        () => {}
+      )
+
+      // 11. Run verification checks (built-in + custom from config)
+      floatPhase(
+        'verify',
+        async (): Promise<VerificationReport | undefined> => {
+          try {
+            const localConfig = await configManager.readConfig(this.projectPath)
+            return await syncVerifier.verify(
+              this.projectPath,
+              this.globalPath,
+              localConfig?.verification
+            )
+          } catch (error) {
+            log.debug('Verification failed (non-critical)', { error: getErrorMessage(error) })
+            return undefined
+          }
+        },
+        (result) => {
+          floatingResults.verification = result
+        }
+      )
+
       const workCost = await phase('work-cost', () => publishWorkCostSnapshots(this.projectId!))
 
       // 9b. Archive stale data (PRJ-267)
@@ -496,44 +596,6 @@ class SyncService {
         }
       })
 
-      // 10. Update global config and commands (CLI does EVERYTHING)
-      // This ensures `prjct sync` from terminal updates global CLAUDE.md and commands
-      await phase('install-global', async () => {
-        await commandInstaller.installGlobalConfig()
-        await commandInstaller.syncCommands()
-      })
-
-      await phase('install-agent-surfaces', async () => {
-        // Never creates the FIRST PRJCT.md/AGENTS.md/CLAUDE.md (that still
-        // requires explicit `prjct agents doctor --fix` — clean-repo
-        // doctrine). But once a project has opted in, every sync now keeps
-        // that surface current and migrates any stale/legacy inline block
-        // to the pointer shape, so agents never read a drifted contract.
-        // CLAUDE.md specifically stays gated on actual detection (never
-        // forced on a project that doesn't use Claude) — re-detecting on
-        // every sync means it appears once Claude actually shows up on this
-        // machine/project, not just at whatever moment the surface was
-        // first adopted.
-        const { detectInstalledAgents } = await import('../workflows/onboarding/detection')
-        const agents = await detectInstalledAgents(this.projectPath).catch(() => [])
-        await writeProjectAgentSurfaces(this.projectPath, { refreshIfAdopted: true, agents })
-      })
-
-      // 11. Run verification checks (built-in + custom from config)
-      const verification: VerificationReport | undefined = await phase('verify', async () => {
-        try {
-          const localConfig = await configManager.readConfig(this.projectPath)
-          return await syncVerifier.verify(
-            this.projectPath,
-            this.globalPath,
-            localConfig?.verification
-          )
-        } catch (error) {
-          log.debug('Verification failed (non-critical)', { error: getErrorMessage(error) })
-          return undefined
-        }
-      })
-
       // Continuous understanding: mark drift refresh applied so SessionStart
       // stops permanent-stale banners after a world-model sync.
       if (
@@ -552,7 +614,16 @@ class SyncService {
         }
       }
 
-      await Promise.all(postIndexWork.map((work) => work.settle()))
+      // Settle all floating work — settlement absorbs failures, so a broken
+      // global-config write or verify check can never reject here.
+      await Promise.all([
+        ...postIndexWork.map((work) => work.settle()),
+        ...floatingWork.map((work) => work.settle()),
+      ])
+
+      const syncMetrics = floatingResults.syncMetrics
+      const verification = floatingResults.verification
+      const developerSnapshotCaptured = syncMetrics?.developerSnapshotCaptured === true
 
       return {
         success: true,

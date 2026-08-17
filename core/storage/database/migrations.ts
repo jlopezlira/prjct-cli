@@ -2723,6 +2723,19 @@ export const migrations: Migration[] = [
       )
     },
   },
+  {
+    version: 65,
+    name: 'memory-entries-deleted-at-partial-index',
+    up: (db: SqliteDatabase) => {
+      // Soft-deleted rows are a small minority of memory_entries; a partial
+      // index keeps purgeSoftDeleted's `deleted_at IS NOT NULL AND
+      // deleted_at < ?` scan (retention/purge.ts, runs every sync) off the
+      // full table.
+      db.run(
+        'CREATE INDEX IF NOT EXISTS ix_memory_entries_deleted_at ON memory_entries(deleted_at) WHERE deleted_at IS NOT NULL'
+      )
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations[migrations.length - 1]?.version ?? 0

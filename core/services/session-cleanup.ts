@@ -18,6 +18,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { DAEMON_PATHS } from '../daemon/protocol'
 import pathManager from '../infrastructure/path-manager'
 import { memoryFingerprint } from '../memory/content-fingerprint'
 import { projectMemory } from '../memory/project-memory'
@@ -31,6 +32,7 @@ export interface CleanupReport {
   archivesPruned: number
   checkpointsRemoved: number
   context7CacheRotated: boolean
+  stampsRemoved: number
 }
 
 interface CleanupProfile {
@@ -167,6 +169,45 @@ async function rotateContext7Cache(): Promise<boolean> {
 }
 
 /**
+ * Hook stamps in the daemon run dir are written per session/project and were
+ * never deleted — over months the run dir accumulates thousands of stale
+ * files. None of them is useful past a day: payload hashes + afterEmit
+ * records + git snapshots are turn-scoped, the stop-heavy stamp is a
+ * 10-minute cooldown, and kimi session stamps are consumed on the first
+ * prompt. Sweep by mtime; never touch daemon.pid/log/sock.
+ */
+const STAMP_TTL_MS = 24 * 60 * 60 * 1000
+const STAMP_PREFIXES = [
+  'prompt-state-',
+  'prompt-git-',
+  'prompt-afteremit-',
+  'stop-heavy-',
+  'kimi-session-',
+]
+
+async function sweepRunDirStamps(): Promise<number> {
+  const dir = DAEMON_PATHS.runDir()
+  const entries = await fs.readdir(dir).catch(() => null)
+  if (!entries) return 0
+  const cutoff = Date.now() - STAMP_TTL_MS
+  const removedFiles: string[] = []
+  for (const name of entries) {
+    if (!STAMP_PREFIXES.some((prefix) => name.startsWith(prefix))) continue
+    const full = path.join(dir, name)
+    try {
+      const stat = await fs.stat(full)
+      if (stat.mtimeMs < cutoff) {
+        await fs.unlink(full)
+        removedFiles.push(full)
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  return removedFiles.length
+}
+
+/**
  * Run all cleanup steps. Each step is independent — the caller gets a
  * full report even when some steps fail silently. Safe to invoke from
  * the Stop hook.
@@ -178,6 +219,7 @@ export async function runSessionCleanup(projectId: string): Promise<CleanupRepor
     archivesPruned: 0,
     checkpointsRemoved: 0,
     context7CacheRotated: false,
+    stampsRemoved: 0,
   }
 
   try {
@@ -200,6 +242,11 @@ export async function runSessionCleanup(projectId: string): Promise<CleanupRepor
   } catch {
     /* keep going */
   }
+  try {
+    report.stampsRemoved = await sweepRunDirStamps()
+  } catch {
+    /* keep going */
+  }
 
   return report
 }
@@ -214,6 +261,7 @@ export async function recordCleanupReport(projectId: string, report: CleanupRepo
     report.inboxArchived +
     report.archivesPruned +
     report.checkpointsRemoved +
+    report.stampsRemoved +
     (report.context7CacheRotated ? 1 : 0)
   if (total === 0) return // nothing to surface
 
@@ -221,6 +269,7 @@ export async function recordCleanupReport(projectId: string, report: CleanupRepo
     report.inboxArchived > 0 ? `${report.inboxArchived} inbox archived` : null,
     report.archivesPruned > 0 ? `${report.archivesPruned} archives pruned` : null,
     report.checkpointsRemoved > 0 ? `${report.checkpointsRemoved} checkpoints removed` : null,
+    report.stampsRemoved > 0 ? `${report.stampsRemoved} stale hook stamps removed` : null,
     report.context7CacheRotated ? 'context7 cache rotated' : null,
   ]
     .filter((s): s is string => Boolean(s))

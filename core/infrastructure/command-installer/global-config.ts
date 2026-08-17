@@ -11,6 +11,7 @@ import path from 'node:path'
 import { getTemplateContent } from '../../agentic/template-loader'
 import { getErrorMessage } from '../../types/fs'
 import type { GlobalConfigResult } from '../../types/infrastructure'
+import type { AIProviderConfig } from '../../types/provider'
 import { readExistingFileOrEmpty } from '../../utils/file-helper'
 import { mergeWithMarkers } from '../ide-project-installer'
 
@@ -50,13 +51,28 @@ When you complete substantive work — analysis, decision, learning, gotcha — 
 <!-- prjct:end - DO NOT REMOVE THIS MARKER -->
 `
 
-export async function installGlobalConfig(): Promise<GlobalConfigResult> {
+export async function installGlobalConfig(
+  resolvedProvider?: AIProviderConfig
+): Promise<GlobalConfigResult> {
   const aiProvider = require('../ai-provider')
-  const activeProvider = await aiProvider.getActiveProvider()
+  // Callers that already resolved the active provider (e.g. sync) pass it in
+  // to skip a redundant detectAllProviders + `<cli> --version` spawn (~0.3-0.5s).
+  const activeProvider = resolvedProvider ?? (await aiProvider.getActiveProvider())
   const providerName = activeProvider.name
 
-  const detection = await aiProvider.detectProvider(providerName)
-  if (!detection.installed && !activeProvider.configDir) {
+  // The CLI probe below only matters when the provider has no config dir —
+  // for claude/gemini/codex the install proceeds on configDir alone, so skip
+  // the spawn entirely when the caller already resolved the provider.
+  if (!resolvedProvider) {
+    const detection = await aiProvider.detectProvider(providerName)
+    if (!detection.installed && !activeProvider.configDir) {
+      return {
+        success: false,
+        error: `${activeProvider.displayName} not detected`,
+        action: 'skipped',
+      }
+    }
+  } else if (!activeProvider.configDir) {
     return {
       success: false,
       error: `${activeProvider.displayName} not detected`,
@@ -122,6 +138,15 @@ export async function installGlobalConfig(): Promise<GlobalConfigResult> {
       startMarker,
       endMarker
     )
+
+    // Compare-before-write (same idiom as writeSkillIfChanged): the merged
+    // content is byte-stable between prjct releases, so most syncs would
+    // rewrite an identical file and bump its mtime for nothing. Compare
+    // against the RAW existing file — if a legacy prjct-project section was
+    // stripped above, merged.content differs and the write still happens.
+    if (existingFile.exists && existingFile.content === merged.content) {
+      return { success: true, action: 'unchanged', path: globalConfigPath }
+    }
 
     await fs.writeFile(globalConfigPath, merged.content, 'utf-8')
     return { success: true, action: merged.action, path: globalConfigPath }

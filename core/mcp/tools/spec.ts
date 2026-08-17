@@ -30,6 +30,19 @@ import { safeMcpCall } from './error-handler'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type S = any
 
+/**
+ * Full delta-format how-to, returned in `prjct_spec_apply_delta` error text
+ * (DELTA_* failures) instead of the ListTools description — the schema tax
+ * is paid every session, the error text only when the agent actually needs
+ * the format. Mirrors the `## ADDED/MODIFIED/REMOVED Requirements` subset
+ * parsed by services/spec-delta.ts.
+ */
+const DELTA_FORMAT_HELP = `Delta format (OpenSpec subset):
+## ADDED Requirements    / ## MODIFIED Requirements / ## REMOVED Requirements
+### Requirement: <name> followed by its SHALL statement
+#### Scenario: <name> (optional) with - **GIVEN** … / - **WHEN** … / - **THEN** … bullets
+Requirement names map to stable slugs; MODIFIED/REMOVED target an existing slug; REMOVED holds only the "### Requirement:" heading. Re-applying the same delta is a no-op. CLI usage: \`prjct spec apply-delta <id> (--file <path> | --md '<delta markdown>')\`.`
+
 export function registerSpecTools(server: McpServer) {
   const s: S = server
 
@@ -37,28 +50,25 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_create',
     {
       description:
-        'Draft a spec when the user frames a feature/fix/initiative WITH goals or stakes (e.g. "rate limiting on auth", "fix onboarding"). Fields default empty — fill them via `prjct_spec_update`. Skip for routine work (single-file fix, doc tweak, capture); use `prjct_mem_save` with type="inbox" or the CLI `prjct capture` instead.',
+        'Draft a spec when the user frames a feature/fix/initiative WITH goals or stakes. Skip for routine work (single-file fix, doc tweak, capture) — use `prjct_mem_save` with type="inbox" or the CLI `prjct capture` instead. Fields default empty; fill them via `prjct_spec_update`.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        title: z.string().describe("One-line title (what you'd say to a coworker walking by)"),
-        goal: z.string().describe('What success looks like, 1-3 sentences. Concrete, observable.'),
-        eli10: z.string().optional().describe('Plain English a 16-year-old follows, 2-4 sentences'),
+        title: z.string().describe('One-line title'),
+        goal: z.string().describe('What success looks like — concrete, observable'),
+        eli10: z.string().optional().describe('Lay explanation, 2-4 sentences'),
         stakes: z.string().optional().describe('What breaks if we ship the wrong thing'),
-        acceptance_criteria: z
-          .array(z.string())
-          .optional()
-          .describe('Testable, observable list. Each item ends in a verifiable claim.'),
+        acceptance_criteria: z.array(z.string()).optional().describe('Testable, verifiable items'),
         scope: z.array(z.string()).optional().describe("What's IN — file paths, modules, surfaces"),
         out_of_scope: z.array(z.string()).optional().describe("What's OUT — anti-creep shield"),
         risks: z
           .array(z.object({ risk: z.string(), mitigation: z.string() }))
           .optional()
-          .describe('Each risk has a mitigation; a risk without one is just a complaint'),
+          .describe('Each risk needs a mitigation'),
         test_plan: z.array(z.string()).optional().describe('How you prove acceptance criteria'),
         tags: z
           .record(z.string(), z.string())
           .optional()
-          .describe('Key:value tags (e.g. {domain: "auth", priority: "high"})'),
+          .describe('k:v tags, e.g. {domain: "auth"}'),
       }),
     },
     safeMcpCall(
@@ -187,26 +197,22 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_update',
     {
       description:
-        "Patch a spec's structured content. Pass ONLY the fields you want to change — this is a shallow merge over the existing content (fields you provide replace, fields you omit are preserved). For requirement / acceptance-criteria changes, prefer `prjct_spec_apply_delta` — it is the canonical path (requirement-level, idempotent, sync-convergent); use this patch for scalar fields (goal, eli10, stakes, notes, scope, risks, test_plan). Note: editing any body field (goal, acceptance_criteria, scope, risks, …) invalidates recorded reviews and demotes a reviewed spec back to draft.",
+        "Patch a spec's structured content — shallow merge: pass only the fields to change, omitted fields are preserved. For requirement / acceptance-criteria changes prefer `prjct_spec_apply_delta` (canonical, idempotent). Editing any body field demotes a reviewed spec back to draft.",
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id'),
-        content: z
-          .object({
-            goal: z.string().optional(),
-            eli10: z.string().optional(),
-            stakes: z.string().optional(),
-            acceptance_criteria: z.array(z.string()).optional(),
-            scope: z.array(z.string()).optional(),
-            out_of_scope: z.array(z.string()).optional(),
-            risks: z.array(z.object({ risk: z.string(), mitigation: z.string() })).optional(),
-            test_plan: z.array(z.string()).optional(),
-            notes: z.string().optional(),
-            linked_tasks: z.array(z.string()).optional(),
-          })
-          .describe(
-            'Partial SpecContent — only the fields to change; omitted fields are preserved'
-          ),
+        content: z.object({
+          goal: z.string().optional(),
+          eli10: z.string().optional(),
+          stakes: z.string().optional(),
+          acceptance_criteria: z.array(z.string()).optional(),
+          scope: z.array(z.string()).optional(),
+          out_of_scope: z.array(z.string()).optional(),
+          risks: z.array(z.object({ risk: z.string(), mitigation: z.string() })).optional(),
+          test_plan: z.array(z.string()).optional(),
+          notes: z.string().optional(),
+          linked_tasks: z.array(z.string()).optional(),
+        }),
       }),
     },
     safeMcpCall(
@@ -231,35 +237,44 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_apply_delta',
     {
       description:
-        "CANONICAL path for changing a spec's requirements / acceptance criteria — prefer this over `prjct_spec_update` for any requirement-level change. Pass an OpenSpec-style delta in markdown: `## ADDED Requirements` / `## MODIFIED Requirements` / `## REMOVED Requirements` sections, each holding `### Requirement: <name>` followed by its SHALL statement and optional `#### Scenario: <name>` blocks with `- **GIVEN** …` / `- **WHEN** …` / `- **THEN** …` bullets. Requirement names map to stable slugs; MODIFIED/REMOVED target an existing slug; re-applying the same delta is a no-op (idempotent by content-hash id). Applying a delta invalidates recorded reviews and demotes a reviewed spec back to draft.",
+        "CANONICAL path for changing a spec's requirements / acceptance criteria — pass an OpenSpec-style delta markdown (`## ADDED/MODIFIED/REMOVED Requirements` sections). Idempotent by content-hash id; MODIFIED/REMOVED target existing requirement slugs; demotes a reviewed spec back to draft. Malformed deltas return the full format in the error text.",
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id'),
-        delta: z
-          .string()
-          .describe(
-            'Delta markdown with ADDED/MODIFIED/REMOVED Requirements sections (OpenSpec subset)'
-          ),
+        delta: z.string().describe('OpenSpec-subset delta markdown'),
       }),
     },
     safeMcpCall(
       'prjct_spec_apply_delta',
       async (args: { projectPath: string; id: string; delta: string }) => {
-        const updated = await specService.applyDelta(
-          resolveProjectPath(args.projectPath),
-          args.id,
-          args.delta
-        )
-        if (!updated) {
-          return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
-        }
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `✓ delta applied: ${updated.title} (${updated.content.delta_log.length} delta(s) logged)`,
-            },
-          ],
+        try {
+          const updated = await specService.applyDelta(
+            resolveProjectPath(args.projectPath),
+            args.id,
+            args.delta
+          )
+          if (!updated) {
+            return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
+          }
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✓ delta applied: ${updated.title} (${updated.content.delta_log.length} delta(s) logged)`,
+              },
+            ],
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          // Parse/targeting failures get the full delta format inline — it
+          // lives here, not in the ListTools description (schema tax).
+          if (message.startsWith('DELTA_')) {
+            return {
+              content: [{ type: 'text', text: `Error: ${message}\n\n${DELTA_FORMAT_HELP}` }],
+              isError: true,
+            }
+          }
+          throw error
         }
       }
     )
@@ -269,7 +284,7 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_validate',
     {
       description:
-        "Validate a spec's stored structure BEFORE `prjct_spec_audit` / implementation. Errors (delta-model requirement without a SHALL-style statement or without GIVEN/WHEN/THEN scenarios; delta_log REMOVED targeting a requirement that never existed) block the audit dispatch under SDD strict mode. Warnings (legacy free-text acceptance criteria, scope paths that don't resolve in the project) are advisory. Pure read — never mutates the spec.",
+        "Validate a spec's stored structure BEFORE `prjct_spec_audit` / implementation. Errors (missing SHALL statement or GIVEN/WHEN/THEN scenarios; REMOVED targeting a nonexistent requirement) block audit dispatch under SDD strict mode; warnings are advisory. Pure read.",
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id'),
@@ -328,7 +343,7 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_audit',
     {
       description:
-        'Call before implementing a spec. Returns a dispatch prompt for the review specialists the spec raises — a DYNAMIC set (architecture is the floor; security/data/performance/design/strategic + any project DOMAIN experts join when the spec signals them). Run them IN PARALLEL (one Agent block per reviewer, same message). Persist each verdict via `prjct_spec_record_review`; all pass → spec auto-promotes draft → reviewed.',
+        'Call before implementing a spec. Returns a dispatch prompt for a DYNAMIC set of review specialists the spec signals (architecture is the floor; security/data/performance/design/strategic + DOMAIN experts join as signaled). Run them IN PARALLEL; persist each verdict via `prjct_spec_record_review` — all pass → auto-promotes draft → reviewed.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id to audit'),

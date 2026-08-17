@@ -153,11 +153,14 @@ export const LOCAL_EMBEDDING_MODEL = 'local-subword-v1'
 const LOCAL_DIM = 256
 const MAX_TOKENS = 800 // cap work on pathologically long entries
 
-/** FNV-1a 32-bit — small, fast, well-distributed string hash. */
+/** FNV-1a 32-bit — small, fast, well-distributed string hash. Indexes UTF-16
+ *  code units via charCodeAt (identical output to the old split('') walk) so
+ *  no per-call char arrays are allocated on the embedding hot path. */
 function fnv1a(str: string): number {
-  const h = str
-    .split('')
-    .reduce((hash, character) => Math.imul(hash ^ character.charCodeAt(0), 0x01000193), 0x811c9dc5)
+  const h = Array.from({ length: str.length }, (_, index) => str.charCodeAt(index)).reduce(
+    (hash, unit) => Math.imul(hash ^ unit, 0x01000193),
+    0x811c9dc5
+  )
   return h >>> 0
 }
 
@@ -263,7 +266,22 @@ function unpackVector(blob: Uint8Array): Float32Array {
   return new Float32Array(copy.buffer, copy.byteOffset, Math.floor(copy.byteLength / 4))
 }
 
-export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
+/** Any vector shape the scorers pass around: plain arrays from providers,
+ *  packed Float32 columns from SQLite, Float64 reference vectors. */
+export type NumericVector = readonly number[] | Float32Array | Float64Array
+
+/**
+ * Structural view that lets one reduce() implementation serve plain arrays
+ * and typed arrays alike — TS cannot call .reduce on the union directly
+ * (incompatible synthetic signatures), and a `for (const i of …)` index walk
+ * would need a mutable counter (const-only rule) plus an index-array alloc.
+ */
+type ReducibleVector = {
+  readonly length: number
+  reduce(cb: (total: number, value: number, index: number) => number, initial: number): number
+}
+
+export function cosineSimilarity(a: NumericVector, b: NumericVector): number {
   // Single-sourced over dot/l2Norm so a numeric fix (e.g. clamping) can
   // never diverge between this and the norm-cached semanticSearch path.
   const denom = l2Norm(a) * l2Norm(b)
@@ -276,18 +294,20 @@ interface EmbeddingRow {
   norm: number | null
 }
 
-function l2Norm(v: ArrayLike<number>): number {
-  const sum = Array.from({ length: v.length }, (_, index) => v[index]).reduce(
-    (total, value) => total + value * value,
-    0
-  )
-  return Math.sqrt(sum)
+function l2Norm(v: NumericVector): number {
+  // Native reduce over the vector itself: no intermediate Array.from alloc.
+  return Math.sqrt((v as ReducibleVector).reduce((total, value) => total + value * value, 0))
 }
 
-function dot(a: ArrayLike<number>, b: ArrayLike<number>): number {
+/**
+ * Dot product over the shared prefix (parity with the old min-length walk).
+ * Exported for callers holding L2-normalized vectors (retention reference
+ * index) where dot == cosine and the norms can be skipped entirely.
+ */
+export function dot(a: NumericVector, b: NumericVector): number {
   const n = Math.min(a.length, b.length)
-  return Array.from({ length: n }, (_, index) => a[index] * b[index]).reduce(
-    (total, value) => total + value,
+  return (a as ReducibleVector).reduce(
+    (total, value, index) => (index < n ? total + value * b[index]! : total),
     0
   )
 }

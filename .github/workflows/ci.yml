@@ -44,6 +44,11 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
+      # Shards below list test dirs by hand — fail fast when a new
+      # core/__tests__/<dir>/ isn't added to any shard.
+      - name: Test shard coverage
+        run: bun scripts/check-test-shards.ts
+
       - name: Knip (dead code detection)
         run: bun run knip --include files,duplicates,unlisted,binaries,unresolved
 

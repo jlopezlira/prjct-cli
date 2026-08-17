@@ -70,7 +70,7 @@ prjct-cli/
 └── scripts/        # Build and deploy scripts
 ```
 
-Deeper walkthrough: [`docs/architecture.md`](docs/architecture.md).
+Deeper walkthrough: [`docs/architecture.md`](docs/architecture.md) · Command reference (generated from the manifest): [`docs/commands.md`](docs/commands.md).
 
 ### Developer commands
 
@@ -84,6 +84,10 @@ Deeper walkthrough: [`docs/architecture.md`](docs/architecture.md).
 
 ### Code rules (CI-enforced)
 
+- **Const-only.** No `let` or `var` declarations anywhere in tracked `.ts`/`.js`
+  sources — enforced by `scripts/check-no-let.ts` (runs as part of
+  `bun run check`). Use `const` with immutable patterns; restructure with
+  early returns, ternaries, or derived objects when a value "needs" to change.
 - **No barrel files / re-exports.** Import from the source module.
 - **Schemas are source of truth.** Zod in `core/schemas/`, types via `z.infer`.
 - **All project data in SQLite** via storage modules — not legacy JSON state files.

@@ -81,8 +81,13 @@ export async function detectIncrementalChanges(
         }
       })()
 
-      // Commit new hashes AFTER determining diff.
-      saveHashes(projectId, currentHashes)
+      // Commit new hashes AFTER determining diff. Skip the DELETE-all +
+      // re-INSERT rewrite when nothing changed: currentHashes is content-
+      // identical to the stored registry, so persisting it would rewrite
+      // every row for zero effect.
+      if (totalChanged > 0) {
+        saveHashes(projectId, currentHashes)
+      }
       return result
     } catch (error) {
       log.debug('Incremental detection failed, falling back to full sync', {

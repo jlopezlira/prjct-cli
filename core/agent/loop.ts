@@ -5,6 +5,7 @@
  */
 
 import type { ChatMessage, ChatToolCall } from '../llm'
+import { recordTaskTokenUsage } from '../services/work-cost-service'
 import { defaultTools, getToolMap } from './tools'
 import {
   type AgentRunOptions,
@@ -14,6 +15,29 @@ import {
 } from './types'
 
 const DEFAULT_MAX_STEPS = 12
+
+/**
+ * Record the run's accumulated provider usage against the bound work cycle
+ * (SET semantics: one authoritative cumulative total per run). Fail-soft —
+ * usage may be absent (local providers) and telemetry never breaks the run.
+ */
+function recordRunUsage(
+  opts: AgentRunOptions,
+  usage: { tokensIn: number; tokensOut: number; model: string }
+): void {
+  if (!opts.projectId || !opts.taskId) return
+  if (usage.tokensIn + usage.tokensOut <= 0) return
+  try {
+    recordTaskTokenUsage(opts.projectId, opts.taskId, usage.tokensIn, usage.tokensOut, {
+      agent: 'prjct-agent',
+      model: usage.model || opts.provider.profile.model,
+      runtime: 'prjct',
+      source: 'agent-loop',
+    })
+  } catch {
+    /* measurement must never block the caller */
+  }
+}
 
 export function buildSystemPrompt(root: string, append?: string): string {
   const base = [
@@ -54,6 +78,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
   ]
 
   const runState = { toolCalls: 0, steps: 0 }
+  const usageTotal = { tokensIn: 0, tokensOut: 0, model: '' }
 
   try {
     for (const step of Array.from({ length: maxSteps }, (_, index) => index + 1)) {
@@ -67,6 +92,12 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
         max_tokens: 4096,
         timeoutMs: opts.timeoutMsPerGenerate,
       })
+
+      if (completion.usage) {
+        usageTotal.tokensIn += completion.usage.prompt_tokens ?? 0
+        usageTotal.tokensOut += completion.usage.completion_tokens ?? 0
+      }
+      if (completion.model) usageTotal.model = completion.model
 
       const calls = completion.tool_calls ?? []
       opts.onStep?.({
@@ -140,6 +171,8 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
       profile: profile.name,
       model: profile.model,
     }
+  } finally {
+    recordRunUsage(opts, usageTotal)
   }
 }
 

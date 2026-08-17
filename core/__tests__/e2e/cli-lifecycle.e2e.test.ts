@@ -60,6 +60,19 @@ describe('e2e: unconfigured project fails LOUD (regression)', () => {
     expect(out).not.toContain('inbox')
   })
 
+  // A near-typo of a real verb (edit distance ≤ 2) must surface the
+  // "Did you mean" hint from findClosestCommand — previously the bin typo
+  // path exited before ever consulting it.
+  test('a near-typo of a real verb suggests the intended command', async () => {
+    const r = await fixture.sb.cli(['wrok'])
+    const out = (r.stdout + r.stderr).toLowerCase()
+    expect(r.code).not.toBe(0)
+    expect(out).toContain('not a known command')
+    expect(out).toContain('did you mean `prjct work`?')
+    expect(out).not.toContain('captured')
+    expect(out).not.toContain('inbox')
+  })
+
   // Free-text GTD capture (multi-word, first token not a verb) stays silent
   // — the advisory is only for a LONE command-shaped token, so quick notes
   // aren't nagged.

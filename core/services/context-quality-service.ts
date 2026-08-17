@@ -46,7 +46,7 @@ export async function repairContextQuality(
   const retentionById: Map<string, { verdict: string; score: number }> | null = await import(
     './retention'
   )
-    .then(({ evaluateRetention }) => evaluateRetention(projectId, Date.now()).byId)
+    .then(({ evaluateRetentionShared }) => evaluateRetentionShared(projectId, Date.now()).byId)
     .catch(() => null)
 
   const repairIteration = async (
