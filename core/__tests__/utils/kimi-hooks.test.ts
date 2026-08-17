@@ -149,11 +149,6 @@ command = "prjct hook stop"
     // TOML-escaped quotes (\\") — unescape for assertions.
     const cmd = (commandLine ?? '').replace(/\\"/g, '"')
 
-    // The portable guarded fallback stays intact as the last stage.
-    expect(cmd).toContain('|| { command -v prjct')
-    expect(cmd).toContain('PRJCT_HOOK_HOST=kimi prjct hook stop')
-    expect(cmd).toContain('|| exit 0')
-
     const nativeBinPath = path.resolve(
       __dirname,
       '..',
@@ -174,11 +169,17 @@ command = "prjct hook stop"
       expect(cmd.indexOf('hook stop')).toBeLessThan(cmd.indexOf('command -v prjct'))
       expect(cmd.split('PRJCT_HOOK_HOST=kimi').length - 1).toBe(3)
     } else if (existsSync(shimPath)) {
+      // Direct runtime+shim, then the braced portable fallback.
+      expect(cmd).toContain('|| { command -v prjct')
+      expect(cmd).toContain('PRJCT_HOOK_HOST=kimi prjct hook stop')
+      expect(cmd).toContain('|| exit 0')
       expect(cmd.startsWith('command = "PRJCT_HOOK_HOST=kimi ')).toBe(true)
       expect(cmd.split('PRJCT_HOOK_HOST=kimi').length - 1).toBe(2)
     } else {
-      // No dist build → portable form only.
+      // No dist build (e.g. CI unit shard on a fresh checkout) → portable
+      // form only, no braced fallback stage.
       expect(cmd).toContain('command -v prjct >/dev/null 2>&1 && PRJCT_HOOK_HOST=kimi prjct hook')
+      expect(cmd).toContain('|| exit 0')
     }
   })
 })

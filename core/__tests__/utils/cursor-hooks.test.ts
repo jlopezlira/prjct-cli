@@ -102,11 +102,6 @@ describe('installCursorHooks', () => {
     }
     const cmd = body.hooks.stop[0]?.command ?? ''
 
-    // Portable guarded fallback stays intact as the last stage.
-    expect(cmd).toContain('|| { command -v prjct')
-    expect(cmd).toContain('PRJCT_HOOK_HOST=cursor prjct hook stop')
-    expect(cmd).toContain('|| exit 0')
-
     const nativeBinPath = path.resolve(
       __dirname,
       '..',
@@ -121,15 +116,23 @@ describe('installCursorHooks', () => {
       // Native first, then direct runtime+shim, then portable — the host env
       // rides in front of ALL THREE (the native binary forwards it to the
       // daemon as hookHost).
+      expect(cmd).toContain('|| { command -v prjct')
+      expect(cmd).toContain('PRJCT_HOOK_HOST=cursor prjct hook stop')
+      expect(cmd).toContain('|| exit 0')
       expect(cmd).toContain(`PRJCT_HOOK_HOST=cursor "${nativeBinPath}" stop`)
       expect(cmd.indexOf(`"${nativeBinPath}" stop`)).toBeLessThan(cmd.indexOf('hook stop'))
       expect(cmd.indexOf('hook stop')).toBeLessThan(cmd.indexOf('command -v prjct'))
       expect(cmd.split('PRJCT_HOOK_HOST=cursor').length - 1).toBe(3)
     } else if (existsSync(shimPath)) {
+      expect(cmd).toContain('|| { command -v prjct')
+      expect(cmd).toContain('PRJCT_HOOK_HOST=cursor prjct hook stop')
+      expect(cmd).toContain('|| exit 0')
       expect(cmd.startsWith('PRJCT_HOOK_HOST=cursor ')).toBe(true)
       expect(cmd.split('PRJCT_HOOK_HOST=cursor').length - 1).toBe(2)
     } else {
+      // No dist build (e.g. CI unit shard) → portable form only.
       expect(cmd).toContain('command -v prjct >/dev/null 2>&1 && PRJCT_HOOK_HOST=cursor prjct hook')
+      expect(cmd).toContain('|| exit 0')
     }
   })
 })
