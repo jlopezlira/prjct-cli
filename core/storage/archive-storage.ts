@@ -166,6 +166,7 @@ class ArchiveStorage {
       queue_task: 0,
       paused_task: 0,
       memory_entry: 0,
+      workspace_task: 0,
       total: 0,
     }
 

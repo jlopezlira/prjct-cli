@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.97.0] - 2026-08-17
+
+### Added
+- Nueva auditoria de eficiencia, DX y performance con mejora medida minima 30%
+
 ## [3.96.0] - 2026-08-16
 
 ### Added

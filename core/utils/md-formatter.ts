@@ -7,24 +7,16 @@
 
 import { getVersion } from './version'
 
-// Branding & Layout
-
-/** Branded header — single line, no emoji */
-function mdHeader(): string {
-  return '---'
-}
-
-/** Branded footer with version */
-function mdFooter(): string {
-  const version = getVersion()
-  return `---\nprjct v${version}`
-}
-
 // Output Wrapper
 
-/** Wrap any --md output with header and footer */
+/**
+ * Join --md sections into one payload — no branded header/footer (3 lines
+ * of pure noise per call; the contract above is zero filler). The version
+ * footer survives only under PRJCT_DEBUG for support debugging.
+ */
 export function mdOutput(...sections: (string | null | undefined | false)[]): string {
-  return mdJoin(mdHeader(), ...sections.filter(Boolean), mdFooter())
+  const body = mdJoin(...sections.filter(Boolean))
+  return process.env.PRJCT_DEBUG ? mdJoin(body, `---\nprjct v${getVersion()}`) : body
 }
 
 // Generic Utilities

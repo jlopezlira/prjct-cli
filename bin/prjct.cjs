@@ -326,6 +326,20 @@ async function runInProcess() {
     process.emitWarning = origEmit
     return false
   }
+  // V8 compile cache (node >=22.8): persists compiled bytecode for the core
+  // bundle + its code-split chunks across cold starts (~23% off --version,
+  // measured). Guarded because the node floor (22.5) predates
+  // enableCompileCache; on older node this is a no-op. Best-effort: an
+  // unwritable cache dir must never block the CLI.
+  try {
+    // NOTE: in CJS, bare `module` is the module wrapper, not node:module.
+    const nodeModule = require('node:module')
+    if (typeof nodeModule.enableCompileCache === 'function') {
+      nodeModule.enableCompileCache(path.join(CLI_HOME, 'cache', 'compile-cache'))
+    }
+  } catch {
+    /* best effort */
+  }
   try {
     // Resolves when the entry's top-level finishes; the entry keeps the event
     // loop alive (daemon socket / core fallback) and exits the process itself.

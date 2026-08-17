@@ -6,7 +6,13 @@
 
 // Archive Storage Types (from archive-storage.ts)
 
-export type ArchiveEntityType = 'shipped' | 'idea' | 'queue_task' | 'paused_task' | 'memory_entry'
+export type ArchiveEntityType =
+  | 'shipped'
+  | 'idea'
+  | 'queue_task'
+  | 'paused_task'
+  | 'memory_entry'
+  | 'workspace_task'
 
 export interface ArchiveRecord {
   id: string
@@ -32,6 +38,7 @@ export interface ArchiveStats {
   queue_task: number
   paused_task: number
   memory_entry: number
+  workspace_task: number
   total: number
 }
 

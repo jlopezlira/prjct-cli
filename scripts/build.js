@@ -84,12 +84,24 @@ async function buildJs() {
   const versionDefine = { 'process.env.PRJCT_VERSION': JSON.stringify(pkg.version) }
   console.log(`  → baking version ${pkg.version}`)
 
-  // 1a. CLI core bundle (heavy, only loaded when daemon unavailable)
-  console.log('  → dist/bin/prjct-core.mjs')
+  // 1a. CLI core bundle (heavy, only loaded when daemon unavailable).
+  // Code-split like the hooks bundle below: without splitting, esbuild
+  // inlines every dynamic import into ONE ~1.6MB file, so even `--version`
+  // / `--help` pay to compile the union of all commands. With splitting,
+  // lazily-imported command modules land in core-chunks/ and are only
+  // parsed when actually executed. The ENTRY still lands at
+  // dist/bin/prjct-core.mjs — the shim's `import("./prjct-core.mjs")`,
+  // mcp-config.ts's existence check, and hook-command.ts's sibling lookup
+  // all keep resolving unchanged.
+  console.log('  → dist/bin/prjct-core.mjs (split, chunks in core-chunks/)')
   const mainResult = await esbuild.build({
     entryPoints: [path.join(ROOT, 'bin/prjct.ts')],
-    outfile: path.join(DIST, 'bin', 'prjct-core.mjs'),
+    outdir: path.join(DIST, 'bin'),
+    entryNames: 'prjct-core',
+    chunkNames: 'core-chunks/[name]-[hash]',
+    outExtension: { '.js': '.mjs' },
     bundle: true,
+    splitting: true,
     platform: 'node',
     target: 'node18',
     format: 'esm',
@@ -353,8 +365,14 @@ function generateDaemonShim() {
   // execute via dist/bin/prjct.mjs). Any future change to the fallback
   // policy MUST update both this string and bin/prjct.ts + protocol.ts.
   return `#!/usr/bin/env node
-import{connect}from"node:net";import{existsSync,mkdirSync,readFileSync,readSync,statSync,unlinkSync,writeFileSync}from"node:fs";import{isatty}from"node:tty";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{dirname,join,resolve}from"node:path";import{spawn}from"node:child_process";
+import{connect}from"node:net";import{existsSync,mkdirSync,readFileSync,readSync,statSync,unlinkSync,writeFileSync}from"node:fs";import{isatty}from"node:tty";import{createHash,randomUUID}from"node:crypto";import{homedir}from"node:os";import{dirname,join,resolve}from"node:path";import{spawn}from"node:child_process";import module from"node:module";
 const cliHome=process.env.PRJCT_CLI_HOME?resolve(process.env.PRJCT_CLI_HOME):join(homedir(),".prjct-cli");
+// V8 compile cache (node >=22.8): persists compiled bytecode for the core
+// bundle + chunks across cold starts — measured ~23% off --version. Guarded
+// because the node floor (22.5) predates enableCompileCache; on older node
+// this is a no-op. Default-export import (not a named import) so the module
+// still links on versions that lack the export.
+try{if(typeof module.enableCompileCache==="function")module.enableCompileCache(join(cliHome,"cache","compile-cache"))}catch{}
 const namedPipe=process.platform==="win32";
 const sockPath=namedPipe?"\\\\.\\pipe\\prjct-"+createHash("sha1").update(resolve(cliHome)).digest("hex").slice(0,16)+"-daemon":join(cliHome,"run","daemon.sock");
 const hasEndpoint=()=>namedPipe||existsSync(sockPath);

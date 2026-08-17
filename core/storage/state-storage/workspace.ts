@@ -9,6 +9,7 @@
 
 import type { StateJson, TaskFeedback, TaskHistoryEntry, WorkspaceTask } from '../../schemas/state'
 import { getTimestamp } from '../../utils/date-helper'
+import { archiveStorage } from '../archive-storage'
 
 export interface WorkspaceBackend {
   read(projectId: string): Promise<StateJson>
@@ -116,6 +117,59 @@ export async function getActiveTasks(
 ): Promise<WorkspaceTask[]> {
   const state = await backend.read(projectId)
   return state.activeTasks || []
+}
+
+/**
+ * Archive zombie workspace tasks (their worktree path no longer exists).
+ * The caller decides WHICH workspaceIds are orphaned (collectActiveTasks
+ * cross-checks `git worktree list`); this does the atomic removal from
+ * activeTasks plus the archive-table persist — same persistence path as
+ * archiveStalePausedTasks, same reason 'staleness'.
+ */
+export async function archiveOrphanedWorkspaceTasks(
+  backend: WorkspaceBackend,
+  projectId: string,
+  workspaceIds: ReadonlySet<string>
+): Promise<WorkspaceTask[]> {
+  if (workspaceIds.size === 0) return []
+  const removedBatches: WorkspaceTask[][] = []
+
+  await backend.update(projectId, (state) => {
+    const active = state.activeTasks || []
+    const removed = active.filter((t) => workspaceIds.has(t.workspaceId))
+    removedBatches.push(removed)
+    if (removed.length === 0) return state
+    return {
+      ...state,
+      activeTasks: active.filter((t) => !workspaceIds.has(t.workspaceId)),
+      lastUpdated: getTimestamp(),
+    }
+  })
+
+  const removed = removedBatches[0] ?? []
+  if (removed.length === 0) return []
+
+  archiveStorage.archiveMany(
+    projectId,
+    removed.map((task) => ({
+      entityType: 'workspace_task' as const,
+      entityId: task.id,
+      entityData: task,
+      summary: task.description,
+      reason: 'staleness',
+    }))
+  )
+
+  for (const task of removed) {
+    await backend.publish(projectId, 'task.archived', {
+      taskId: task.id,
+      description: task.description,
+      workspaceId: task.workspaceId,
+      reason: 'staleness',
+    })
+  }
+
+  return removed
 }
 
 export async function getActiveTaskCount(
