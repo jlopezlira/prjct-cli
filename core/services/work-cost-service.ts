@@ -78,11 +78,56 @@ export interface WorkCostSnapshot {
   mostExpensive: WorkCostTask[]
   /** Per-model token spend in the window (from token_usage.model_id rows). */
   byModel: Array<{ model: string; tokensIn: number; tokensOut: number }>
+  /** Per-source spend — source encodes the host (claude-transcript,
+   *  codex-transcript, kimi-transcript, mcp, hook-injection:<host>, …). */
+  bySource: Array<{ source: string; tokensIn: number; tokensOut: number }>
   historicalRescue: HistoricalRescue
   gaps: string[]
 }
 
 export const TASK_TOKENS_EVENT = 'memory.task_tokens'
+
+/**
+ * Accumulate prjct-injected hook payload size for the active cycle, as an
+ * ESTIMATED token_usage row (`source = hook-injection:<host>`, chars/4).
+ * Additive upsert — unlike recordTaskTokenUsage's SET semantics, each turn
+ * contributes a delta, capped at the table's CHECK bound. This is what lets
+ * `prjct product cost` prove prjct's own context tax against the host totals
+ * without transcript archaeology. Never throws.
+ */
+export function recordHookEmissionChars(
+  projectId: string,
+  taskId: string | null | undefined,
+  chars: number,
+  host: string
+): void {
+  if (!taskId || chars <= 0) return
+  const tokens = Math.min(Math.round(chars / 4), TOKEN_COUNT_MAX)
+  if (tokens <= 0) return
+  try {
+    const source = `hook-injection:${host}`
+    const eventKey = `${taskId}:${source}`
+    const now = Date.now()
+    prjctDb.run(
+      projectId,
+      `INSERT INTO token_usage
+         (id, work_cycle_id, event_key, source, is_estimated, input_tokens, output_tokens, model_id, description, measured_at, created_at)
+       VALUES (?, ?, ?, ?, 1, ?, 0, NULL, 'prjct hook-injected context (chars/4 estimate)', ?, ?)
+       ON CONFLICT(event_key) DO UPDATE SET
+         input_tokens = MIN(token_usage.input_tokens + excluded.input_tokens, ${TOKEN_COUNT_MAX}),
+         measured_at = excluded.measured_at`,
+      eventKey,
+      taskId,
+      eventKey,
+      source,
+      tokens,
+      now,
+      now
+    )
+  } catch {
+    /* best-effort — attribution must never break a hook */
+  }
+}
 
 /** Must match token_usage's CHECK(input_tokens/output_tokens BETWEEN 0 AND …) in migrations.ts. */
 const TOKEN_COUNT_MAX = 10_000_000
@@ -458,6 +503,28 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
     }
   })()
 
+  // Per-host/source spend: source is the attribution axis the window-burn
+  // question actually needs ("which host is eating my subscription") — the
+  // data was always in token_usage.source, it was just never grouped.
+  const bySource: WorkCostSnapshot['bySource'] = (() => {
+    try {
+      return prjctDb
+        .query<{ source: string; t_in: number; t_out: number }>(
+          projectId,
+          `SELECT COALESCE(source, 'unknown') AS source,
+                SUM(input_tokens) AS t_in, SUM(output_tokens) AS t_out
+         FROM token_usage
+         WHERE measured_at >= ?
+         GROUP BY COALESCE(source, 'unknown')
+         ORDER BY t_in + t_out DESC`,
+          Date.parse(since)
+        )
+        .map((r) => ({ source: r.source, tokensIn: r.t_in, tokensOut: r.t_out }))
+    } catch {
+      return []
+    }
+  })()
+
   return {
     id: `work-cost-${days}d`,
     windowDays: days,
@@ -491,6 +558,7 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
     avgStartupMs: startup.average === null ? null : Math.round(startup.average),
     mostExpensive: measuredTasks.slice(0, 8),
     byModel,
+    bySource,
     historicalRescue: {
       inferredWorkCycles,
       taskTableCycles: taskRows.length,

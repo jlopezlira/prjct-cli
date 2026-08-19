@@ -68,6 +68,17 @@ class DoctorService {
     this.printSection('System Tools', result.tools)
     this.printSection('Project Status', result.project)
 
+    // Context tax: what each host re-sends per request (tool catalogs) and
+    // how big recent sessions ran — the real window-burn drivers surfaced
+    // where the user already looks. Fail-soft; skipped when no host logs.
+    try {
+      const { collectContextTax, contextTaxChecks } = await import('./context-tax')
+      const checks = contextTaxChecks(await collectContextTax())
+      if (checks.length > 0) this.printSection('Context Tax', checks)
+    } catch {
+      /* advisory section — never fails doctor */
+    }
+
     if (result.recommendations.length > 0) {
       this.printRecommendations(result.recommendations)
     }
