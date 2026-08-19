@@ -52,7 +52,11 @@ import { execFileAsync } from '../utils/exec'
 import { fileExists } from '../utils/file-helper'
 import { type HookIo, runHook } from './_runner'
 import { extractKeywords, safeTruncate } from './_shared'
-import { buildSessionContext, consumeKimiSessionInjection } from './session-start'
+import {
+  buildCompactReanchor,
+  buildSessionContext,
+  consumeKimiSessionInjection,
+} from './session-start'
 
 const STATE_BUDGET = 700
 /**
@@ -849,9 +853,11 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           skipHandoff: Boolean(kimiInjection),
         })
         const sessionContext = kimiInjection
-          ? await buildSessionContext(p, config, { digest: kimiInjection === 'digest' }).catch(
-              () => null
-            )
+          ? kimiInjection === 'reanchor'
+            ? await buildCompactReanchor(p, config).catch(() => null)
+            : await buildSessionContext(p, config, { digest: kimiInjection === 'digest' }).catch(
+                () => null
+              )
           : null
         if (!parts && !sessionContext) return null
         const sessionId = input.session_id ?? input.conversation_id

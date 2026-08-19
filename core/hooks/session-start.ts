@@ -11,23 +11,20 @@
  *   stdout: JSON { hookSpecificOutput: { hookEventName, additionalContext } }
  *   exit 0: success (even when nothing to inject — emits `{}` instead).
  *
- * # Cache stability
+ * # Cache stability vs suppression (delivery-gate doctrine)
  *
- * The output is also reused by `subagent-start` and `cwd-changed`, both
- * of which can fire mid-session. Anthropic's prompt cache hashes the
- * system-prompt prefix as a single block — every byte that changes
- * between turns invalidates the entire cached prefix and forces a full
- * re-tokenization at the un-cached input rate (10× cost).
- *
- * For that reason this hook is intentionally **bytes-identical given
- * the same persona**. An earlier version interpolated "Recent memory"
- * (the last 5 captured entries) into the body, which meant every
- * `prjct remember`, legacy inbox capture, or `prjct ship` between sessions
- * shifted the bytes and busted the cache on resume / cwd change /
- * subagent spawn. Per-turn topical recall already happens in the
- * UserPromptSubmit hook (`core/hooks/prompt.ts`) and on demand via
- * `prjct context memory <topic>` — that's the right place for
- * variable, prompt-relevant content.
+ * Byte-stability governs the CONTENT of any emitted block — never
+ * interpolate per-turn noise (an earlier version injected "Recent memory"
+ * and busted Anthropic's cached prefix on every capture). It never
+ * governed WHETHER to emit: suppressing a block removes bytes from the
+ * message stream, it does not mutate a stable one. So:
+ *   - `startup`/`clear` emit the full block (byte-stable) and stamp it.
+ *   - `compact` emits only a ≤300-char re-anchor — the host just SUMMARIZED
+ *     the full block; re-sending 4KB it already condensed is pure waste.
+ *   - `resume` emits nothing when this session was already grounded
+ *     (delivery-gate stamp), persona-only otherwise.
+ * The output is also reused by `subagent-start` and `cwd-changed`, both of
+ * which can fire mid-session — those stay persona-only and byte-identical.
  */
 
 import fs from 'node:fs/promises'
@@ -53,6 +50,11 @@ interface HookInput {
   source?: 'startup' | 'resume' | 'clear' | 'compact'
   session_id?: string
 }
+
+/** Delivery-gate marker: this session already received the grounding block. */
+const SESSION_GROUNDED_MARKER = 'session-start-delivered'
+/** Emitted chars per invocation, for the afterEmit context-tax accumulator. */
+const sessionStartEmitChars = new WeakMap<object, number>()
 
 interface SessionContextOptions {
   /**
@@ -559,19 +561,57 @@ function kimiSessionStampPath(
 
 /**
  * Read-and-consume the pending Kimi session injection. Returns what to
- * inject ('digest' = cold start, 'persona' = resume) or null when nothing
- * is pending. Exported for the prompt hook + tests.
+ * inject ('digest' = cold start, 'reanchor' = post-compact, 'persona' =
+ * resume) or null when nothing is pending. Exported for the prompt hook
+ * + tests.
  */
 export async function consumeKimiSessionInjection(
   projectId: string,
   sessionId: string | undefined,
   host: string = 'kimi'
-): Promise<'digest' | 'persona' | null> {
+): Promise<'digest' | 'persona' | 'reanchor' | null> {
   const stamp = kimiSessionStampPath(projectId, sessionId, host)
   const content = await fs.readFile(stamp, 'utf-8').catch(() => null)
   if (content === null) return null
   await fs.rm(stamp, { force: true }).catch(() => undefined)
-  return content.trim() === 'digest' ? 'digest' : 'persona'
+  const value = content.trim()
+  if (value === 'digest') return 'digest'
+  if (value === 'reanchor') return 'reanchor'
+  return 'persona'
+}
+
+/**
+ * Post-compact re-anchor: the host just summarized the whole conversation
+ * (prjct's grounding block included), so re-sending it is pure waste. Emit
+ * only what must survive verbatim: the land contract and the active cycle.
+ */
+export async function buildCompactReanchor(
+  projectPath: string,
+  preloadedConfig?: LocalConfig | null
+): Promise<string | null> {
+  const config = preloadedConfig ?? (await configManager.readConfig(projectPath).catch(() => null))
+  if (!config?.projectId) return null
+  const lines: string[] = ['# prjct: re-anchor (post-compact)']
+  try {
+    const { collectActiveTasks } = await import('../services/task-overview')
+    const overview = await collectActiveTasks(config.projectId, projectPath)
+    if (overview.current) {
+      lines.push(
+        `- Active cycle: "${overview.current.description}" · ${overview.current.id.slice(0, 8)}`
+      )
+    }
+  } catch {
+    /* best-effort */
+  }
+  try {
+    const { buildLandCue } = await import('../services/land-cue')
+    const cue = await buildLandCue(config.projectId, projectPath, config)
+    if (cue) lines.push(cue)
+  } catch {
+    /* best-effort */
+  }
+  if (lines.length === 1) return null
+  return safeTruncate(lines.join('\n'), 300)
 }
 
 /**
@@ -595,27 +635,62 @@ export function runSessionStartHook(
           p === projectPath
             ? await cachedConfig
             : await configManager.readConfig(p).catch(() => null)
-        // Cold-start sources rebuild context from scratch (no warm cache to
-        // bust) and are exactly when grounding matters — a resumed session
-        // still holds its context, so it stays persona-only for cache safety.
+        // Source routing (delivery-gate doctrine, header note): startup/clear
+        // rebuild context from scratch → full grounding block; compact just
+        // summarized that block → ≤300-char re-anchor; resume still holds its
+        // context → nothing (stamped) or persona-only (unstamped).
         const source = input.source ?? 'startup'
-        const digest = source === 'startup' || source === 'clear' || source === 'compact'
+        const digest = source === 'startup' || source === 'clear'
         // Kimi's SessionStart never reaches the model (observation-only) —
         // park the payload for the prompt hook's first-turn injection and
         // emit nothing here (see kimiSessionStampPath above).
         if (host === 'kimi') {
           if (config?.projectId) {
             const stamp = kimiSessionStampPath(config.projectId, input.session_id, host)
+            const parked = source === 'compact' ? 'reanchor' : digest ? 'digest' : 'persona'
             await fs
               .mkdir(path.dirname(stamp), { recursive: true })
-              .then(() => fs.writeFile(stamp, digest ? 'digest' : 'persona'))
+              .then(() => fs.writeFile(stamp, parked))
               .catch(() => undefined)
           }
           return null
         }
-        return buildSessionContext(p, config, { digest })
+        const emitted = await (async (): Promise<string | null> => {
+          if (source === 'compact') return buildCompactReanchor(p, config)
+          if (source === 'resume') {
+            if (!config?.projectId) return buildSessionContext(p, config, {})
+            const { gateDelivery } = await import('../services/session-context-cache')
+            // Marker stamp: "this session was already grounded once". Written
+            // at startup below; a resume that finds it emits nothing, a
+            // resume without it (stamp GC'd, session began elsewhere) falls
+            // back to persona-only.
+            const gate = await gateDelivery({
+              projectId: config.projectId,
+              projectPath: p,
+              sessionId: input.session_id,
+              surface: 'session-start',
+              content: SESSION_GROUNDED_MARKER,
+            })
+            return gate.suppressed ? null : buildSessionContext(p, config, {})
+          }
+          const full = await buildSessionContext(p, config, { digest })
+          if (full && config?.projectId && input.session_id) {
+            const { gateDelivery } = await import('../services/session-context-cache')
+            await gateDelivery({
+              projectId: config.projectId,
+              projectPath: p,
+              sessionId: input.session_id,
+              surface: 'session-start',
+              content: SESSION_GROUNDED_MARKER,
+              full: true,
+            })
+          }
+          return full
+        })()
+        if (emitted) sessionStartEmitChars.set(input as object, emitted.length)
+        return emitted
       },
-      afterEmit: async (_input, p) => {
+      afterEmit: async (_input, p, host) => {
         const config = await cachedConfig
         if (config?.projectId) {
           const activeTask = await (async (): Promise<{
@@ -640,6 +715,22 @@ export function runSessionStartHook(
             taskId: activeTask.taskId,
             goal: activeTask.goal,
           })
+          // Context-tax attribution for the grounding block itself.
+          const chars = sessionStartEmitChars.get(_input as object) ?? 0
+          if (chars > 0 && activeTask.taskId) {
+            try {
+              const { recordHookEmissionChars } = await import('../services/work-cost-service')
+              recordHookEmissionChars(
+                config.projectId,
+                activeTask.taskId,
+                chars,
+                host ?? 'claude',
+                'session-start'
+              )
+            } catch {
+              /* telemetry only */
+            }
+          }
         }
 
         // Self-heal hooks + global CLAUDE.md when the binary moved past the
