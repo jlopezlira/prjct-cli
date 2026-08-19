@@ -17,7 +17,12 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { measureListTools, replayWeighted, simulateSession } from '../../services/token-cost-bench'
+import {
+  measureListTools,
+  replayWeighted,
+  simulateHarnessSession,
+  simulateSession,
+} from '../../services/token-cost-bench'
 
 afterEach(() => {
   delete process.env.PRJCT_MCP_TOOLS
@@ -36,6 +41,18 @@ describe('token-cost bench (release ceilings)', () => {
     // 4,996-char core baseline × 0.65 ≈ 3,250 — the ≥35% claim stays proven.
     expect(lean.totalChars).toBeLessThanOrEqual(3_250)
   })
+
+  it('full-harness simulation measures every surface (smoke)', async () => {
+    const cost = await simulateHarnessSession('claude', 10)
+    expect(cost.turns).toBe(10)
+    expect(cost.sessionStart.startupChars).toBeGreaterThan(0)
+    expect(cost.prompt.perTurnChars.length).toBe(10)
+    expect(cost.preSearch.events).toBe(5)
+    expect(cost.preEdit.events).toBe(3)
+    expect(cost.mcp.events).toBeGreaterThanOrEqual(2)
+    expect(cost.totalChars).toBeGreaterThan(0)
+    expect(cost.totalCharCalls).toBeGreaterThan(cost.totalChars)
+  }, 120_000)
 
   it('50-turn kimi session holds the delta-emission cut', async () => {
     const session = await simulateSession('kimi', 50)
