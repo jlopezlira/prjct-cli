@@ -1209,6 +1209,20 @@ function formatCostMd(snapshot: WorkCostSnapshot): string {
     }
     lines.push('')
   }
+  if (snapshot.bySource.length > 0) {
+    lines.push(
+      '## By Host/Source',
+      '',
+      '| Source | Input | Output | Total |',
+      '|---|---:|---:|---:|'
+    )
+    for (const s of snapshot.bySource) {
+      lines.push(
+        `| ${s.source} | ${s.tokensIn.toLocaleString()} | ${s.tokensOut.toLocaleString()} | ${(s.tokensIn + s.tokensOut).toLocaleString()} |`
+      )
+    }
+    lines.push('')
+  }
   lines.push(...formatNetSavingsMd(snapshot))
   lines.push('## Historical Rescue', '', '| Signal | Value |', '|---|---:|')
   lines.push(`| Inferred work cycles | ${snapshot.historicalRescue.inferredWorkCycles} |`)

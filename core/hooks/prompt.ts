@@ -47,6 +47,7 @@ import {
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
+import { recordHookEmissionChars } from '../services/work-cost-service'
 import { prjctDb } from '../storage/database'
 import { instructionFailureStorage } from '../storage/instruction-failure-storage'
 import { queueStorage } from '../storage/queue-storage'
@@ -114,6 +115,9 @@ interface PromptAfterEmit {
   bumpTurn: boolean
   surfacedIds: string[]
   guidanceRuleId: string | null
+  /** Chars of the payload actually emitted this turn (0 = suppressed/deduped)
+   *  — accumulated into token_usage as prjct's own context-tax estimate. */
+  emittedChars: number
 }
 
 const promptAfterEmit = new WeakMap<object, PromptAfterEmit>()
@@ -662,7 +666,12 @@ async function readPersistedPromptAfterEmit(
     const record = parsed.record
     if (!record || parsed.hash !== emittedHash.trim()) return null
     if (record.projectId !== projectId || !Array.isArray(record.surfacedIds)) return null
-    return record
+    // Records persisted by older versions lack emittedChars — normalize so
+    // the context-tax accumulator never sees undefined.
+    return {
+      ...record,
+      emittedChars: typeof record.emittedChars === 'number' ? record.emittedChars : 0,
+    }
   } catch {
     return null
   }
@@ -824,6 +833,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
             ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
           ],
           guidanceRuleId,
+          emittedChars: 0,
         }
         // Non-caching hosts (Kimi/Codex) re-pay every injected byte on every
         // subsequent API call, so the state block re-emits only on MATERIAL
@@ -856,7 +866,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           // surfacedIds/guidanceRuleId. bumpTurn still advances every prompt
           // (the loop guard counts turns, not emissions).
           const record: PromptAfterEmit = emitted
-            ? afterEmitRecord
+            ? { ...afterEmitRecord, emittedChars: emitted.length }
             : { ...afterEmitRecord, surfacedIds: [], guidanceRuleId: null }
           promptAfterEmit.set(input as object, record)
           await persistPromptAfterEmit(config.projectId, p, emitted ?? '', record)
@@ -867,14 +877,19 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           await writePromptStateStamp(config.projectId, p, emitted ?? '')
           return emitted
         }
-        promptAfterEmit.set(input as object, afterEmitRecord)
+        // Resolve the dedupe BEFORE building the record so emittedChars
+        // reflects what the model actually received (0 when deduped) —
+        // payload bytes and dedupe behavior stay byte-identical for Claude.
+        const deduped = await dedupePromptPayload(config.projectId, p, prioritized)
+        const record: PromptAfterEmit = { ...afterEmitRecord, emittedChars: deduped?.length ?? 0 }
+        promptAfterEmit.set(input as object, record)
         // Hand the record to the cold path's detached afterEmit worker (a
         // separate process — the WeakMap above is empty there) so it never
         // recomputes the whole prompt build to recover surfacedIds/bumpTurn.
-        await persistPromptAfterEmit(config.projectId, p, prioritized, afterEmitRecord)
-        return dedupePromptPayload(config.projectId, p, prioritized)
+        await persistPromptAfterEmit(config.projectId, p, prioritized, record)
+        return deduped
       },
-      afterEmit: async (input, p) => {
+      afterEmit: async (input, p, host) => {
         const pending =
           promptAfterEmit.get(input as object) ?? (await rebuildPromptAfterEmit(input, p))
         promptAfterEmit.delete(input as object)
@@ -896,6 +911,17 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                   ruleId: pending.guidanceRuleId,
                 })
               ).then(() => undefined)
+            : Promise.resolve(),
+          // prjct's own context tax, accumulated per active cycle so
+          // `prjct product cost` can prove it against host totals. Only
+          // meaningful with an active cycle (token_usage is cycle-keyed).
+          pending.emittedChars > 0
+            ? stateStorage
+                .getCurrentTask(pending.projectId)
+                .then((task) =>
+                  recordHookEmissionChars(pending.projectId, task?.id, pending.emittedChars, host)
+                )
+                .catch(() => undefined)
             : Promise.resolve(),
         ])
       },
@@ -935,5 +961,8 @@ async function rebuildPromptAfterEmit(
       ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
     ],
     guidanceRuleId,
+    // Recomputed fallback can't know what was actually emitted — record no
+    // context tax rather than a guess (the fast path carries the real size).
+    emittedChars: 0,
   }
 }
