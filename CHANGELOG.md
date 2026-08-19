@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.98.0] - 2026-08-19
+
+### Added
+- Reduce prjct token consumption for non-caching hosts (Kimi/Codex): session context cache, lean MCP tier, delta hook emission — target: usage windows last >=50% longer
+
 ## [3.97.0] - 2026-08-17
 
 ### Added
