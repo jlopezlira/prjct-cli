@@ -136,15 +136,24 @@ function resolveLocalPrjctBin(): string | null {
 }
 
 /**
- * prjct preset pinned to the lean tool tier — for non-caching hosts
- * (Kimi/Codex) that re-pay the MCP catalog on EVERY API call. Same command,
- * only the tier env differs. NOTE: the baked env wins over any shell-level
- * PRJCT_MCP_TOOLS export; to raise the tier, edit the env value inside the
- * host's server entry (kimi mcp.json / codex config.toml managed block).
+ * prjct preset pinned to the lean tool tier. NOTE: the baked env wins over
+ * any shell-level PRJCT_MCP_TOOLS export; to raise the tier, edit the env
+ * value inside the host's server entry (kimi mcp.json / codex config.toml
+ * managed block).
  */
 export function getPrjctLeanMcpConfig(): MCPServerConfig {
   const base = MCP_SERVER_PRESETS.prjct
   return { ...base, env: { ...(base.env ?? {}), PRJCT_MCP_TOOLS: 'lean' } }
+}
+
+/**
+ * prjct preset pinned to the micro tier (ONE dispatch tool, <800-char
+ * catalog) — the default for non-caching hosts (Kimi/Codex) that re-pay
+ * the MCP catalog on EVERY API call. Rollback: set the env to 'lean'.
+ */
+export function getPrjctMicroMcpConfig(): MCPServerConfig {
+  const base = MCP_SERVER_PRESETS.prjct
+  return { ...base, env: { ...(base.env ?? {}), PRJCT_MCP_TOOLS: 'micro' } }
 }
 
 export const MCP_SERVER_PRESETS: Record<'context7' | 'linear' | 'jira' | 'prjct', MCPServerConfig> =

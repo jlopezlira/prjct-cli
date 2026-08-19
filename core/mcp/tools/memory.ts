@@ -284,7 +284,11 @@ export function registerMemoryTools(
             content: [{ type: 'text', text: `No preventive memory for ${base} — clear to edit.` }],
           }
         }
-        return { content: [{ type: 'text', text: formatMemoryMd(hits, { boundary: 'llm' }) }] }
+        // SAME ledger scope as mem_list/mem_similar: a trap already delivered
+        // by either surface collapses to a one-line ref here and vice versa.
+        return {
+          content: [{ type: 'text', text: formatRecallWithLedger(`mem:${projectId}`, hits, {}) }],
+        }
       }
     )
   )

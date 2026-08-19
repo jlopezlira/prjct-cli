@@ -10,6 +10,7 @@ import { findRelevantFiles } from '../../tools/context/files-tool'
 import { extractSignatures } from '../../tools/context/signatures-tool'
 import { boundedLimit, optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
 import { safeMcpCall } from './error-handler'
+import { gatedTextResult } from './gated-result'
 
 // MCP SDK TS2589 workaround: cast server to avoid deep type instantiation
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -27,11 +28,12 @@ export function registerFileTools(server: McpServer) {
         projectPath: optionalProjectPath,
         query: z.string().describe('Task or query to find relevant files for'),
         maxFiles: boundedLimit(10, 25).describe('Max files to return'),
+        full: z.boolean().optional(),
       }),
     },
     safeMcpCall(
       'prjct_relevant_files',
-      async (args: { projectPath: string; query: string; maxFiles: number }) => {
+      async (args: { projectPath: string; query: string; maxFiles: number; full?: boolean }) => {
         // Prefer unified work-scope (memory vector/FTS + index + graph).
         try {
           const projectId = await resolveProjectId(args.projectPath)
@@ -46,21 +48,21 @@ export function registerFileTools(server: McpServer) {
               args.maxFiles
             )
             if (scope.files.length > 0) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: [
-                      formatWorkScopeBlock(scope.files, {
-                        indexesReady: scope.indexesReady,
-                        memorySeeds: scope.sources.memorySeeds,
-                      }),
-                      '',
-                      `_sources: memorySeeds=${scope.sources.memorySeeds} indexHits=${scope.sources.indexHits} graphNeighbors=${scope.sources.graphNeighbors}_`,
-                    ].join('\n'),
-                  },
-                ],
-              }
+              const text = [
+                formatWorkScopeBlock(scope.files, {
+                  indexesReady: scope.indexesReady,
+                  memorySeeds: scope.sources.memorySeeds,
+                }),
+                '',
+                `_sources: memorySeeds=${scope.sources.memorySeeds} indexHits=${scope.sources.indexHits} graphNeighbors=${scope.sources.graphNeighbors}_`,
+              ].join('\n')
+              // Only identical repeat calls (same query/args) collapse.
+              const { createHash } = await import('node:crypto')
+              const argsKey = createHash('sha1')
+                .update(`${args.query}\0${args.maxFiles}`)
+                .digest('hex')
+                .slice(0, 10)
+              return gatedTextResult(projectId, `relevant:${argsKey}`, text, args.full)
             }
           }
         } catch {

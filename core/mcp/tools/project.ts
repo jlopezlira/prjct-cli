@@ -23,6 +23,7 @@ import llmAnalysisStorage from '../../storage/llm-analysis-storage'
 import { queueStorage } from '../../storage/queue-storage'
 import { optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
 import { safeMcpCall } from './error-handler'
+import { gatedTextResult } from './gated-result'
 
 // MCP SDK TS2589 workaround: cast server to avoid deep type instantiation
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,9 +54,10 @@ export function registerProjectTools(
           'session/prompt hooks; pull it only for crash recovery or cross-checking.',
         inputSchema: z.object({
           projectPath: optionalProjectPath,
+          full: z.boolean().optional(),
         }),
       },
-      safeMcpCall('prjct_session_resume', async (args: { projectPath: string }) => {
+      safeMcpCall('prjct_session_resume', async (args: { projectPath: string; full?: boolean }) => {
         const projectId = await resolveProjectId(args.projectPath)
         const overview = await collectActiveTasks(projectId, resolveProjectPath(args.projectPath))
         const { loadSessionContinuity, loadLastSessionCloseContent, formatSessionResumeCard } =
@@ -85,7 +87,7 @@ export function registerProjectTools(
           sessionCloseContent: loadLastSessionCloseContent(projectId),
           pendingHandoffCue,
         })
-        return { content: [{ type: 'text', text: md }] }
+        return gatedTextResult(projectId, 'session-resume', md, args.full)
       })
     )
 
@@ -262,12 +264,17 @@ export function registerProjectTools(
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         mode: z.enum(['active', 'archive']).optional(),
+        full: z.boolean().optional(),
       }),
     },
     safeMcpCall(
       'prjct_analysis',
-      async (args: { projectPath: string; mode?: 'active' | 'archive' }) => {
+      async (args: { projectPath: string; mode?: 'active' | 'archive'; full?: boolean }) => {
         const projectId = await resolveProjectId(args.projectPath)
+        // Analysis changes only on `prjct sync` — a repeated identical call
+        // collapses to a one-line pointer; full:true re-fetches and unbounds.
+        const gated = (text: string): Promise<Awaited<ReturnType<typeof gatedTextResult>>> =>
+          gatedTextResult(projectId, `analysis:${args.mode ?? 'active'}`, text, args.full)
 
         if (args.mode === 'archive') {
           // Bounded by construction: the archive scales with project age, so
@@ -286,7 +293,7 @@ export function registerProjectTools(
           }
           const older = archive.total - archive.entries.length
           if (older > 0) lines.push(`\n_…${older} older superseded analyses (archived in vault)._`)
-          return { content: [{ type: 'text', text: lines.join('\n') }] }
+          return gated(lines.join('\n'))
         }
 
         // C3: read the synthesis as RELATIONAL records (no blob parse) when
@@ -302,12 +309,20 @@ export function registerProjectTools(
             if (langs.length) out.push(`Languages: ${langs.join(', ')}`)
             if (fws.length) out.push(`Frameworks: ${fws.join(', ')}`)
           }
+          // Bounded by default (full:true unbounds): findings scale with
+          // project age and an unbounded dump re-paid the whole synthesis
+          // on every call.
+          const findingsCap = args.full ? Number.POSITIVE_INFINITY : 8
+          const listCap = (n: number): number => (args.full ? Number.POSITIVE_INFINITY : n)
           const byKind = (k: string) => rel.findings.filter((f) => f.kind === k)
           const section = (label: string, kind: string) => {
             const items = byKind(kind)
             if (!items.length) return
             out.push(`\n### ${label} (${items.length})`)
-            for (const f of items) out.push(`- **${f.title}**${f.detail ? `: ${f.detail}` : ''}`)
+            for (const f of items.slice(0, findingsCap))
+              out.push(`- **${f.title}**${f.detail ? `: ${f.detail}` : ''}`)
+            if (items.length > findingsCap)
+              out.push(`- _…+${items.length - findingsCap} more (full:true)_`)
           }
           section('Patterns', 'pattern')
           section('Anti-Patterns', 'anti_pattern')
@@ -316,13 +331,18 @@ export function registerProjectTools(
           section('Insights', 'insight')
           if (rel.conventions.length) {
             out.push(`\n### Conventions (${rel.conventions.length})`)
-            for (const c of rel.conventions) out.push(`- ${c}`)
+            for (const c of rel.conventions.slice(0, listCap(10))) out.push(`- ${c}`)
+            if (rel.conventions.length > listCap(10))
+              out.push(`- _…+${rel.conventions.length - 10} more (full:true)_`)
           }
           if (rel.commands.length) {
             out.push(`\n### Commands (${rel.commands.length})`)
-            for (const c2 of rel.commands) out.push(`- **${c2.name}**: \`${c2.command}\``)
+            for (const c2 of rel.commands.slice(0, listCap(12)))
+              out.push(`- **${c2.name}**: \`${c2.command}\``)
+            if (rel.commands.length > listCap(12))
+              out.push(`- _…+${rel.commands.length - 12} more (full:true)_`)
           }
-          return { content: [{ type: 'text', text: out.join('\n') }] }
+          return gated(out.join('\n'))
         }
 
         const analysis = llmAnalysisStorage.getActive(projectId)
@@ -384,7 +404,7 @@ export function registerProjectTools(
           for (const i2 of insights) parts.push(`- ${i2}`)
         }
 
-        return { content: [{ type: 'text', text: parts.join('\n') }] }
+        return gated(parts.join('\n'))
       }
     )
   )
@@ -457,9 +477,9 @@ export function registerProjectTools(
       {
         description:
           'Synthesized developer profile (feedback + friction). Act as this developer would.',
-        inputSchema: z.object({ projectPath: optionalProjectPath }),
+        inputSchema: z.object({ projectPath: optionalProjectPath, full: z.boolean().optional() }),
       },
-      safeMcpCall('prjct_developer', async (args: { projectPath?: string }) => {
+      safeMcpCall('prjct_developer', async (args: { projectPath?: string; full?: boolean }) => {
         const projectId = await resolveProjectId(args.projectPath)
         const { projectMemory } = await import('../../memory/project-memory')
         const { buildDeveloperProfile } = await import('../../services/developer-profile')
@@ -470,7 +490,7 @@ export function registerProjectTools(
         const text =
           [body, evolution].filter(Boolean).join('\n\n') ||
           'No developer profile yet — capture `feedback` memories as preferences emerge.'
-        return { content: [{ type: 'text', text }] }
+        return gatedTextResult(projectId, 'developer', text, args.full)
       })
     )
 
@@ -494,19 +514,20 @@ export function registerProjectTools(
       'prjct_skills',
       {
         description: 'Skill index: name + description + EXACT SKILL.md path for subagent dispatch.',
-        inputSchema: z.object({ projectPath: optionalProjectPath }),
+        inputSchema: z.object({ projectPath: optionalProjectPath, full: z.boolean().optional() }),
       },
-      safeMcpCall('prjct_skills', async (args: { projectPath?: string }) => {
+      safeMcpCall('prjct_skills', async (args: { projectPath?: string; full?: boolean }) => {
         const path = resolveProjectPath(args.projectPath)
         const projectId = await resolveProjectId(path)
         const { refreshSkillIndex, renderSkillIndex } = await import('../../services/skill-index')
         await refreshSkillIndex(projectId, path)
         const body = renderSkillIndex(projectId)
-        return {
-          content: [
-            { type: 'text', text: body ?? 'No skills found in project or global skill roots.' },
-          ],
-        }
+        return gatedTextResult(
+          projectId,
+          'skills',
+          body ?? 'No skills found in project or global skill roots.',
+          args.full
+        )
       })
     )
 
@@ -515,12 +536,18 @@ export function registerProjectTools(
       {
         description:
           'Verified-only per-project facts: stack line + real test/lint/build commands (never guessed). Live — no write.',
-        inputSchema: z.object({ projectPath: optionalProjectPath }),
+        inputSchema: z.object({ projectPath: optionalProjectPath, full: z.boolean().optional() }),
       },
-      safeMcpCall('prjct_project_facts', async (args: { projectPath?: string }) => {
+      safeMcpCall('prjct_project_facts', async (args: { projectPath?: string; full?: boolean }) => {
         const path = resolveProjectPath(args.projectPath)
+        const projectId = await resolveProjectId(path)
         const { formatProjectFactsMd } = await import('../../services/prjct-md')
-        return { content: [{ type: 'text', text: await formatProjectFactsMd(path) }] }
+        return gatedTextResult(
+          projectId,
+          'project-facts',
+          await formatProjectFactsMd(path),
+          args.full
+        )
       })
     )
 
@@ -528,11 +555,13 @@ export function registerProjectTools(
       'prjct_context_tiers',
       {
         description: 'Context cache tiers L0–L3 + live L0 budget. Never stuff L2 into L0.',
-        inputSchema: z.object({ projectPath: optionalProjectPath }),
+        inputSchema: z.object({ projectPath: optionalProjectPath, full: z.boolean().optional() }),
       },
-      safeMcpCall('prjct_context_tiers', async () => {
+      safeMcpCall('prjct_context_tiers', async (args: { projectPath?: string; full?: boolean }) => {
+        const projectId = await resolveProjectId(args.projectPath)
         const { formatContextTiersMd } = await import('../../services/context-tiers')
-        return { content: [{ type: 'text', text: formatContextTiersMd() }] }
+        // Fully static constant — the single worst repeat offender.
+        return gatedTextResult(projectId, 'context-tiers', formatContextTiersMd(), args.full)
       })
     )
 

@@ -27,7 +27,12 @@ import { runSessionStartHook } from '../hooks/session-start'
 import { runSubagentStartHook } from '../hooks/subagent-start'
 import configManager from '../infrastructure/config-manager'
 import pathManager from '../infrastructure/path-manager'
-import { createServer, PRJCT_INSTRUCTIONS, PRJCT_INSTRUCTIONS_LEAN } from '../mcp/server'
+import {
+  createServer,
+  PRJCT_INSTRUCTIONS,
+  PRJCT_INSTRUCTIONS_LEAN,
+  PRJCT_INSTRUCTIONS_MICRO,
+} from '../mcp/server'
 import { projectMemory } from '../memory/project-memory'
 import prjctDb from '../storage/database'
 import llmAnalysisStorage from '../storage/llm-analysis-storage'
@@ -100,7 +105,11 @@ export function measureListTools(tier: string): ListToolsCost {
       { descriptionChars: 0, schemaChars: 0 }
     )
     const instructionChars =
-      tier === 'lean' ? PRJCT_INSTRUCTIONS_LEAN.length : PRJCT_INSTRUCTIONS.length
+      tier === 'micro'
+        ? PRJCT_INSTRUCTIONS_MICRO.length
+        : tier === 'lean'
+          ? PRJCT_INSTRUCTIONS_LEAN.length
+          : PRJCT_INSTRUCTIONS.length
     return {
       tier,
       toolCount: Object.keys(tools).length,
@@ -267,9 +276,9 @@ export function replayWeighted(session: SessionCost, listTools: ListToolsCost): 
   }
 }
 
-/** Tier per host profile: non-caching hosts install with the lean tier. */
+/** Tier per host profile: non-caching hosts install with the micro tier. */
 export function tierForHost(host: HookHost): string {
-  return host === 'kimi' || host === 'codex' ? 'lean' : 'core'
+  return host === 'kimi' || host === 'codex' ? 'micro' : 'core'
 }
 
 export async function runTokenCostBench(turns: number = SESSION_TURNS): Promise<TokenCostReport> {
@@ -439,29 +448,54 @@ function mcpResultChars(result: unknown): number {
   return content.reduce((sum, item) => sum + (item.text?.length ?? 0), 0)
 }
 
-/** Deterministic MCP call schedule: tools available in EVERY tier. */
+/** Deterministic MCP call schedule: verbs available in EVERY tier
+ *  (direct tools on lean/core, dispatched through `prjct` on micro). */
 const MCP_SCHEDULE: ReadonlyArray<{
   turn: number
   tool: string
-  args: (f: SessionFixture) => unknown
+  verb: string
+  args: (f: SessionFixture) => Record<string, unknown>
 }> = [
-  { turn: 5, tool: 'prjct_analysis', args: (f) => ({ projectPath: f.projectPath }) },
+  {
+    turn: 5,
+    tool: 'prjct_analysis',
+    verb: 'analysis',
+    args: (f) => ({ projectPath: f.projectPath }),
+  },
   {
     turn: 8,
     tool: 'prjct_mem_list',
+    verb: 'mem_list',
     args: (f) => ({ projectPath: f.projectPath, topic: 'auth token refresh' }),
   },
-  { turn: 12, tool: 'prjct_guard', args: (f) => ({ projectPath: f.projectPath, file: 'app.ts' }) },
+  {
+    turn: 12,
+    tool: 'prjct_guard',
+    verb: 'guard',
+    args: (f) => ({ projectPath: f.projectPath, file: 'app.ts' }),
+  },
   {
     turn: 20,
     tool: 'prjct_mem_list',
+    verb: 'mem_list',
     args: (f) => ({ projectPath: f.projectPath, topic: 'auth token refresh' }),
   },
-  { turn: 30, tool: 'prjct_analysis', args: (f) => ({ projectPath: f.projectPath }) },
-  { turn: 36, tool: 'prjct_guard', args: (f) => ({ projectPath: f.projectPath, file: 'app.ts' }) },
+  {
+    turn: 30,
+    tool: 'prjct_analysis',
+    verb: 'analysis',
+    args: (f) => ({ projectPath: f.projectPath }),
+  },
+  {
+    turn: 36,
+    tool: 'prjct_guard',
+    verb: 'guard',
+    args: (f) => ({ projectPath: f.projectPath, file: 'app.ts' }),
+  },
   {
     turn: 40,
     tool: 'prjct_mem_list',
+    verb: 'mem_list',
     args: (f) => ({ projectPath: f.projectPath, topic: 'auth token refresh' }),
   },
 ]
@@ -580,10 +614,12 @@ export async function simulateHarnessSession(
       }
 
       for (const call of MCP_SCHEDULE.filter((c) => c.turn === turn && c.turn <= turns)) {
-        const tool = server._registeredTools?.[call.tool]
+        const micro = tierForHost(host) === 'micro'
+        const tool = server._registeredTools?.[micro ? 'prjct' : call.tool]
         if (!tool?.handler) continue
         mcp.events += 1
-        const chars = mcpResultChars(await tool.handler(call.args(fixture), {}).catch(() => null))
+        const callArgs = micro ? { verb: call.verb, args: call.args(fixture) } : call.args(fixture)
+        const chars = mcpResultChars(await tool.handler(callArgs, {}).catch(() => null))
         if (chars > 0) mcp.emitted += 1
         mcp.chars += chars
         ride(chars, turn)
