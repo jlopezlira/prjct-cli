@@ -427,7 +427,7 @@ function buildKnowledgeDigest(projectId: string): string | null {
   return safeTruncate(lines.join('\n'), DIGEST_MAX_CHARS)
 }
 
-const SUBAGENT_DIGEST_MAX_CHARS = 500
+const SUBAGENT_DIGEST_MAX_CHARS = 350
 const SUBAGENT_GOTCHA_COUNT = 2
 
 /**

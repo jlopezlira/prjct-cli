@@ -6,7 +6,9 @@
  * advisory package message are combined into one context payload.
  */
 
+import configManager from '../infrastructure/config-manager'
 import { broadProcessTerminationDenial } from '../services/instruction-guidance'
+import { gateDelivery } from '../services/session-context-cache'
 import { type HookIo, runHook } from './_runner'
 import { buildPreCommitContext, type CommitHookInput, isCommitInput } from './pre-commit'
 import {
@@ -73,11 +75,28 @@ export function runPreBashHook(projectPath: string = process.cwd(), io?: HookIo)
             isCommitInput(input) ? buildPreCommitContext(p) : null,
             evaluatePackageOnce(p, input),
           ])
+          // Identical staged state renders identical bytes — gate by content
+          // so retried/AMENDed commits of the same state pay the block once.
+          const gatedCommit = await (async (): Promise<string | null> => {
+            if (!commitContext) return null
+            const config = await configManager.readConfig(p).catch(() => null)
+            if (!config?.projectId) return commitContext
+            const gate = await gateDelivery({
+              projectId: config.projectId,
+              projectPath: p,
+              sessionId: (input as { session_id?: string }).session_id,
+              surface: 'pre-bash-commit',
+              key: p,
+              content: commitContext,
+              noSession: { mode: 'memory' },
+            })
+            return gate.suppressed ? null : commitContext
+          })()
           const packageContext =
             packageEvaluation && !packageEvaluation.strict
               ? `# prjct: package legitimacy (advisory)\n${packageEvaluation.message}`
               : null
-          const context = [commitContext, packageContext].filter(Boolean).join('\n\n')
+          const context = [gatedCommit, packageContext].filter(Boolean).join('\n\n')
           return context || null
         } catch {
           return null
