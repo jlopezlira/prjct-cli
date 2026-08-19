@@ -10,25 +10,14 @@ user-invocable: true
 
 Project memory, work cycles, ships, guardrails, or performance. **You run the verb — the user never types `prjct`.**
 
-## What's here
-
-Portable L0 — no project stamp. Identity is cwd-scoped (SessionStart / `prjct context --md`). Uninitialized tree: suggest `prjct init` once, then run the verb.
-
 ### Agent contract
 
-- prjct remembers project state and shows the path; it does not own the execution.
-- Agents decide HOW with native tools and judgment. Treat prjct output as durable signals: work, memory, intents, risks, performance.
-- Persist via `prjct remember` / `work` / `performance` / `ship`. Author every memory in **ENGLISH**.
-- **Verb dispatch:** tasks → `prjct work "…"`. Known cmds (`sync`/`search`/`remember`/`ship`/…) → `prjct <cmd> --md`. **Never** wrap a bin verb as `work "sync"`.
-- **Sync analysis:** `analysis-save-llm` = schema v1 JSON. Markdown = thin notes only — no retry loop.
-- **Pattern supremacy:** match THIS repo (neighbor + `search`/`context memory`). Shit pattern → propose upgrade, not foreign taste.
-- **Skill ≠ project identity.** cwd + `prjct context --md` win over skill stamps.
-
-### Cast + file scope (MUST)
-
-- Cast names (explore→Popper · implement→Copernicus · review→McClintock): `description` / `prjct claim --as <Name>`.
+- prjct remembers project state and shows the path; it does not own execution. Agents decide HOW with native tools and judgment. Treat prjct output as durable signals.
+- Persist outcomes via `prjct remember` / `work` / `ship` — every memory in **ENGLISH**. Close: `prjct land` (Session close) or living context via `prjct remember context`.
+- **Dispatch:** tasks → `prjct work "…"`. Known cmds (`sync`/`search`/`remember`/`ship`/…) run bare with `--md`. **Never** wrap a bin verb as `work "sync"`.
 - Before Grep/Glob: `prjct work` / `prjct_relevant_files` / `prjct code trace` when indexes exist.
-- **Synthesis:** hand implementers file:line specs. **Continue** a worker with edit files; **spawn fresh** for verify/wrong approach.
+- **Pattern supremacy:** match THIS repo. **Skill ≠ project identity** (portable L0) — cwd + `prjct context --md` win.
+- **Sync analysis:** `analysis-save-llm` = schema v1 JSON; markdown = thin notes only — no retry loop.
 
 ### Core verbs (Tier 1=auto · 2=confirm)
 
@@ -36,7 +25,7 @@ Portable L0 — no project stamp. Identity is cwd-scoped (SessionStart / `prjct 
 |---|---|---|
 | work (tasks only) | `prjct work "<intent>"` | 2 |
 | intent | `prjct intent` / `audit` | 2 |
-| recall | `prjct search` / `context memory` | 1 |
+| recall | `prjct search` / `prjct context memory` | 1 |
 | remember | `prjct remember <type>` | 1 |
 | sync | `prjct sync` | 1 |
 | hygiene | `prjct dream` / `close` / `forget` | 1 |
@@ -50,19 +39,14 @@ Portable L0 — no project stamp. Identity is cwd-scoped (SessionStart / `prjct 
 
 `prjct work` is the normal entrypoint **for task cycles only**. Known CLI verbs run bare. Full map in `workflows.md`.
 
-### Knowledge
-
-- Types: `decision · learning · gotcha · fact · context · …` plus the **sovereign knowledge base** facets `identity · voice · glossary · framework` — `prjct remember <facet>` / `prjct context memory <facet>`; never injected into CLAUDE.md / AGENTS.md. SQLite SoT; `.prjct/prjct.config.json`.
-- Close: `prjct land` (Session close) or living context via `prjct remember context`. Hygiene: `dream` / `close` / `forget`.
-
 ### Routing
 
-- **Tier 1 — auto-execute.** search, remember, sync, guard, insights, performance. One-line confirm; do not ask permission to save.
-- **Tier 2 — confirm once.** work, intent, ship. Never ship without user OK.
-- **Tier 3 — decision-brief.** prefs / hard forks — see `workflows.md`.
+- **Tier 1 — auto-execute:** search, remember, sync, guard, insights, performance. One-line confirm; do not ask permission to save.
+- **Tier 2 — confirm once:** work, intent, ship. Never ship without user OK.
+- **Tier 3 — decision-brief** + cast names, knowledge facets, full map: `workflows.md` (pull on demand).
 
 ## Gotchas
 
-- Empty recall ≠ nothing exists. Secrets refused unless `--force`.
-- Worktree: remove only after PR merged, never --force over dirty work.
+- Empty recall ≠ nothing exists. Secrets refused unless `--force`. Worktrees: remove only after PR merged, never --force.
+- SQLite is SoT (use CLI/MCP, never read it directly); project config: `.prjct/prjct.config.json`.
 
