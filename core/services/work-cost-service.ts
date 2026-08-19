@@ -88,31 +88,29 @@ export interface WorkCostSnapshot {
 export const TASK_TOKENS_EVENT = 'memory.task_tokens'
 
 /**
- * Accumulate prjct-injected hook payload size for the active cycle, as an
- * ESTIMATED token_usage row (`source = hook-injection:<host>`, chars/4).
- * Additive upsert — unlike recordTaskTokenUsage's SET semantics, each turn
+ * Additive ESTIMATED token_usage upsert (chars/4) shared by every prjct
+ * emission surface. Unlike recordTaskTokenUsage's SET semantics, each call
  * contributes a delta, capped at the table's CHECK bound. This is what lets
- * `prjct product cost` prove prjct's own context tax against the host totals
- * without transcript archaeology. Never throws.
+ * `prjct insights cost` prove prjct's own context tax against the host
+ * totals without transcript archaeology. Never throws.
  */
-export function recordHookEmissionChars(
+function upsertEstimatedChars(
   projectId: string,
   taskId: string | null | undefined,
   chars: number,
-  host: string
+  source: string
 ): void {
   if (!taskId || chars <= 0) return
   const tokens = Math.min(Math.round(chars / 4), TOKEN_COUNT_MAX)
   if (tokens <= 0) return
   try {
-    const source = `hook-injection:${host}`
     const eventKey = `${taskId}:${source}`
     const now = Date.now()
     prjctDb.run(
       projectId,
       `INSERT INTO token_usage
          (id, work_cycle_id, event_key, source, is_estimated, input_tokens, output_tokens, model_id, description, measured_at, created_at)
-       VALUES (?, ?, ?, ?, 1, ?, 0, NULL, 'prjct hook-injected context (chars/4 estimate)', ?, ?)
+       VALUES (?, ?, ?, ?, 1, ?, 0, NULL, 'prjct-delivered context (chars/4 estimate)', ?, ?)
        ON CONFLICT(event_key) DO UPDATE SET
          input_tokens = MIN(token_usage.input_tokens + excluded.input_tokens, ${TOKEN_COUNT_MAX}),
          measured_at = excluded.measured_at`,
@@ -127,6 +125,43 @@ export function recordHookEmissionChars(
   } catch {
     /* best-effort — attribution must never break a hook */
   }
+}
+
+/**
+ * Hook payload attribution. Without `surface` the source stays the historical
+ * `hook-injection:<host>` (prompt hook); with it, `hook-injection:<host>:<surface>`
+ * so `prjct insights cost` breaks the tax down per emitting hook.
+ */
+export function recordHookEmissionChars(
+  projectId: string,
+  taskId: string | null | undefined,
+  chars: number,
+  host: string,
+  surface?: string
+): void {
+  const source = surface ? `hook-injection:${host}:${surface}` : `hook-injection:${host}`
+  upsertEstimatedChars(projectId, taskId, chars, source)
+}
+
+/** MCP tool-result attribution (`source = mcp-result:<host>`). */
+export function recordMcpResultChars(
+  projectId: string,
+  taskId: string | null | undefined,
+  chars: number,
+  host: string
+): void {
+  upsertEstimatedChars(projectId, taskId, chars, `mcp-result:${host}`)
+}
+
+/** CLI --md output attribution (`source = cli-md:<host>:<verb>`). */
+export function recordCliDeliveryChars(
+  projectId: string,
+  taskId: string | null | undefined,
+  chars: number,
+  host: string,
+  verb: string
+): void {
+  upsertEstimatedChars(projectId, taskId, chars, `cli-md:${host}:${verb}`)
 }
 
 /** Must match token_usage's CHECK(input_tokens/output_tokens BETWEEN 0 AND …) in migrations.ts. */
