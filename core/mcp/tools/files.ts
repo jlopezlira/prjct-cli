@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { stateStorage } from '../../storage/state-storage'
 import { findRelevantFiles } from '../../tools/context/files-tool'
 import { extractSignatures } from '../../tools/context/signatures-tool'
-import { optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
+import { boundedLimit, optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
 import { safeMcpCall } from './error-handler'
 
 // MCP SDK TS2589 workaround: cast server to avoid deep type instantiation
@@ -26,7 +26,7 @@ export function registerFileTools(server: McpServer) {
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         query: z.string().describe('Task or query to find relevant files for'),
-        maxFiles: z.number().optional().default(10).describe('Max files to return'),
+        maxFiles: boundedLimit(10, 25).describe('Max files to return'),
       }),
     },
     safeMcpCall(
@@ -138,7 +138,7 @@ export function registerFileTools(server: McpServer) {
         'Recently completed tasks and how they ended. Use to learn what was just done before continuing related work.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        limit: z.number().optional().default(10).describe('Max results'),
+        limit: boundedLimit(10, 50).describe('Max results'),
       }),
     },
     safeMcpCall('prjct_history', async (args: { projectPath: string; limit: number }) => {

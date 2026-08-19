@@ -37,6 +37,13 @@ import {
 } from '../services/instruction-guidance'
 import { qualityInjectForProject } from '../services/judgment-orchestrator'
 import { loopGuardVerdict } from '../services/loop-guard'
+import {
+  hashContent,
+  normalizeStateForMaterialChange,
+  readSessionStamp,
+  sessionStampKey,
+  writeSessionStamp,
+} from '../services/session-context-cache'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
@@ -582,6 +589,29 @@ async function dedupePromptPayload(
   return payload
 }
 
+/**
+ * Write the whole-payload stamp for the payload actually emitted. The
+ * kimi/codex delta branch bypasses dedupePromptPayload (the stamp's only
+ * other writer), but readPersistedPromptAfterEmit still validates the
+ * persisted afterEmit record against this file — without the write, the
+ * cold path's detached worker rebuilds the whole prompt every turn.
+ */
+async function writePromptStateStamp(
+  projectId: string,
+  projectPath: string,
+  payload: string
+): Promise<void> {
+  const stamp = path.join(
+    DAEMON_PATHS.runDir(),
+    `prompt-state-${promptHashKey(projectId, projectPath)}.hash`
+  )
+  const hash = createHash('sha256').update(payload).digest('hex')
+  await fs
+    .mkdir(path.dirname(stamp), { recursive: true })
+    .then(() => fs.writeFile(stamp, hash))
+    .catch(() => undefined)
+}
+
 function promptAfterEmitStampPath(projectId: string, projectPath: string): string {
   return path.join(
     DAEMON_PATHS.runDir(),
@@ -697,6 +727,9 @@ function formatRelative(isoTimestamp: string): string {
 
 interface PromptGuidanceComputation {
   prioritized: string
+  /** Only the per-prompt cue sections that made the budget — the delta
+   *  payload for non-caching hosts when the state block is unchanged. */
+  cueOnly: string
   cueResult: TopicalCueResult | null
   guidance: SelectiveGuidanceResult | null
   guidanceIncluded: boolean
@@ -719,12 +752,14 @@ function computePromptGuidance(
   const files = buildIndexedFileCue(projectId, prompt)
   const delivery = buildDeliveryGuidance(prompt)
   const guidance = buildSelectiveGuidance(projectId, prompt)
-  const prioritized = [cueResult?.cue, delivery, guidance?.text, files]
-    .filter((section): section is string => Boolean(section))
-    .reduce<string>(
-      (payload, section) => appendPromptSection(payload, section, budget) ?? payload,
-      safeTruncate(state, budget)
-    )
+  const sections = [cueResult?.cue, delivery, guidance?.text, files].filter(
+    (section): section is string => Boolean(section)
+  )
+  const prioritized = sections.reduce<string>(
+    (payload, section) => appendPromptSection(payload, section, budget) ?? payload,
+    safeTruncate(state, budget)
+  )
+  const cueOnly = sections.filter((section) => prioritized.includes(section)).join('\n\n')
   const guidanceIncluded = Boolean(guidance?.text && prioritized.includes(guidance.text))
   const deliveryIncluded = Boolean(delivery && prioritized.includes(delivery))
   const guidanceRuleId = deliveryIncluded
@@ -732,7 +767,7 @@ function computePromptGuidance(
     : guidanceIncluded
       ? (guidance?.memoryIds[0] ?? null)
       : null
-  return { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId }
+  return { prioritized, cueOnly, cueResult, guidance, guidanceIncluded, guidanceRuleId }
 }
 
 export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {
@@ -778,7 +813,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         const budget = sessionContext ? KIMI_FIRST_PROMPT_BUDGET : STATE_BUDGET
         // Narrow push exceptions: one preventive cue plus selective delivery
         // and authored guidance. State leads; all sections share one budget.
-        const { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
+        const { prioritized, cueOnly, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
           computePromptGuidance(config.projectId, prompt, base, budget)
         const afterEmitRecord: PromptAfterEmit = {
           projectId: config.projectId,
@@ -789,6 +824,48 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
             ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
           ],
           guidanceRuleId,
+        }
+        // Non-caching hosts (Kimi/Codex) re-pay every injected byte on every
+        // subsequent API call, so the state block re-emits only on MATERIAL
+        // change (session context cache, count-noise normalized away) and
+        // per-prompt cues ship only when they differ from the last emission.
+        // Claude keeps the whole-payload dedup path byte-identical — its
+        // prompt cache wants stable prefixes, not suppression. Gated on
+        // session_id: without a session identity there is no session scope,
+        // and a shared fallback stamp would suppress a brand-new session.
+        if ((host === 'kimi' || host === 'codex') && input.session_id) {
+          const sccKey = sessionStampKey(config.projectId, p, input.session_id)
+          const stateHash = hashContent(normalizeStateForMaterialChange(state ?? ''))
+          const cueHash = hashContent(cueOnly)
+          const [prevState, prevCues] = await Promise.all([
+            readSessionStamp(sccKey),
+            readSessionStamp(`${sccKey}-cues`),
+          ])
+          await Promise.all([
+            writeSessionStamp(sccKey, stateHash),
+            writeSessionStamp(`${sccKey}-cues`, cueHash),
+          ])
+          const suppressState = prevState === stateHash && !sessionContext
+          const emitted = suppressState
+            ? !cueOnly || prevCues === cueHash
+              ? null
+              : cueOnly
+            : prioritized
+          // Attribution must credit only what the model actually received:
+          // a suppressed turn surfaced nothing, so its record carries no
+          // surfacedIds/guidanceRuleId. bumpTurn still advances every prompt
+          // (the loop guard counts turns, not emissions).
+          const record: PromptAfterEmit = emitted
+            ? afterEmitRecord
+            : { ...afterEmitRecord, surfacedIds: [], guidanceRuleId: null }
+          promptAfterEmit.set(input as object, record)
+          await persistPromptAfterEmit(config.projectId, p, emitted ?? '', record)
+          // Keep the whole-payload stamp in sync with the EMITTED payload —
+          // readPersistedPromptAfterEmit validates against it, and without
+          // this write the cold path's detached afterEmit worker would fall
+          // back to a full rebuild on every kimi/codex prompt.
+          await writePromptStateStamp(config.projectId, p, emitted ?? '')
+          return emitted
         }
         promptAfterEmit.set(input as object, afterEmitRecord)
         // Hand the record to the cold path's detached afterEmit worker (a

@@ -12,6 +12,15 @@ import configManager from '../infrastructure/config-manager'
 export const optionalProjectPath = z.string().optional()
 
 /**
+ * Bounded list-size param: schema-enforced ceiling so no client can request
+ * an effectively unbounded response — every returned char is context tax the
+ * caller re-pays for the rest of its session.
+ */
+export function boundedLimit(def: number, max: number) {
+  return z.number().int().min(1).max(max).optional().default(def)
+}
+
+/**
  * Resolve filesystem project root for a tool call.
  * Order: explicit arg → PRJCT_PROJECT_PATH → process.cwd().
  */
