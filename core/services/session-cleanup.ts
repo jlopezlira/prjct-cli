@@ -182,6 +182,7 @@ const STAMP_PREFIXES = [
   'prompt-git-',
   'prompt-afteremit-',
   'prompt-scc-',
+  'scc-',
   'stop-heavy-',
   'kimi-session-',
 ]

@@ -265,11 +265,12 @@ export function registerMemoryTools(
         projectPath: optionalProjectPath,
         file: z.string().describe('Absolute or repo-relative path'),
         limit: boundedLimit(3, 10),
+        full: z.boolean().optional(),
       }),
     },
     safeMcpCall(
       'prjct_guard',
-      async (args: { projectPath: string; file: string; limit?: number }) => {
+      async (args: { projectPath: string; file: string; limit?: number; full?: boolean }) => {
         const projectId = await resolveProjectId(args.projectPath)
         const hits = projectMemory.recallForFile(projectId, args.file, args.limit ?? 3)
         // Push-path ship attribution (see surface-attribution.ts).
@@ -284,7 +285,17 @@ export function registerMemoryTools(
             content: [{ type: 'text', text: `No preventive memory for ${base} — clear to edit.` }],
           }
         }
-        return { content: [{ type: 'text', text: formatMemoryMd(hits, { boundary: 'llm' }) }] }
+        // SAME ledger scope as mem_list/mem_similar: a trap already delivered
+        // by either surface collapses to a one-line ref here and vice versa.
+        // full:true honors the repeats hint (host compacted the context).
+        return {
+          content: [
+            {
+              type: 'text',
+              text: formatRecallWithLedger(`mem:${projectId}`, hits, { full: args.full }),
+            },
+          ],
+        }
       }
     )
   )

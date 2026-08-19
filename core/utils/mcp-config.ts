@@ -12,8 +12,10 @@ interface MCPConfig {
   [key: string]: unknown
 }
 
+// Written into every host's MCP config entry — some hosts surface it per
+// session. Rules live in the skill/instructions; this is a one-line label.
 const PRJCT_MCP_DESCRIPTION =
-  'prjct: agentic harness with project memory, workflow gates, intent briefs, and performance context. Use prjct_task_start as the MCP entrypoint for a work cycle; prjct retrieves focused context, persists evidence stations, and keeps humans in the loop for risky gates. Agents resume from prjct_task_status/workflow output, create or link reviewed intent/spec briefs when required, and persist synthesized learning instead of raw transcript fragments.'
+  'prjct: agentic harness — project memory, work-cycle gates, and focused context. Entrypoint: prjct_task_start (or the prjct dispatch tool on the micro tier).'
 
 /**
  * Get the prjct MCP server config for agent hosts (Codex/Claude/…).
@@ -136,15 +138,24 @@ function resolveLocalPrjctBin(): string | null {
 }
 
 /**
- * prjct preset pinned to the lean tool tier — for non-caching hosts
- * (Kimi/Codex) that re-pay the MCP catalog on EVERY API call. Same command,
- * only the tier env differs. NOTE: the baked env wins over any shell-level
- * PRJCT_MCP_TOOLS export; to raise the tier, edit the env value inside the
- * host's server entry (kimi mcp.json / codex config.toml managed block).
+ * prjct preset pinned to the lean tool tier. NOTE: the baked env wins over
+ * any shell-level PRJCT_MCP_TOOLS export; to raise the tier, edit the env
+ * value inside the host's server entry (kimi mcp.json / codex config.toml
+ * managed block).
  */
 export function getPrjctLeanMcpConfig(): MCPServerConfig {
   const base = MCP_SERVER_PRESETS.prjct
   return { ...base, env: { ...(base.env ?? {}), PRJCT_MCP_TOOLS: 'lean' } }
+}
+
+/**
+ * prjct preset pinned to the micro tier (ONE dispatch tool, <800-char
+ * catalog) — the default for non-caching hosts (Kimi/Codex) that re-pay
+ * the MCP catalog on EVERY API call. Rollback: set the env to 'lean'.
+ */
+export function getPrjctMicroMcpConfig(): MCPServerConfig {
+  const base = MCP_SERVER_PRESETS.prjct
+  return { ...base, env: { ...(base.env ?? {}), PRJCT_MCP_TOOLS: 'micro' } }
 }
 
 export const MCP_SERVER_PRESETS: Record<'context7' | 'linear' | 'jira' | 'prjct', MCPServerConfig> =

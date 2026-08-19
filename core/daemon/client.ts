@@ -228,6 +228,10 @@ export async function executeViaDaemon(
   }
 
   try {
+    // Caller identity resolves HERE (client inherits the agent's env); the
+    // daemon's env is frozen at spawn and must never be consulted for it.
+    const { resolveCallerIdentity } = await import('../services/agent-identity')
+    const caller = resolveCallerIdentity(command)
     return await sendRequest({
       id: crypto.randomUUID(),
       command,
@@ -235,6 +239,11 @@ export async function executeViaDaemon(
       options,
       cwd,
       perfStartNs,
+      callerSession: {
+        sessionId: caller.sessionId,
+        agent: caller.agent,
+        identity: caller.identity,
+      },
     })
   } catch {
     if (autoStart) {

@@ -37,13 +37,7 @@ import {
 } from '../services/instruction-guidance'
 import { qualityInjectForProject } from '../services/judgment-orchestrator'
 import { loopGuardVerdict } from '../services/loop-guard'
-import {
-  hashContent,
-  normalizeStateForMaterialChange,
-  readSessionStamp,
-  sessionStampKey,
-  writeSessionStamp,
-} from '../services/session-context-cache'
+import { gateDelivery, normalizeStateForMaterialChange } from '../services/session-context-cache'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
@@ -58,9 +52,13 @@ import { execFileAsync } from '../utils/exec'
 import { fileExists } from '../utils/file-helper'
 import { type HookIo, runHook } from './_runner'
 import { extractKeywords, safeTruncate } from './_shared'
-import { buildSessionContext, consumeKimiSessionInjection } from './session-start'
+import {
+  buildCompactReanchor,
+  buildSessionContext,
+  consumeKimiSessionInjection,
+} from './session-start'
 
-const STATE_BUDGET = 1500
+const STATE_BUDGET = 700
 /**
  * First-prompt budget under Kimi: the SessionStart payload (persona +
  * cold-start digest, ~2.1k chars worst case) rides the first UserPromptSubmit
@@ -83,7 +81,7 @@ const STUCK_TURN_THRESHOLD = 15
 const LOOP_CUE_INTERVAL = 10
 /** FTS candidates fetched before the preventive-type filter picks ONE. */
 const CUE_CANDIDATES = 8
-const GUIDANCE_BUDGET = 420
+const GUIDANCE_BUDGET = 240
 const GUIDANCE_MAX_ENTRIES = 2
 const GIT_SNAPSHOT_TTL_MS = 15_000
 
@@ -125,22 +123,42 @@ const promptPayloadHashes = new Map<string, string>()
 
 interface HookInput {
   prompt?: string
+  /** Claude/Kimi/Gemini/Codex session identity. */
   session_id?: string
+  /** Cursor session identity. */
+  conversation_id?: string
+}
+
+/** One transient signal inside the state — gated per `key`, emitted on
+ *  appearance/material change only (event-only doctrine, pull-first). */
+export interface StateEvent {
+  key: string
+  text: string
+}
+
+export interface ProjectStateParts {
+  /** Standing facts (cycle, owner, branch, ships, inbox) — delivered once
+   *  per session, re-delivered only on material change. */
+  standing: string | null
+  /** Transient signals (loop cue, budget, delegation, alignment, handoff) —
+   *  each emitted when it appears or escalates, silent while unchanged. */
+  events: StateEvent[]
 }
 
 /**
- * Build a "# prjct: project state" block — pure facts about where the
- * project is right now (active work, branch, working tree, recent
- * ships). The LLM reads it to disambiguate user intent without asking.
+ * Build the "# prjct: project state" facts, split into standing state and
+ * transient events so the delivery gate can suppress each independently.
+ * Pure facts about where the project is right now; the LLM reads them to
+ * disambiguate user intent without asking.
  *
- * Returns null when there's nothing useful to say (no project, no
- * git repo) so the caller can skip injection entirely.
+ * Returns null when there's nothing useful to say (no project) so the
+ * caller can skip injection entirely.
  */
-export async function buildProjectState(
+export async function buildProjectStateParts(
   projectPath: string,
   preloaded?: LocalConfig | null,
   opts: { skipHandoff?: boolean } = {}
-): Promise<string | null> {
+): Promise<ProjectStateParts | null> {
   const config = preloaded !== undefined ? preloaded : await configManager.readConfig(projectPath)
   if (!config?.projectId) return null
 
@@ -150,6 +168,7 @@ export async function buildProjectState(
   const secondaryPromise = collectSecondarySignals(config, projectPath, opts)
 
   const lines: string[] = ['# prjct: project state']
+  const events: StateEvent[] = []
   // Active work — most useful single fact. Resolved PER worktree so a parallel
   // agent sees its own work, not a sibling's. Falls back to singular outside a
   // worktree.
@@ -185,9 +204,13 @@ export async function buildProjectState(
         turns % LOOP_CUE_INTERVAL === 0 &&
         turns < STUCK_TURN_THRESHOLD
       ) {
-        lines.push(
-          `  ↳ Turn ${turns} on this cycle — still advancing the goal? If stuck, re-plan or split; do not loop.`
-        )
+        // Guardrail events are scoped per CYCLE: normalization erases the
+        // numbers, so a session-constant key would let cycle 1's stamp
+        // silence cycle 2's warning forever.
+        events.push({
+          key: `loop:${overview.current.id}`,
+          text: `↳ Turn ${turns} on this cycle — still advancing the goal? If stuck, re-plan or split; do not loop.`,
+        })
       }
       // Token budget — uses post-bump task (no extra SQLite read).
       try {
@@ -195,13 +218,15 @@ export async function buildProjectState(
         if (budget > 0 && currentTask) {
           const spent = (currentTask.tokensIn ?? 0) + (currentTask.tokensOut ?? 0)
           if (spent >= budget) {
-            lines.push(
-              `  ⚠ Token budget: ${spent.toLocaleString()} of ${budget.toLocaleString()} spent on this cycle. STOP growing it — ship the working slice, split the remainder into a new cycle, or check in with the user.`
-            )
+            events.push({
+              key: `budget:${overview.current.id}`,
+              text: `⚠ Token budget: ${spent.toLocaleString()} of ${budget.toLocaleString()} spent on this cycle. STOP growing it — ship the working slice, split the remainder into a new cycle, or check in with the user.`,
+            })
           } else if (spent >= budget * 0.8) {
-            lines.push(
-              `  ↳ Token budget: ${spent.toLocaleString()} of ${budget.toLocaleString()} (${Math.round((spent / budget) * 100)}%). Plan the close: prefer finishing over expanding scope.`
-            )
+            events.push({
+              key: `budget:${overview.current.id}`,
+              text: `↳ Token budget: ${spent.toLocaleString()} of ${budget.toLocaleString()} (${Math.round((spent / budget) * 100)}%). Plan the close: prefer finishing over expanding scope.`,
+            })
           }
         }
       } catch {
@@ -220,7 +245,7 @@ export async function buildProjectState(
               startedIso
             )?.c ?? 0
           const trigger = renderDelegationTrigger(touched)
-          if (trigger) lines.push(`  ${trigger}`)
+          if (trigger) events.push({ key: `delegation:${overview.current.id}`, text: trigger })
         }
       } catch {
         /* best-effort */
@@ -236,10 +261,8 @@ export async function buildProjectState(
           turns,
           stuckThreshold: STUCK_TURN_THRESHOLD,
         })
-        if (card.markdown) {
-          lines.push('')
-          lines.push(card.markdown)
-        }
+        if (card.markdown)
+          events.push({ key: `alignment:${overview.current.id}`, text: card.markdown })
       } catch {
         /* advisory */
       }
@@ -266,16 +289,38 @@ export async function buildProjectState(
 
   // Parallel secondary signals (queue / ship / inbox / handoff / git) —
   // started before the active-work block so the git fork overlaps it.
-  const secondary = await secondaryPromise
-
-  for (const line of secondary) {
+  const [handoff, ...restSignals] = await secondaryPromise
+  // A pending handoff is a transient signal, not standing state — gated per
+  // content it fires once, not on every prompt until accepted.
+  if (handoff) events.push({ key: 'handoff', text: handoff })
+  for (const line of restSignals) {
     if (line) {
       lines.push(line)
     }
   }
 
-  if (lines.length === 1) return null
-  return lines.join('\n')
+  if (lines.length === 1 && events.length === 0) return null
+  return { standing: lines.length > 1 ? lines.join('\n') : null, events }
+}
+
+/** Joined standing+events block — the sessionless fallback payload shape. */
+export async function buildProjectState(
+  projectPath: string,
+  preloaded?: LocalConfig | null,
+  opts: { skipHandoff?: boolean } = {}
+): Promise<string | null> {
+  const parts = await buildProjectStateParts(projectPath, preloaded, opts)
+  if (!parts) return null
+  return joinStateParts(parts, parts.events)
+}
+
+/** Assemble the emitted block from standing (or not) plus fresh events. */
+function joinStateParts(parts: ProjectStateParts, freshEvents: StateEvent[]): string | null {
+  const eventBlock = freshEvents.map((event) => event.text).join('\n')
+  if (parts.standing && eventBlock) return `${parts.standing}\n${eventBlock}`
+  if (parts.standing) return parts.standing
+  if (eventBlock) return `# prjct: signals\n${eventBlock}`
+  return null
 }
 
 /**
@@ -801,33 +846,192 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 () => null
               )
             : null
-        // PUSH→PULL: the per-turn hook starts with lean project-state facts
-        // (active work, branch, working tree) so the agent can disambiguate
-        // intent without asking. General memory and improvement signals are
-        // PULL — the agent fetches them on demand via
-        // `prjct context memory <topic>`, `prjct guard <file>`, or the MCP
-        // recall tools. Pushing keyword-matched memory into every prompt
-        // matched on stopwords/noise and burned the context window with
-        // entries the turn never needed.
-        const state = await buildProjectState(p, config, {
+        // PULL-FIRST / EVENT-ONLY: standing state (cycle, branch, ships) is
+        // delivered ONCE per session and re-delivered only on material change
+        // — the agent can always pull it via `prjct context`. Per-turn the
+        // hook speaks only when a transient signal appears or escalates
+        // (loop cue, budget crossing, delegation, alignment, handoff) or a
+        // preventive cue matches the prompt (the one PUSH exception). Every
+        // block flows through the delivery gate; a silent turn emits nothing.
+        const parts = await buildProjectStateParts(p, config, {
           skipHandoff: Boolean(kimiInjection),
         })
         const sessionContext = kimiInjection
-          ? await buildSessionContext(p, config, { digest: kimiInjection === 'digest' }).catch(
-              () => null
-            )
+          ? kimiInjection === 'reanchor'
+            ? await buildCompactReanchor(p, config).catch(() => null)
+            : await buildSessionContext(p, config, { digest: kimiInjection === 'digest' }).catch(
+                () => null
+              )
           : null
-        if (!state && !sessionContext) return null
-        const base = [sessionContext, state].filter(Boolean).join('\n\n')
+        if (!parts && !sessionContext) return null
+        const sessionId = input.session_id ?? input.conversation_id
         const budget = sessionContext ? KIMI_FIRST_PROMPT_BUDGET : STATE_BUDGET
-        // Narrow push exceptions: one preventive cue plus selective delivery
-        // and authored guidance. State leads; all sections share one budget.
-        const { prioritized, cueOnly, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
+        const bumpTurn = Boolean(parts?.standing?.includes('Active work cycle:'))
+
+        // Suppression needs a session scope: without an identity a shared
+        // stamp would suppress a brand-new session, so fall through to the
+        // whole-payload dedupe floor instead.
+        if (sessionId) {
+          const gateBase = { projectId: config.projectId, projectPath: p, sessionId }
+          // Kimi first prompt: the parked SessionStart payload rides this
+          // turn — force-emit (and restamp) so the model gets one complete
+          // grounding block; suppression starts on the next prompt.
+          const force = Boolean(sessionContext)
+          // PROBE first (no stamp writes): the assembly below truncates to a
+          // budget, and stamping content the truncation cut would suppress it
+          // for the whole session without the model ever seeing it. Stamps
+          // are written at the end, only for parts fully inside `emitted`.
+          const standingGate = parts?.standing
+            ? await gateDelivery({
+                ...gateBase,
+                surface: 'prompt-state',
+                content: parts.standing,
+                normalize: normalizeStateForMaterialChange,
+                full: force,
+                probe: true,
+              })
+            : null
+          const freshEvents: StateEvent[] = []
+          for (const event of parts?.events ?? []) {
+            const eventGate = await gateDelivery({
+              ...gateBase,
+              surface: 'prompt-cues',
+              key: `event:${event.key}`,
+              content: event.text,
+              normalize: normalizeStateForMaterialChange,
+              full: force,
+              probe: true,
+            })
+            if (!eventGate.suppressed) freshEvents.push(event)
+          }
+          // WHOLE-PART packing under the budget (never truncate the joined
+          // blob): a part that doesn't fit this turn stays UNSTAMPED and
+          // re-emits when it can lead a later turn; a part that can never
+          // fit (alone over budget) is truncated once and stamped in full so
+          // it cannot loop. Stamping truncated-away content would suppress
+          // it for the whole session without the model ever seeing it.
+          const standingFresh = Boolean(parts?.standing) && standingGate?.suppressed === false
+          const stateCandidates: Array<{ key?: string; text: string; standing: boolean }> = [
+            ...(standingFresh && parts?.standing ? [{ text: parts.standing, standing: true }] : []),
+            ...freshEvents.map((event) => ({
+              key: `event:${event.key}`,
+              text: event.text,
+              standing: false,
+            })),
+          ]
+          const stateBudget = Math.max(
+            budget - (sessionContext ? sessionContext.length + 2 : 0),
+            200
+          )
+          const packed = stateCandidates.reduce<{
+            blocks: string[]
+            used: number
+            stamps: Array<{ key?: string; text: string; standing: boolean }>
+            hasStanding: boolean
+          }>(
+            (acc, candidate) => {
+              const sep = acc.used > 0 ? 1 : 0
+              if (acc.used + sep + candidate.text.length <= stateBudget) {
+                acc.blocks.push(candidate.text)
+                acc.used += sep + candidate.text.length
+                acc.stamps.push(candidate)
+                if (candidate.standing) acc.hasStanding = true
+              } else if (acc.used === 0) {
+                // Alone over budget: deliver best-effort once, stamp in full.
+                // (−20 leaves room for the '# prjct: signals' header line.)
+                acc.blocks.push(safeTruncate(candidate.text, stateBudget - 20))
+                acc.used = stateBudget
+                acc.stamps.push(candidate)
+                if (candidate.standing) acc.hasStanding = true
+              }
+              return acc
+            },
+            { blocks: [], used: 0, stamps: [], hasStanding: false }
+          )
+          const stateBlock =
+            packed.blocks.length === 0
+              ? null
+              : packed.hasStanding
+                ? packed.blocks.join('\n')
+                : `# prjct: signals\n${packed.blocks.join('\n')}`
+          const base = [sessionContext, stateBlock].filter(Boolean).join('\n\n')
+          // Narrow push exceptions: one preventive cue plus selective delivery
+          // and authored guidance — gated as one blob by content so a repeat
+          // of the same cue ships once per session, not once per prompt.
+          // appendPromptSection only adds whole sections that fit, so nothing
+          // below ever needs a post-hoc truncation.
+          const { prioritized, cueOnly, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
+            computePromptGuidance(config.projectId, prompt, base, budget)
+          const cueGate = cueOnly
+            ? await gateDelivery({
+                ...gateBase,
+                surface: 'prompt-cues',
+                key: 'guidance',
+                content: cueOnly,
+                full: force,
+                probe: true,
+              })
+            : null
+          const cueFresh = Boolean(cueOnly) && cueGate?.suppressed === false
+          const emitted = cueFresh ? prioritized || null : base || null
+          // Stamp exactly what was delivered (same normalize as the probes,
+          // or probe/stamp hashes would never agree and suppression dies).
+          for (const stamp of packed.stamps) {
+            await gateDelivery({
+              ...gateBase,
+              surface: stamp.standing ? 'prompt-state' : 'prompt-cues',
+              ...(stamp.key ? { key: stamp.key } : {}),
+              content: stamp.text,
+              normalize: normalizeStateForMaterialChange,
+              full: true,
+            })
+          }
+          if (cueFresh && cueOnly) {
+            await gateDelivery({
+              ...gateBase,
+              surface: 'prompt-cues',
+              key: 'guidance',
+              content: cueOnly,
+              full: true,
+            })
+          }
+          // Attribution must credit only what the model actually received:
+          // a turn whose cues were suppressed surfaced nothing. bumpTurn
+          // still advances every prompt (the loop guard counts turns, not
+          // emissions).
+          const record: PromptAfterEmit = {
+            projectId: config.projectId,
+            projectPath: p,
+            bumpTurn,
+            surfacedIds: cueFresh
+              ? [
+                  ...(cueResult ? [cueResult.memoryId] : []),
+                  ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
+                ]
+              : [],
+            guidanceRuleId: cueFresh ? guidanceRuleId : null,
+            emittedChars: emitted?.length ?? 0,
+          }
+          promptAfterEmit.set(input as object, record)
+          await persistPromptAfterEmit(config.projectId, p, emitted ?? '', record)
+          // Keep the whole-payload stamp in sync with the EMITTED payload —
+          // readPersistedPromptAfterEmit validates against it, and without
+          // this write the cold path's detached afterEmit worker would fall
+          // back to a full rebuild on every prompt.
+          await writePromptStateStamp(config.projectId, p, emitted ?? '')
+          return emitted
+        }
+
+        // Sessionless floor: assemble the full block and dedupe the whole
+        // payload — identical repeats collapse, any byte change re-emits.
+        const state = parts ? joinStateParts(parts, parts.events) : null
+        const base = [sessionContext, state].filter(Boolean).join('\n\n')
+        const { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
           computePromptGuidance(config.projectId, prompt, base, budget)
         const afterEmitRecord: PromptAfterEmit = {
           projectId: config.projectId,
           projectPath: p,
-          bumpTurn: Boolean(state?.includes('Active work cycle:')),
+          bumpTurn,
           surfacedIds: [
             ...(cueResult ? [cueResult.memoryId] : []),
             ...(guidanceIncluded ? (guidance?.memoryIds ?? []) : []),
@@ -835,51 +1039,8 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           guidanceRuleId,
           emittedChars: 0,
         }
-        // Non-caching hosts (Kimi/Codex) re-pay every injected byte on every
-        // subsequent API call, so the state block re-emits only on MATERIAL
-        // change (session context cache, count-noise normalized away) and
-        // per-prompt cues ship only when they differ from the last emission.
-        // Claude keeps the whole-payload dedup path byte-identical — its
-        // prompt cache wants stable prefixes, not suppression. Gated on
-        // session_id: without a session identity there is no session scope,
-        // and a shared fallback stamp would suppress a brand-new session.
-        if ((host === 'kimi' || host === 'codex') && input.session_id) {
-          const sccKey = sessionStampKey(config.projectId, p, input.session_id)
-          const stateHash = hashContent(normalizeStateForMaterialChange(state ?? ''))
-          const cueHash = hashContent(cueOnly)
-          const [prevState, prevCues] = await Promise.all([
-            readSessionStamp(sccKey),
-            readSessionStamp(`${sccKey}-cues`),
-          ])
-          await Promise.all([
-            writeSessionStamp(sccKey, stateHash),
-            writeSessionStamp(`${sccKey}-cues`, cueHash),
-          ])
-          const suppressState = prevState === stateHash && !sessionContext
-          const emitted = suppressState
-            ? !cueOnly || prevCues === cueHash
-              ? null
-              : cueOnly
-            : prioritized
-          // Attribution must credit only what the model actually received:
-          // a suppressed turn surfaced nothing, so its record carries no
-          // surfacedIds/guidanceRuleId. bumpTurn still advances every prompt
-          // (the loop guard counts turns, not emissions).
-          const record: PromptAfterEmit = emitted
-            ? { ...afterEmitRecord, emittedChars: emitted.length }
-            : { ...afterEmitRecord, surfacedIds: [], guidanceRuleId: null }
-          promptAfterEmit.set(input as object, record)
-          await persistPromptAfterEmit(config.projectId, p, emitted ?? '', record)
-          // Keep the whole-payload stamp in sync with the EMITTED payload —
-          // readPersistedPromptAfterEmit validates against it, and without
-          // this write the cold path's detached afterEmit worker would fall
-          // back to a full rebuild on every kimi/codex prompt.
-          await writePromptStateStamp(config.projectId, p, emitted ?? '')
-          return emitted
-        }
         // Resolve the dedupe BEFORE building the record so emittedChars
-        // reflects what the model actually received (0 when deduped) —
-        // payload bytes and dedupe behavior stay byte-identical for Claude.
+        // reflects what the model actually received (0 when deduped).
         const deduped = await dedupePromptPayload(config.projectId, p, prioritized)
         const record: PromptAfterEmit = { ...afterEmitRecord, emittedChars: deduped?.length ?? 0 }
         promptAfterEmit.set(input as object, record)

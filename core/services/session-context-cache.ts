@@ -111,6 +111,17 @@ export interface CondensedDelivery<T extends DeliverableEntry> {
   repeats: T[]
 }
 
+/** True-LRU touch: refresh recency on hit, evict oldest past the cap. */
+function ledgerSet(map: Map<string, string>, key: string, value: string, max: number): void {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > max) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
+}
+
 /**
  * Partition entries into fresh vs already-delivered for this session and
  * record the fresh ones. `full: true` bypasses the ledger (still records),
@@ -121,13 +132,12 @@ export function condenseDelivered<T extends DeliverableEntry>(
   entries: T[],
   opts: { full?: boolean } = {}
 ): CondensedDelivery<T> {
-  if (deliveredLedger.size > DELIVERED_LEDGER_MAX) deliveredLedger.clear()
   const partitioned = entries.reduce<CondensedDelivery<T>>(
     (acc, entry) => {
       const key = `${scope}:${entry.id}`
       const hash = hashContent(entry.content)
       const isRepeat = !opts.full && deliveredLedger.get(key) === hash
-      deliveredLedger.set(key, hash)
+      ledgerSet(deliveredLedger, key, hash, DELIVERED_LEDGER_MAX)
       if (isRepeat) acc.repeats.push(entry)
       else acc.fresh.push(entry)
       return acc
@@ -137,7 +147,227 @@ export function condenseDelivered<T extends DeliverableEntry>(
   return partitioned
 }
 
-/** Test seam: reset the in-process ledger. */
+/**
+ * Single-blob variant of the ledger for MCP tool results: an unchanged
+ * repeat collapses the whole result to a one-line pointer that carries the
+ * re-fetch instruction. Session-scoped by process lifetime (stdio MCP).
+ */
+export function condenseResult(
+  scope: string,
+  id: string,
+  content: string,
+  opts: { full?: boolean } = {}
+): { text: string; repeated: boolean; hash: string } {
+  const key = `${scope}:${id}`
+  const hash = hashContent(content)
+  const repeated = !opts.full && deliveredLedger.get(key) === hash
+  ledgerSet(deliveredLedger, key, hash, DELIVERED_LEDGER_MAX)
+  if (!repeated) return { text: content, repeated, hash }
+  return {
+    text: `_${id} unchanged since last delivery this session (hash ${hash.slice(0, 8)}) — pass full:true to re-fetch._`,
+    repeated,
+    hash,
+  }
+}
+
+/** Test seam: reset the in-process ledgers. */
 export function _resetDeliveredLedgerForTests(): void {
   deliveredLedger.clear()
+  gateL1.clear()
+}
+
+// ---------------------------------------------------------------------------
+// Universal delivery gate — the ONE primitive every prjct→agent emission
+// flows through. Hooks and CLI use durable session stamps (hook processes
+// are ephemeral); MCP keeps using the in-process ledger above. Suppression
+// is sessionId-scoped by default; without session identity only explicitly
+// static content may be suppressed (short TTL) so two concurrent agents in
+// one repo never steal each other's context.
+// ---------------------------------------------------------------------------
+
+export type DeliverySurface =
+  | 'session-start'
+  | 'prompt-state'
+  | 'prompt-cues'
+  | 'pre-search'
+  | 'pre-edit'
+  | 'pre-bash-commit'
+  | 'cwd-changed'
+  | 'mcp-result'
+  | 'cli-work'
+  | 'cli-prime'
+  | 'cli-sync'
+  | 'cli-search'
+  | 'cli-context'
+
+export interface GateRequest {
+  projectId: string
+  projectPath: string
+  sessionId: string | undefined
+  surface: DeliverySurface
+  /** Sub-key inside the surface: file path, search token, tool id… */
+  key?: string
+  content: string
+  /** Strips per-turn counter noise before hashing (default: identity). */
+  normalize?: (content: string) => string
+  /** Escape hatch: always emit, still restamp. */
+  full?: boolean
+  /** Read-only evaluation: report suppression without writing any stamp.
+   *  Callers that assemble under a budget probe first, then stamp only the
+   *  parts the model actually received (never stamp truncated-away text). */
+  probe?: boolean
+  /** Policy when sessionId is undefined. Default: emit (never suppress). */
+  noSession?: { mode: 'emit' } | { mode: 'memory' } | { mode: 'static'; ttlMs: number }
+  /** Pointer text on suppression; default → emit null. */
+  onRepeat?: (hash: string) => string
+}
+
+export interface GateResult {
+  emit: string | null
+  suppressed: boolean
+  hash: string
+  emittedChars: number
+}
+
+/** Gate stamp prefix — swept by session-cleanup's run-dir GC (24h TTL). */
+const GATE_STAMP_PREFIX = 'scc-'
+const GATE_L1_MAX = 256
+const GATE_KEYED_MAX_ENTRIES = 200
+
+/** In-process fast path over the disk stamps (warm daemon). */
+const gateL1 = new Map<string, string>()
+
+interface GateStampEntry {
+  h: string
+  t: number
+}
+
+function gateStampPath(stampKey: string, surface: DeliverySurface, keyed: boolean): string {
+  const ext = keyed ? 'json' : 'hash'
+  return path.join(DAEMON_PATHS.runDir(), `${GATE_STAMP_PREFIX}${stampKey}-${surface}.${ext}`)
+}
+
+async function readGateFile(target: string): Promise<Record<string, GateStampEntry> | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(target, 'utf-8')) as Record<string, GateStampEntry>
+    return typeof parsed === 'object' && parsed !== null ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+async function writeGateFile(target: string, map: Record<string, GateStampEntry>): Promise<void> {
+  const entries = Object.entries(map)
+  const bounded =
+    entries.length > GATE_KEYED_MAX_ENTRIES
+      ? Object.fromEntries(entries.slice(entries.length - GATE_KEYED_MAX_ENTRIES))
+      : map
+  await fs
+    .mkdir(path.dirname(target), { recursive: true })
+    .then(() => fs.writeFile(target, JSON.stringify(bounded)))
+    .catch(() => undefined)
+}
+
+function emitResult(content: string, hash: string): GateResult {
+  return { emit: content, suppressed: false, hash, emittedChars: content.length }
+}
+
+function suppressResult(hash: string, onRepeat?: (hash: string) => string): GateResult {
+  const pointer = onRepeat ? onRepeat(hash) : null
+  return { emit: pointer, suppressed: true, hash, emittedChars: pointer?.length ?? 0 }
+}
+
+/**
+ * Deliver-once gate. Emits `content` when it was never delivered under this
+ * (session, surface, key) or when it materially changed; suppresses repeats.
+ * Fail-soft: any storage error emits. `full` always emits and restamps.
+ */
+export async function gateDelivery(req: GateRequest): Promise<GateResult> {
+  try {
+    const hash = hashContent((req.normalize ?? ((c: string) => c))(req.content))
+    const policy = req.sessionId === undefined ? (req.noSession ?? { mode: 'emit' }) : null
+    if (policy?.mode === 'emit') return emitResult(req.content, hash)
+
+    const stampKey = sessionStampKey(req.projectId, req.projectPath, req.sessionId)
+    const subKey = req.key ? hashContent(req.key).slice(0, 16) : '_'
+    const l1Key = `${stampKey}:${req.surface}:${subKey}`
+    const ttlMs = policy?.mode === 'static' ? policy.ttlMs : null
+    const now = Date.now()
+
+    if (policy?.mode === 'memory') {
+      const repeat = !req.full && gateL1.get(l1Key) === hash
+      if (!req.probe) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
+      return repeat ? suppressResult(hash, req.onRepeat) : emitResult(req.content, hash)
+    }
+
+    // Session-scoped (durable) and static-TTL paths share the disk stamp;
+    // the L1 map only short-circuits the non-TTL session path (TTL needs
+    // the per-entry timestamp, which lives on disk).
+    if (ttlMs === null && !req.full && gateL1.get(l1Key) === hash) {
+      if (!req.probe) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
+      return suppressResult(hash, req.onRepeat)
+    }
+
+    const target = gateStampPath(stampKey, req.surface, true)
+    const stored = (await readGateFile(target)) ?? {}
+    const entry = stored[subKey]
+    const fresh = entry === undefined || entry.h !== hash
+    const expired = ttlMs !== null && entry !== undefined && now - entry.t > ttlMs
+    const suppress = !req.full && !fresh && !expired
+
+    // TTL entries refresh ONLY on emit — refreshing on suppression turns the
+    // TTL into a sliding window that never expires under steady access, which
+    // would let sessionless suppression outlive its bound indefinitely.
+    if (!req.probe && !(suppress && ttlMs !== null)) {
+      delete stored[subKey]
+      stored[subKey] = { h: hash, t: now } // re-insert last: insertion-order eviction keeps hot keys
+      await writeGateFile(target, stored)
+      if (ttlMs === null) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
+    }
+
+    return suppress ? suppressResult(hash, req.onRepeat) : emitResult(req.content, hash)
+  } catch {
+    return { emit: req.content, suppressed: false, hash: '', emittedChars: req.content.length }
+  }
+}
+
+/**
+ * Durable per-entry ledger (CLI surfaces): same partition contract as
+ * condenseDelivered, backed by the keyed gate stamp so it survives the
+ * per-invocation CLI process. No session identity → everything fresh.
+ */
+export async function condenseDeliveredDurable<T extends DeliverableEntry>(
+  scope: {
+    projectId: string
+    projectPath: string
+    sessionId: string | undefined
+    surface: DeliverySurface
+  },
+  entries: T[],
+  opts: { full?: boolean } = {}
+): Promise<CondensedDelivery<T>> {
+  if (scope.sessionId === undefined) return { fresh: entries, repeats: [] }
+  try {
+    const stampKey = sessionStampKey(scope.projectId, scope.projectPath, scope.sessionId)
+    const target = gateStampPath(stampKey, scope.surface, true)
+    const stored = (await readGateFile(target)) ?? {}
+    const now = Date.now()
+    const partitioned = entries.reduce<CondensedDelivery<T>>(
+      (acc, entry) => {
+        const subKey = hashContent(entry.id).slice(0, 16)
+        const hash = hashContent(entry.content)
+        const isRepeat = !opts.full && stored[subKey]?.h === hash
+        delete stored[subKey]
+        stored[subKey] = { h: hash, t: now }
+        if (isRepeat) acc.repeats.push(entry)
+        else acc.fresh.push(entry)
+        return acc
+      },
+      { fresh: [], repeats: [] }
+    )
+    await writeGateFile(target, stored)
+    return partitioned
+  } catch {
+    return { fresh: entries, repeats: [] }
+  }
 }

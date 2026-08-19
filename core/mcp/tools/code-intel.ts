@@ -22,6 +22,7 @@ import { findDeadCode, formatDeadCodeMd } from '../../services/dead-code'
 import { detectChanges, formatDetectChangesMd } from '../../services/detect-changes'
 import { boundedLimit, optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
 import { safeMcpCall } from './error-handler'
+import { gatedTextResult } from './gated-result'
 
 // MCP SDK TS2589 workaround: cast server to avoid deep type instantiation
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -229,12 +230,19 @@ export function registerCodeIntelTools(server: McpServer) {
         'Structural architecture overview: languages, symbol kinds, packages, hotspots (call fan-in), routes, entry candidates. One shot — prefer over tree walks.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
+        full: z.boolean().optional(),
       }),
     },
-    safeMcpCall('prjct_architecture', async (args: { projectPath: string }) => {
+    safeMcpCall('prjct_architecture', async (args: { projectPath: string; full?: boolean }) => {
       const projectId = await resolveProjectId(args.projectPath)
       const snap = buildArchitectureSnapshot(projectId)
-      return { content: [{ type: 'text', text: formatArchitectureMd(snap) }] }
+      const md = formatArchitectureMd(snap)
+      // Index-derived and static between syncs — cap by default, gate repeats.
+      const capped =
+        !args.full && md.length > 4_000
+          ? `${md.slice(0, 3_980).trimEnd()}\n_…truncated (full:true)_`
+          : md
+      return gatedTextResult(projectId, 'architecture', capped, args.full)
     })
   )
 

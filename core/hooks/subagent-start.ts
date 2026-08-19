@@ -15,6 +15,9 @@ import { prjctDb } from '../storage/database'
 import { type HookIo, runHook } from './_runner'
 import { buildSubagentDigest } from './session-start'
 
+/** Emitted chars per spawn, for the afterEmit context-tax accumulator. */
+const subagentEmitChars = new WeakMap<object, number>()
+
 export function runSubagentStartHook(
   projectPath: string = process.cwd(),
   io?: HookIo
@@ -23,8 +26,14 @@ export function runSubagentStartHook(
     {
       event: 'SubagentStart',
       projectPath,
-      build: (_input, p) => buildSubagentDigest(p),
-      afterEmit: async (_input, p) => {
+      // No dedupe here on purpose: each subagent is a FRESH context —
+      // suppressing its digest would lose information, not save repeats.
+      build: async (_input, p) => {
+        const digest = await buildSubagentDigest(p)
+        if (digest) subagentEmitChars.set(_input as object, digest.length)
+        return digest
+      },
+      afterEmit: async (_input, p, host) => {
         // Fan-out telemetry: one event per spawn, attributed to the active
         // cycle, so `prjct performance` can show how many subagents a cycle
         // cost (was the crew worth it?). Best-effort, silent.
@@ -36,6 +45,17 @@ export function runSubagentStartHook(
           prjctDb.appendEvent(config.projectId, 'subagent.spawned', {
             taskId: overview.current?.id ?? null,
           })
+          const chars = subagentEmitChars.get(_input as object) ?? 0
+          if (chars > 0 && overview.current?.id) {
+            const { recordHookEmissionChars } = await import('../services/work-cost-service')
+            recordHookEmissionChars(
+              config.projectId,
+              overview.current.id,
+              chars,
+              host ?? 'claude',
+              'subagent-start'
+            )
+          }
         } catch {
           /* telemetry only */
         }

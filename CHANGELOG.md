@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-08-19
+
+### Added
+- Universal delivery gate + pull-first: maximum harness token reduction
+
 ## [3.99.0] - 2026-08-19
 
 ### Added

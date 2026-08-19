@@ -26,6 +26,11 @@ export interface DaemonRequest {
    *  the warm daemon adapts output for the right host instead of reading its
    *  own — host-less — env. */
   hookHost?: string
+  /** Caller's agent-session identity, resolved in the CLIENT process (which
+   *  inherits the agent's env — the daemon's env is frozen at spawn). Powers
+   *  session-scoped delivery trimming; optional = drift-safe both ways
+   *  (absent → sessionless policies, i.e. no suppression). */
+  callerSession?: { sessionId?: string; agent?: string; identity?: string }
 }
 
 /** Response sent from daemon to CLI client */

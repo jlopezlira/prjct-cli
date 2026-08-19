@@ -8,6 +8,7 @@
  */
 
 import { pickCodename } from './agent-codenames'
+import { currentCallerSession } from './request-context'
 
 export interface AgentIdentity {
   /** Runtime id: claude | codex | gemini | grok | cursor | unknown */
@@ -67,8 +68,23 @@ export function detectRuntimeAgent(): string {
 /**
  * Resolve full caller identity for task stamping and handoff matching.
  * `seed` stabilizes the fallback codename (e.g. task description).
+ *
+ * Daemon path: when a per-request caller context is active (the client
+ * resolved identity in ITS process and sent it on the wire), that wins
+ * outright — the daemon's own env is frozen at spawn and reading it here
+ * would attribute one agent's request to whichever client spawned the
+ * daemon. Absent wire values stay absent (no daemon-env fallback).
  */
 export function resolveCallerIdentity(seed = 'session'): AgentIdentity {
+  const wire = currentCallerSession()
+  if (wire) {
+    const agent = wire.agent ?? 'unknown'
+    return {
+      agent,
+      identity: wire.identity ?? pickCodename(`identity:${agent}:${seed}`),
+      sessionId: wire.sessionId,
+    }
+  }
   const agent = detectRuntimeAgent()
   const sessionId =
     process.env.CLAUDE_SESSION_ID ||

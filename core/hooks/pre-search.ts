@@ -11,12 +11,17 @@
 
 import { hasSymbolIndex, searchSymbols } from '../domain/symbol-graph'
 import configManager from '../infrastructure/config-manager'
+import { gateDelivery } from '../services/session-context-cache'
 import { type HookIo, runHook } from './_runner'
 import { safeTruncate } from './_shared'
 
 const MAX_CHARS = 900
 const HARD_CAP_MS = 80
 const MAX_HITS = 8
+/** Sessionless dedupe window: symbol hits are static between syncs, so a
+ *  short cwd-scoped TTL is safe even with two concurrent agents (identical
+ *  advisory content for both). */
+const NO_SESSION_TTL_MS = 15 * 60_000
 
 interface HookInput {
   tool_name?: string
@@ -27,6 +32,8 @@ interface HookInput {
     /** Claude Code Grep */
     query?: string
   }
+  session_id?: string
+  conversation_id?: string
 }
 
 function extractToken(input: HookInput): string | null {
@@ -102,7 +109,19 @@ async function buildSearchAugment(projectPath: string, input: HookInput): Promis
     lines.push(
       `> Expand: \`prjct code trace ${token}\` or MCP \`prjct_trace_path\`. This inject never blocks the tool.`
     )
-    return safeTruncate(lines.join('\n'), MAX_CHARS)
+    const augment = safeTruncate(lines.join('\n'), MAX_CHARS)
+    // Same token → same hits until the next sync: inject ONCE per session
+    // (durable stamp), not on every Grep/Glob of the same identifier.
+    const gate = await gateDelivery({
+      projectId: config.projectId,
+      projectPath,
+      sessionId: input.session_id ?? input.conversation_id,
+      surface: 'pre-search',
+      key: token,
+      content: augment,
+      noSession: { mode: 'static', ttlMs: NO_SESSION_TTL_MS },
+    })
+    return gate.suppressed ? null : augment
   } catch {
     return null
   }

@@ -97,9 +97,11 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     it('skill body includes the canonical anti-harness sections', async () => {
       const content = await readClaudeSkill()
       expect(content).toContain('## Use when')
-      expect(content).toContain("## What's here")
       expect(content).toContain('### Agent contract')
       expect(content).toContain('## Gotchas')
+      // L0 diet: the "What's here" prose moved out — the verb table IS the
+      // what's-here now; the deep material lives in workflows.md (L2).
+      expect(content).toContain('### Core verbs')
     })
 
     it('surfaces the opt-in tdd + sdd verbs in the always-loaded body', async () => {
@@ -121,8 +123,15 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
     })
 
     it('teaches the sovereign knowledge base so agents pull it, never inject it', async () => {
-      const content = await readClaudeSkill()
-      // KB facets are first-class, capturable, and discoverable to any rig.
+      // L0 diet: the KB facets moved to the pulled reference (workflows.md)
+      // — still first-class, capturable, and discoverable, just not re-paid
+      // on every turn.
+      const result = await fixture.generator.generateAndInstall()
+      const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
+      const content = await fs.readFile(
+        path.join(path.dirname(claude!.path), 'workflows.md'),
+        'utf-8'
+      )
       for (const facet of ['identity', 'voice', 'glossary', 'framework']) {
         expect(content).toContain(facet)
       }
@@ -347,8 +356,9 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
-      // ≤1500 tok always-on. Full verb map + methodology live in workflows.md.
-      expect(countTokens(content)).toBeLessThanOrEqual(1500)
+      // ≤800 tok always-on (measured ~650 after the L0 diet, +~20% headroom).
+      // Full verb map + methodology live in workflows.md.
+      expect(countTokens(content)).toBeLessThanOrEqual(800)
     })
 
     it('declares the subagent dispatch section with general-purpose type', async () => {

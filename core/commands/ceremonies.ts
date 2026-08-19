@@ -23,10 +23,13 @@
 
 import { deriveTitle } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
+import { resolveCallerIdentity } from '../services/agent-identity'
 import { extractDeveloperRules } from '../services/developer-profile'
+import { gateDelivery } from '../services/session-context-cache'
 import { buildTaskHarness } from '../services/task-harness'
 import { orchestrationFor } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
+import { recordCliDeliveryChars } from '../services/work-cost-service'
 import { workGraph } from '../services/work-graph'
 import { prjctDb } from '../storage/database'
 import { planStorage, type WorkPlan } from '../storage/plan-storage'
@@ -47,6 +50,8 @@ interface CeremonyOptions {
   dryRun?: boolean
   minHours?: number
   minSessions?: number
+  /** Bypass session-scoped delivery trimming (re-emit everything). */
+  full?: boolean
 }
 
 export class CeremonyCommands extends PrjctCommandsBase {
@@ -69,7 +74,9 @@ export class CeremonyCommands extends PrjctCommandsBase {
       proj.value,
       'INSERT INTO task_log (task_id, session_id, content, created_at) VALUES (?, ?, ?, ?)',
       taskId,
-      process.env.CLAUDE_SESSION_ID ?? null,
+      // Wire/env-resolved caller session — a raw env read here returned the
+      // DAEMON's frozen env on the warm path, stamping the wrong session.
+      resolveCallerIdentity('log').sessionId ?? null,
       content,
       new Date().toISOString()
     )
@@ -530,7 +537,26 @@ export class CeremonyCommands extends PrjctCommandsBase {
       /* best-effort */
     }
 
-    console.log(`${lines.join('\n').trimEnd()}\n`)
+    // Session-scoped trimming: prime is BY DESIGN once-per-fresh-window —
+    // a repeat within the SAME session collapses to a pointer. Without
+    // session identity the window is unknowable → never suppress.
+    const output = lines.join('\n').trimEnd()
+    const caller = resolveCallerIdentity('prime')
+    const gate = caller.sessionId
+      ? await gateDelivery({
+          projectId: proj.value,
+          projectPath,
+          sessionId: caller.sessionId,
+          surface: 'cli-prime',
+          content: output,
+          full: Boolean(options.full),
+          onRepeat: (hash) =>
+            `Prime already delivered this session (hash ${hash.slice(0, 8)}) — state unchanged.\nRe-emit: \`prjct prime --full\`.`,
+        })
+      : null
+    const printed = gate?.suppressed ? (gate.emit ?? output) : output
+    console.log(`${printed}\n`)
+    recordCliDeliveryChars(proj.value, overview?.current?.id, printed.length, caller.agent, 'prime')
     const { isContinuityFresh } = await import('../services/session-continuity')
     return {
       success: true,

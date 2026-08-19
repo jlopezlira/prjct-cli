@@ -24,6 +24,7 @@ import { specStorage } from '../../storage/spec-storage'
 import { SPEC_STATUSES, type SpecContent, type SpecStatus } from '../../types/spec'
 import { optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
 import { safeMcpCall } from './error-handler'
+import { gatedTextResult } from './gated-result'
 
 // MCP SDK TS2589 workaround: cast server to any to avoid deep type
 // instantiation during tool registration.
@@ -127,16 +128,25 @@ export function registerSpecTools(server: McpServer) {
           .optional()
           .describe('Filter by status: draft|reviewed|in_progress|shipped|archived'),
         includeArchived: z.boolean().optional().describe('Include archived specs (default: false)'),
+        full: z.boolean().optional(),
       }),
     },
     safeMcpCall(
       'prjct_spec_list',
-      async (args: { projectPath: string; status?: SpecStatus; includeArchived?: boolean }) => {
+      async (args: {
+        projectPath: string
+        status?: SpecStatus
+        includeArchived?: boolean
+        full?: boolean
+      }) => {
         const projectId = await resolveProjectId(args.projectPath)
-        const specs = specStorage.list(projectId, {
+        const allSpecs = specStorage.list(projectId, {
           status: args.status,
           includeArchived: args.includeArchived,
         })
+        // Newest 20 by default; full:true unbounds. The list scales with
+        // project age and re-paid every spec header on every call.
+        const specs = args.full ? allSpecs : allSpecs.slice(0, 20)
         if (specs.length === 0) {
           return {
             content: [
@@ -156,7 +166,10 @@ export function registerSpecTools(server: McpServer) {
           )
           parts.push('')
         }
-        return { content: [{ type: 'text', text: parts.join('\n') }] }
+        if (allSpecs.length > specs.length) {
+          parts.push(`_…+${allSpecs.length - specs.length} older specs (full:true)_`, '')
+        }
+        return gatedTextResult(projectId, 'spec-list', parts.join('\n'), args.full)
       }
     )
   )
@@ -169,28 +182,33 @@ export function registerSpecTools(server: McpServer) {
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id'),
+        full: z.boolean().optional(),
       }),
     },
-    safeMcpCall('prjct_spec_get', async (args: { projectPath: string; id: string }) => {
-      const spec = await specService.get(resolveProjectPath(args.projectPath), args.id)
-      if (!spec) {
-        return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
-      }
-      // Queue state for the `## Tasks` checklist, same lookup the CLI
-      // `spec show --md` runs — keeps both surfaces byte-identical.
-      const projectId = await resolveProjectId(args.projectPath).catch(() => null)
-      const taskStates = new Map<string, SpecTaskState>()
-      if (projectId) {
-        for (const t of await queueStorage.getTasks(projectId)) {
-          if (t.featureId === spec.id && t.body != null) {
-            taskStates.set(t.body, { id: t.id, completed: t.completed })
+    safeMcpCall(
+      'prjct_spec_get',
+      async (args: { projectPath: string; id: string; full?: boolean }) => {
+        const spec = await specService.get(resolveProjectPath(args.projectPath), args.id)
+        if (!spec) {
+          return { content: [{ type: 'text', text: `_Spec not found: ${args.id}_` }] }
+        }
+        // Queue state for the `## Tasks` checklist, same lookup the CLI
+        // `spec show --md` runs — keeps both surfaces byte-identical.
+        const projectId = await resolveProjectId(args.projectPath).catch(() => null)
+        const taskStates = new Map<string, SpecTaskState>()
+        if (projectId) {
+          for (const t of await queueStorage.getTasks(projectId)) {
+            if (t.featureId === spec.id && t.body != null) {
+              taskStates.set(t.body, { id: t.id, completed: t.completed })
+            }
           }
         }
+        const rendered = renderSpecMarkdown(spec, taskStates)
+        return projectId
+          ? gatedTextResult(projectId, `spec:${spec.id}`, rendered, args.full)
+          : { content: [{ type: 'text' as const, text: rendered }] }
       }
-      return {
-        content: [{ type: 'text', text: renderSpecMarkdown(spec, taskStates) }],
-      }
-    })
+    )
   )
 
   s.registerTool(

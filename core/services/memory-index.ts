@@ -19,15 +19,16 @@ import { usefulnessService } from './usefulness'
 
 export const MEMORY_L0_INDEX_KEY = 'memory:l0-index'
 
-/** Hard cap — multi-LLM cold start; tighter than Claude's ~25KB MEMORY.md. */
-export const L0_INDEX_MAX_CHARS = 4_000
+/** Hard cap — pull-first diet: the L0 index is a TOC, not the knowledge.
+ *  Everything trimmed here stays one `prjct prime` / `prjct search` away. */
+export const L0_INDEX_MAX_CHARS = 1_500
 
 /** Index is "fresh" for SessionStart when younger than this. */
 export const L0_INDEX_FRESH_MS = 24 * 60 * 60 * 1000
 
 /** Match SessionStart digest density (proven slots, not vault dump). */
-const PER_TYPE = 3
-const DEV_RULES = 4
+const PER_TYPE = 2
+const DEV_RULES = 3
 const REPEAT_MISS_THRESHOLD = 2
 /** Teaser sizing for index lines (see `formatMemoryDigestLine`) — tighter than SessionStart's digest. */
 const INDEX_TEASER = { minTeaser: 20, maxTeaser: 80 }
@@ -161,7 +162,7 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
     )
   }
 
-  const inbox = entries.filter((e) => e.type === 'inbox').slice(0, 3)
+  const inbox = entries.filter((e) => e.type === 'inbox').slice(0, 2)
   const inboxN = byType.inbox ?? 0
   if (inboxN > 0) {
     lines.push(`**Inbox (${inboxN}):**`)
@@ -244,7 +245,12 @@ export function memoryL0IndexForSession(
         ? buildAndStoreMemoryL0Index({ projectId, source: 'session-start' })
         : loaded
     if (!stamp?.markdown?.trim()) return null
-    return stamp.markdown.trim()
+    const markdown = stamp.markdown.trim()
+    // Read-side cap too: stored stamps built before a cap tightening keep
+    // serving until stale — never let them exceed the current budget.
+    return markdown.length > L0_INDEX_MAX_CHARS
+      ? `${markdown.slice(0, L0_INDEX_MAX_CHARS - 20).trimEnd()}\n…(truncated)`
+      : markdown
   } catch {
     return null
   }

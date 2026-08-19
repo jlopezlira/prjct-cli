@@ -15,7 +15,7 @@ import path from 'node:path'
 import { resolveUserPath } from '../infrastructure/user-home'
 import type { MCPServerConfig } from '../types/utils.js'
 import {
-  getPrjctLeanMcpConfig,
+  getPrjctMicroMcpConfig,
   MCP_SERVER_PRESETS,
   upsertMarkedBlock,
   writeConfigIfChanged,
@@ -76,7 +76,7 @@ function buildMcpTomlBlock(
 
 // Lean tier: Codex re-pays the tool catalog on every API call (no prompt
 // cache), so its default surface is the 6-tool lean set.
-export function buildPrjctMcpTomlBlock(server: MCPServerConfig = getPrjctLeanMcpConfig()): string {
+export function buildPrjctMcpTomlBlock(server: MCPServerConfig = getPrjctMicroMcpConfig()): string {
   return buildMcpTomlBlock('prjct', server, START_MARKER, END_MARKER)
 }
 

@@ -267,8 +267,10 @@ describe('SessionStart hook — knowledge digest (cold-start only)', () => {
 describe('SessionStart hook — digest slots are proven-first (usefulness rerank)', () => {
   test('a proven-useful old gotcha beats a newer unproven one for a digest slot', async () => {
     await freshProject({ role: 'DEV' })
-    // 6 gotchas, oldest first. Pure recency would pick g5,g4,g3.
-    for (const i of Array.from({ length: 6 }, (_, index) => index))
+    // 5 gotchas, oldest first. Pure recency would pick g4,g3 (2 diet slots).
+    // The rerank BOOST caps the climb at 4 slots, so the proven oldest can
+    // reach slot 2 from position 5 — the invariant under the pull-first diet.
+    for (const i of Array.from({ length: 5 }, (_, index) => index))
       insertMemory('gotcha', `trap number ${i} in module-${i}`)
 
     // The OLDEST entry is the only one with usefulness signal — it should
@@ -278,17 +280,19 @@ describe('SessionStart hook — digest slots are proven-first (usefulness rerank
       fixture.projectId,
       "SELECT id FROM events WHERE type = 'memory.remember.gotcha' ORDER BY id ASC LIMIT 1"
     )[0]
-    // Three deliberate fetches (≈ a genuinely proven entry). A single
-    // fetch (0.4) stays under the rerank's normalization floor of 1 by
-    // design — weak signals shouldn't reshuffle the digest.
-    usefulnessService.recordFetch(fixture.projectId, `mem_${oldest.id}`)
-    usefulnessService.recordFetch(fixture.projectId, `mem_${oldest.id}`)
-    usefulnessService.recordFetch(fixture.projectId, `mem_${oldest.id}`)
+    // Five deliberate fetches (≈ a genuinely proven entry) — with the
+    // pull-first diet the digest has only 2 slots per type, so the proven
+    // entry must beat the SECOND-newest, not the third. A single fetch
+    // (0.4) stays under the rerank's normalization floor of 1 by design —
+    // weak signals shouldn't reshuffle the digest.
+    for (const _ of Array.from({ length: 5 })) {
+      usefulnessService.recordFetch(fixture.projectId, `mem_${oldest.id}`)
+    }
 
     const ctx = await buildSessionContext(fixture.projectPath, null, { digest: true })
     expect(ctx).not.toBeNull()
     expect(ctx).toContain('trap number 0')
-    expect(ctx).toContain('trap number 5')
+    expect(ctx).toContain('trap number 4')
     expect(ctx).not.toContain('trap number 3')
   })
 })
