@@ -594,10 +594,15 @@ async function handleRequestInner(request: DaemonRequest): Promise<DaemonRespons
     console.error = (...args: unknown[]) => errors.push(args.map(String).join(' '))
 
     try {
+      // Enter the caller-session context only when the client actually sent
+      // identity — an OLD client sends nothing, and entering an empty store
+      // would block resolveCallerIdentity's env fallback and stamp 'unknown'.
+      const caller = request.callerSession
       const { runWithCallerSession } = await import('../services/request-context')
-      const result = await runWithCallerSession(request.callerSession ?? {}, () =>
-        executeCommand(commands, request)
-      )
+      const result =
+        caller && (caller.sessionId || caller.agent || caller.identity)
+          ? await runWithCallerSession(caller, () => executeCommand(commands, request))
+          : await executeCommand(commands, request)
       return {
         id: request.id,
         success: result.success,

@@ -204,8 +204,11 @@ export async function buildProjectStateParts(
         turns % LOOP_CUE_INTERVAL === 0 &&
         turns < STUCK_TURN_THRESHOLD
       ) {
+        // Guardrail events are scoped per CYCLE: normalization erases the
+        // numbers, so a session-constant key would let cycle 1's stamp
+        // silence cycle 2's warning forever.
         events.push({
-          key: 'loop',
+          key: `loop:${overview.current.id}`,
           text: `↳ Turn ${turns} on this cycle — still advancing the goal? If stuck, re-plan or split; do not loop.`,
         })
       }
@@ -216,12 +219,12 @@ export async function buildProjectStateParts(
           const spent = (currentTask.tokensIn ?? 0) + (currentTask.tokensOut ?? 0)
           if (spent >= budget) {
             events.push({
-              key: 'budget',
+              key: `budget:${overview.current.id}`,
               text: `⚠ Token budget: ${spent.toLocaleString()} of ${budget.toLocaleString()} spent on this cycle. STOP growing it — ship the working slice, split the remainder into a new cycle, or check in with the user.`,
             })
           } else if (spent >= budget * 0.8) {
             events.push({
-              key: 'budget',
+              key: `budget:${overview.current.id}`,
               text: `↳ Token budget: ${spent.toLocaleString()} of ${budget.toLocaleString()} (${Math.round((spent / budget) * 100)}%). Plan the close: prefer finishing over expanding scope.`,
             })
           }
@@ -242,7 +245,7 @@ export async function buildProjectStateParts(
               startedIso
             )?.c ?? 0
           const trigger = renderDelegationTrigger(touched)
-          if (trigger) events.push({ key: 'delegation', text: trigger })
+          if (trigger) events.push({ key: `delegation:${overview.current.id}`, text: trigger })
         }
       } catch {
         /* best-effort */
@@ -258,7 +261,8 @@ export async function buildProjectStateParts(
           turns,
           stuckThreshold: STUCK_TURN_THRESHOLD,
         })
-        if (card.markdown) events.push({ key: 'alignment', text: card.markdown })
+        if (card.markdown)
+          events.push({ key: `alignment:${overview.current.id}`, text: card.markdown })
       } catch {
         /* advisory */
       }
@@ -873,6 +877,10 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           // turn — force-emit (and restamp) so the model gets one complete
           // grounding block; suppression starts on the next prompt.
           const force = Boolean(sessionContext)
+          // PROBE first (no stamp writes): the assembly below truncates to a
+          // budget, and stamping content the truncation cut would suppress it
+          // for the whole session without the model ever seeing it. Stamps
+          // are written at the end, only for parts fully inside `emitted`.
           const standingGate = parts?.standing
             ? await gateDelivery({
                 ...gateBase,
@@ -880,6 +888,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 content: parts.standing,
                 normalize: normalizeStateForMaterialChange,
                 full: force,
+                probe: true,
               })
             : null
           const freshEvents: StateEvent[] = []
@@ -891,22 +900,66 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
               content: event.text,
               normalize: normalizeStateForMaterialChange,
               full: force,
+              probe: true,
             })
             if (!eventGate.suppressed) freshEvents.push(event)
           }
-          const stateBlock = parts
-            ? joinStateParts(
-                {
-                  standing: standingGate?.suppressed === false ? parts.standing : null,
-                  events: [],
-                },
-                freshEvents
-              )
-            : null
+          // WHOLE-PART packing under the budget (never truncate the joined
+          // blob): a part that doesn't fit this turn stays UNSTAMPED and
+          // re-emits when it can lead a later turn; a part that can never
+          // fit (alone over budget) is truncated once and stamped in full so
+          // it cannot loop. Stamping truncated-away content would suppress
+          // it for the whole session without the model ever seeing it.
+          const standingFresh = Boolean(parts?.standing) && standingGate?.suppressed === false
+          const stateCandidates: Array<{ key?: string; text: string; standing: boolean }> = [
+            ...(standingFresh && parts?.standing ? [{ text: parts.standing, standing: true }] : []),
+            ...freshEvents.map((event) => ({
+              key: `event:${event.key}`,
+              text: event.text,
+              standing: false,
+            })),
+          ]
+          const stateBudget = Math.max(
+            budget - (sessionContext ? sessionContext.length + 2 : 0),
+            200
+          )
+          const packed = stateCandidates.reduce<{
+            blocks: string[]
+            used: number
+            stamps: Array<{ key?: string; text: string; standing: boolean }>
+            hasStanding: boolean
+          }>(
+            (acc, candidate) => {
+              const sep = acc.used > 0 ? 1 : 0
+              if (acc.used + sep + candidate.text.length <= stateBudget) {
+                acc.blocks.push(candidate.text)
+                acc.used += sep + candidate.text.length
+                acc.stamps.push(candidate)
+                if (candidate.standing) acc.hasStanding = true
+              } else if (acc.used === 0) {
+                // Alone over budget: deliver best-effort once, stamp in full.
+                // (−20 leaves room for the '# prjct: signals' header line.)
+                acc.blocks.push(safeTruncate(candidate.text, stateBudget - 20))
+                acc.used = stateBudget
+                acc.stamps.push(candidate)
+                if (candidate.standing) acc.hasStanding = true
+              }
+              return acc
+            },
+            { blocks: [], used: 0, stamps: [], hasStanding: false }
+          )
+          const stateBlock =
+            packed.blocks.length === 0
+              ? null
+              : packed.hasStanding
+                ? packed.blocks.join('\n')
+                : `# prjct: signals\n${packed.blocks.join('\n')}`
           const base = [sessionContext, stateBlock].filter(Boolean).join('\n\n')
           // Narrow push exceptions: one preventive cue plus selective delivery
           // and authored guidance — gated as one blob by content so a repeat
           // of the same cue ships once per session, not once per prompt.
+          // appendPromptSection only adds whole sections that fit, so nothing
+          // below ever needs a post-hoc truncation.
           const { prioritized, cueOnly, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
             computePromptGuidance(config.projectId, prompt, base, budget)
           const cueGate = cueOnly
@@ -916,10 +969,32 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 key: 'guidance',
                 content: cueOnly,
                 full: force,
+                probe: true,
               })
             : null
           const cueFresh = Boolean(cueOnly) && cueGate?.suppressed === false
-          const emitted = cueFresh ? prioritized || null : base ? safeTruncate(base, budget) : null
+          const emitted = cueFresh ? prioritized || null : base || null
+          // Stamp exactly what was delivered (same normalize as the probes,
+          // or probe/stamp hashes would never agree and suppression dies).
+          for (const stamp of packed.stamps) {
+            await gateDelivery({
+              ...gateBase,
+              surface: stamp.standing ? 'prompt-state' : 'prompt-cues',
+              ...(stamp.key ? { key: stamp.key } : {}),
+              content: stamp.text,
+              normalize: normalizeStateForMaterialChange,
+              full: true,
+            })
+          }
+          if (cueFresh && cueOnly) {
+            await gateDelivery({
+              ...gateBase,
+              surface: 'prompt-cues',
+              key: 'guidance',
+              content: cueOnly,
+              full: true,
+            })
+          }
           // Attribution must credit only what the model actually received:
           // a turn whose cues were suppressed surfaced nothing. bumpTurn
           // still advances every prompt (the loop guard counts turns, not

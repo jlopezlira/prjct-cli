@@ -135,7 +135,17 @@ function registerMicroTool(server: McpServer): void {
           ],
         }
       }
-      return handler(input.args ?? {}, {})
+      // The dispatch bypasses the lean tools' zod layer, so their defaults
+      // and boundedLimit ceilings are re-applied here: mem_save.type is
+      // optional per this tool's description (untyped capture → inbox), and
+      // limits are clamped to the schema-promised maxima.
+      const args: Record<string, unknown> = { ...(input.args ?? {}) }
+      if (input.verb === 'mem_save' && typeof args.type !== 'string') args.type = 'inbox'
+      if (typeof args.limit === 'number') {
+        const max = input.verb === 'guard' ? 10 : 50
+        args.limit = Math.min(Math.max(1, Math.round(args.limit)), max)
+      }
+      return handler(args, {})
     }
   )
 }

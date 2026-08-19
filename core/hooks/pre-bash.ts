@@ -81,14 +81,18 @@ export function runPreBashHook(projectPath: string = process.cwd(), io?: HookIo)
             if (!commitContext) return null
             const config = await configManager.readConfig(p).catch(() => null)
             if (!config?.projectId) return commitContext
+            const hookInput = input as { session_id?: string; conversation_id?: string }
             const gate = await gateDelivery({
               projectId: config.projectId,
               projectPath: p,
-              sessionId: (input as { session_id?: string }).session_id,
+              sessionId: hookInput.session_id ?? hookInput.conversation_id,
               surface: 'pre-bash-commit',
               key: p,
               content: commitContext,
-              noSession: { mode: 'memory' },
+              // Safety heads-up: sessionless NEVER suppresses — in the warm
+              // daemon a memory-mode ledger is daemon-lifetime and would hide
+              // the warning from a concurrent sessionless agent.
+              noSession: { mode: 'emit' },
             })
             return gate.suppressed ? null : commitContext
           })()

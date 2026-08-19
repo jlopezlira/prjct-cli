@@ -126,6 +126,28 @@ describe('gateDelivery — noSession policies', () => {
     await new Promise((resolve) => setTimeout(resolve, 60))
     expect((await gateDelivery(req)).suppressed).toBe(false)
   })
+
+  it('static: TTL is a hard bound, not a sliding window — steady access still expires', async () => {
+    const req = baseReq({ sessionId: undefined, noSession: { mode: 'static', ttlMs: 90 } })
+    expect((await gateDelivery(req)).suppressed).toBe(false)
+    // Suppressed accesses inside the window must NOT refresh the stamp:
+    // once the ORIGINAL TTL lapses the content re-emits, even though it was
+    // being accessed (and suppressed) the whole time.
+    await new Promise((resolve) => setTimeout(resolve, 35))
+    expect((await gateDelivery(req)).suppressed).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 35))
+    expect((await gateDelivery(req)).suppressed).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 35))
+    expect((await gateDelivery(req)).suppressed).toBe(false)
+  })
+
+  it('probe: evaluates suppression without writing any stamp', async () => {
+    const req = baseReq()
+    expect((await gateDelivery({ ...req, probe: true })).suppressed).toBe(false)
+    // The probe wrote nothing — the next real call is still the first delivery.
+    expect((await gateDelivery(req)).suppressed).toBe(false)
+    expect((await gateDelivery(req)).suppressed).toBe(true)
+  })
 })
 
 describe('condenseResult — MCP repeat pointer', () => {

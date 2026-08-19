@@ -212,6 +212,10 @@ export interface GateRequest {
   normalize?: (content: string) => string
   /** Escape hatch: always emit, still restamp. */
   full?: boolean
+  /** Read-only evaluation: report suppression without writing any stamp.
+   *  Callers that assemble under a budget probe first, then stamp only the
+   *  parts the model actually received (never stamp truncated-away text). */
+  probe?: boolean
   /** Policy when sessionId is undefined. Default: emit (never suppress). */
   noSession?: { mode: 'emit' } | { mode: 'memory' } | { mode: 'static'; ttlMs: number }
   /** Pointer text on suppression; default → emit null. */
@@ -292,7 +296,7 @@ export async function gateDelivery(req: GateRequest): Promise<GateResult> {
 
     if (policy?.mode === 'memory') {
       const repeat = !req.full && gateL1.get(l1Key) === hash
-      ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
+      if (!req.probe) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
       return repeat ? suppressResult(hash, req.onRepeat) : emitResult(req.content, hash)
     }
 
@@ -300,7 +304,7 @@ export async function gateDelivery(req: GateRequest): Promise<GateResult> {
     // the L1 map only short-circuits the non-TTL session path (TTL needs
     // the per-entry timestamp, which lives on disk).
     if (ttlMs === null && !req.full && gateL1.get(l1Key) === hash) {
-      ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
+      if (!req.probe) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
       return suppressResult(hash, req.onRepeat)
     }
 
@@ -311,10 +315,15 @@ export async function gateDelivery(req: GateRequest): Promise<GateResult> {
     const expired = ttlMs !== null && entry !== undefined && now - entry.t > ttlMs
     const suppress = !req.full && !fresh && !expired
 
-    delete stored[subKey]
-    stored[subKey] = { h: hash, t: now } // re-insert last: insertion-order eviction keeps hot keys
-    await writeGateFile(target, stored)
-    if (ttlMs === null) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
+    // TTL entries refresh ONLY on emit — refreshing on suppression turns the
+    // TTL into a sliding window that never expires under steady access, which
+    // would let sessionless suppression outlive its bound indefinitely.
+    if (!req.probe && !(suppress && ttlMs !== null)) {
+      delete stored[subKey]
+      stored[subKey] = { h: hash, t: now } // re-insert last: insertion-order eviction keeps hot keys
+      await writeGateFile(target, stored)
+      if (ttlMs === null) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
+    }
 
     return suppress ? suppressResult(hash, req.onRepeat) : emitResult(req.content, hash)
   } catch {
