@@ -9,6 +9,9 @@ export interface LikelyFileHit {
 }
 
 const DEFAULT_FILE_CUE_COUNT = 8
+/** Prompt-hook push is leaner than work-start: the agent can always pull
+ *  the full scope via prjct_relevant_files (pull-first). */
+const PROMPT_FILE_CUE_COUNT = 5
 
 /**
  * Rank likely files via the unified work-scope pipeline:
@@ -34,7 +37,7 @@ export function formatLikelyFileForAgent(file: LikelyFileHit | WorkScopeHit): st
  * surfaces the full empty/cold guidance.
  */
 export function buildIndexedFileCue(projectId: string, query: string): string | null {
-  const scope = resolveWorkScopeSync(projectId, query, DEFAULT_FILE_CUE_COUNT)
+  const scope = resolveWorkScopeSync(projectId, query, PROMPT_FILE_CUE_COUNT)
   if (scope.files.length === 0) return null
   return scope.agentBlock || null
 }

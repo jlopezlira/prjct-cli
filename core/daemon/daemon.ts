@@ -594,7 +594,10 @@ async function handleRequestInner(request: DaemonRequest): Promise<DaemonRespons
     console.error = (...args: unknown[]) => errors.push(args.map(String).join(' '))
 
     try {
-      const result = await executeCommand(commands, request)
+      const { runWithCallerSession } = await import('../services/request-context')
+      const result = await runWithCallerSession(request.callerSession ?? {}, () =>
+        executeCommand(commands, request)
+      )
       return {
         id: request.id,
         success: result.success,

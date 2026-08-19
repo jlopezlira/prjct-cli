@@ -16,7 +16,9 @@
  */
 
 import { safeTruncate } from '../hooks/_shared'
+import { resolveCallerIdentity } from '../services/agent-identity'
 import { formatLikelyFileForAgent } from '../services/file-cue'
+import { condenseDeliveredDurable, gateDelivery } from '../services/session-context-cache'
 import { collectActiveTasks } from '../services/task-overview'
 import {
   formatRelatedContextForAgent,
@@ -78,6 +80,8 @@ export class WorkflowCommands extends PrjctCommandsBase {
       spec?: string
       extend?: boolean
       geometry?: string
+      /** Bypass session-scoped delivery trimming (re-emit everything). */
+      full?: boolean
     } = {}
   ): Promise<CommandResult> {
     try {
@@ -127,7 +131,29 @@ export class WorkflowCommands extends PrjctCommandsBase {
       // come up before?" cue. The agent pulls full bodies on demand via
       // `prjct search <id>` / `prjct context memory`. Keeps work --md lean.
       const related = (outcome.relatedContext ?? []).slice(0, 4)
-      const relatedLines = related.map(formatRelatedContextForAgent)
+      // Session-scoped ledger: an entry already delivered in this session
+      // (earlier cycle, mem_list, guard) collapses to an id ref here.
+      const caller = resolveCallerIdentity('work')
+      const relatedCondensed = await condenseDeliveredDurable(
+        {
+          projectId,
+          projectPath,
+          sessionId: caller.sessionId,
+          surface: 'cli-work',
+        },
+        related.map((h) => ({ id: h.id, content: formatRelatedContextForAgent(h) })),
+        { full: Boolean(options.full) }
+      )
+      const relatedLines = [
+        ...relatedCondensed.fresh.map((entry) => entry.content),
+        ...(relatedCondensed.repeats.length > 0
+          ? [
+              `_Already in your context this session: ${relatedCondensed.repeats
+                .map((entry) => `\`${entry.id}\``)
+                .join(' ')}_`,
+            ]
+          : []),
+      ]
       const likelyFiles = outcome.likelyFiles ?? []
       const likelyFileLines = likelyFiles.map(formatLikelyFileForAgent)
       // Predictive risk — the preventive memory for the area this cycle touches,
@@ -256,7 +282,24 @@ export class WorkflowCommands extends PrjctCommandsBase {
                 mdList(riskLines)
               )
             : null,
-          mdSection('Project alignment', alignment.md),
+          mdSection(
+            'Project alignment',
+            // Static style snapshot (changes on sync) — once per session;
+            // sessionless short TTL is safe (identical bytes for any agent).
+            (
+              await gateDelivery({
+                projectId,
+                projectPath,
+                sessionId: caller.sessionId,
+                surface: 'cli-work',
+                key: 'alignment',
+                content: alignment.md,
+                full: Boolean(options.full),
+                noSession: { mode: 'static', ttlMs: 15 * 60_000 },
+                onRepeat: () => '_Unchanged this session — `prjct work --full` re-emits._',
+              })
+            ).emit ?? alignment.md
+          ),
           relatedLines.length > 0
             ? mdSection(
                 'Living knowledge — SoT · tips (terminal → user)',

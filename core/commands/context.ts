@@ -128,7 +128,7 @@ export class ContextCommands {
   async search(
     query: string | null = null,
     projectPath: string = process.cwd(),
-    options: MdOption & { global?: boolean } = {}
+    options: MdOption & { global?: boolean; full?: boolean } = {}
   ): Promise<CommandResult> {
     // --global searches the cross-project knowledge base ('global-kb'):
     // personal gotchas/facts captured with `prjct remember --global`,
@@ -146,9 +146,39 @@ export class ContextCommands {
     const { runContextTool } = await import('../tools/context')
     const result = await runContextTool(['memory', q], projectId, projectPath)
     const ok = result.tool !== 'error'
-    const message = options.md
+    const rendered = options.md
       ? ((result.result as { markdown?: string }).markdown ?? '')
       : JSON.stringify(result, null, 2)
+    // Re-running the SAME query with unchanged results collapses to a
+    // pointer (session-scoped; sessionless never suppresses).
+    const message =
+      ok && options.md && rendered
+        ? await (async (): Promise<string> => {
+            const { resolveCallerIdentity } = await import('../services/agent-identity')
+            const { gateDelivery } = await import('../services/session-context-cache')
+            const caller = resolveCallerIdentity('search')
+            const gate = await gateDelivery({
+              projectId,
+              projectPath,
+              sessionId: caller.sessionId,
+              surface: 'cli-search',
+              key: q,
+              content: rendered,
+              full: Boolean(options.full),
+              onRepeat: (hash) =>
+                `_Same search result already delivered this session (hash ${hash.slice(0, 8)}) — \`prjct search "${q.slice(0, 60)}" --full\` to re-emit._`,
+            })
+            try {
+              const { recordCliDeliveryChars } = await import('../services/work-cost-service')
+              const { stateStorage } = await import('../storage/state-storage')
+              const task = await stateStorage.getCurrentTask(projectId)
+              recordCliDeliveryChars(projectId, task?.id, gate.emittedChars, caller.agent, 'search')
+            } catch {
+              /* telemetry only */
+            }
+            return gate.emit ?? rendered
+          })()
+        : rendered
     return { success: ok, message }
   }
 
