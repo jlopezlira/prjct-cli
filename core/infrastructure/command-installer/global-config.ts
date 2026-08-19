@@ -15,37 +15,17 @@ import type { AIProviderConfig } from '../../types/provider'
 import { readExistingFileOrEmpty } from '../../utils/file-helper'
 import { mergeWithMarkers } from '../ide-project-installer'
 
+// Re-sent by the host on EVERY turn of EVERY session across ALL projects —
+// each line here is the most expensive prose in the product. Rules only,
+// no rationale: the skill (L0) and pull verbs carry the rest.
 const GLOBAL_CLAUDE_MD_CONTENT = `<!-- prjct:start - DO NOT REMOVE THIS MARKER -->
 # p/ — Project knowledge layer
 
-prjct stores project memory (decisions, learnings, gotchas, patterns, ships, analyses) per project in SQLite and serves it to you through tools. **Query it — don't re-read source from scratch.**
+prjct = per-project memory (decisions, gotchas, learnings, ships, analyses) in SQLite, served via tools. In a prjct project (\`.prjct/\` in cwd or registered path):
 
-prjct remembers and shows the path; it does not own execution. Treat prjct output as durable signals (task state, memories, specs, workflows, risks, recent learnings). Claude, GPT, and other agents decide the concrete HOW with their own native tools and judgment, then persist meaningful outcomes back to prjct.
-
-You are in a prjct project when \`.prjct/\` is in cwd OR \`~/.prjct-cli/projects/\` has an entry for the current path.
-
-## Lookup FIRST, source LAST
-
-Before reading source code or running broad searches for ANY question about the project (architecture, conventions, decisions, recent ships, bugs, patterns, tech debt, past analyses), QUERY prjct first — bounded, ranked answers from SQLite, no markdown trees to wade through:
-
-- \`prjct context memory <topic>\` / \`prjct search "<q>"\` — captured decisions, gotchas, learnings, facts
-- \`prjct context --md\` — current state: active cycle, ships, recent learnings
-- architecture / conventions / patterns / anti-patterns / tech-debt / insights → MCP \`prjct_analysis\` (add \`mode:archive\` for history)
-- developer preferences → MCP \`prjct_developer\`; machine signals → MCP \`prjct_signals\`
-- specs → MCP \`prjct_spec_list\` / \`prjct_spec_get\`; per-file traps before editing → \`prjct guard <file>\`
-
-Only fall through to source/repo reading when prjct does not contain the answer.
-
-**Skill ≠ project identity.** The prjct skill is a portable multi-LLM contract (L0). Live name/stack/branch come from SessionStart + \`prjct context --md\` for **this cwd**. If skill text and the tree disagree, trust the cwd and the tree.
-
-## Capture analyses BACK to prjct
-
-When you complete substantive work — analysis, decision, learning, gotcha — persist it: \`prjct remember <decision|learning|gotcha|fact> "..."\` or \`prjct capture "<text>" --tags k:v\`. **Author every entry in ENGLISH**, whatever language the user speaks. **Default to capturing — under-capture is the failure mode that makes prjct useless.** The full verb map and task workflow live in the \`prjct\` skill.
-
-## Where things live
-
-- Source of truth: SQLite at \`~/.prjct-cli/projects/<id>/\` (don't read directly — use \`prjct\` CLI / MCP tools)
-- Project config: \`.prjct/prjct.config.json\` in repo root
+1. **Lookup FIRST, source LAST.** Any project question (architecture, conventions, decisions, past bugs/analyses): \`prjct search "<q>"\` / \`prjct context --md\` / MCP \`prjct_analysis\`; per-file traps: \`prjct guard <file>\`. Read source only when prjct lacks the answer.
+2. **Capture back.** Substantive outcomes → \`prjct remember <decision|learning|gotcha|fact> "..."\` — always in ENGLISH; default to capturing.
+3. **Trust the cwd, not the skill text** for project identity. Never read \`~/.prjct-cli/\` SQLite directly — use the CLI/MCP.
 
 **Auto-managed by prjct-cli** | https://prjct.app
 <!-- prjct:end - DO NOT REMOVE THIS MARKER -->
