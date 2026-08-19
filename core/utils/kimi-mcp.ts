@@ -16,7 +16,12 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { resolveUserPath } from '../infrastructure/user-home'
-import { MCP_SERVER_PRESETS, removeMcpServer, upsertMcpServer } from './mcp-config'
+import {
+  getPrjctLeanMcpConfig,
+  MCP_SERVER_PRESETS,
+  removeMcpServer,
+  upsertMcpServer,
+} from './mcp-config'
 
 /** Candidate Kimi config dirs, preferred first (`.kimi-code`, legacy `.kimi`). */
 function kimiHomeDirs(): string[] {
@@ -52,7 +57,9 @@ export async function ensureKimiMcpServer(configPath = getKimiMcpConfigPath()): 
   changed: boolean
 }> {
   const context7 = await upsertMcpServer('context7', MCP_SERVER_PRESETS.context7, configPath)
-  const prjct = await upsertMcpServer('prjct', MCP_SERVER_PRESETS.prjct, configPath)
+  // Lean tier: Kimi re-pays the tool catalog on every API call (no prompt
+  // cache), so its default surface is the 6-tool lean set.
+  const prjct = await upsertMcpServer('prjct', getPrjctLeanMcpConfig(), configPath)
   return { path: configPath, changed: context7.changed || prjct.changed }
 }
 

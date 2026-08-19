@@ -14,7 +14,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { resolveUserPath } from '../infrastructure/user-home'
 import type { MCPServerConfig } from '../types/utils.js'
-import { MCP_SERVER_PRESETS, upsertMarkedBlock, writeConfigIfChanged } from './mcp-config'
+import {
+  getPrjctLeanMcpConfig,
+  MCP_SERVER_PRESETS,
+  upsertMarkedBlock,
+  writeConfigIfChanged,
+} from './mcp-config'
 
 const START_MARKER = '# prjct:mcp:start - managed by prjct, do not edit between markers'
 const END_MARKER = '# prjct:mcp:end'
@@ -69,7 +74,9 @@ function buildMcpTomlBlock(
   return lines.join('\n')
 }
 
-export function buildPrjctMcpTomlBlock(server: MCPServerConfig = MCP_SERVER_PRESETS.prjct): string {
+// Lean tier: Codex re-pays the tool catalog on every API call (no prompt
+// cache), so its default surface is the 6-tool lean set.
+export function buildPrjctMcpTomlBlock(server: MCPServerConfig = getPrjctLeanMcpConfig()): string {
   return buildMcpTomlBlock('prjct', server, START_MARKER, END_MARKER)
 }
 

@@ -20,13 +20,13 @@ import { registerWorkflowTools } from './tools/workflow'
  * Compact instructions — hosts already list tool names; avoid duplicating
  * the tool laundry list here (token tax on every session).
  */
-const PRJCT_INSTRUCTIONS = `# prjct — project memory + work cycles
+export const PRJCT_INSTRUCTIONS = `# prjct — project memory + work cycles
 
 Use when work needs durable project memory, intent, or harness gates. Prefer tools over Grep for recall.
 
 ## What's here
-- Memory save/list/guard · work cycle status/start · analysis · session resume
-- Extended (PRJCT_MCP_TOOLS=standard|all): files, code-intel, typed record verbs, signals, skills, tiers, artifacts, workflows, specs
+- Memory save/list/guard · work cycle start/status · analysis
+- More (PRJCT_MCP_TOOLS=core|standard|all): similar/forget/resume, files, code-intel, typed verbs, signals, skills, artifacts, workflows, specs
 
 ## Gotchas
 - Persist memories in ENGLISH. Secrets refused unless force=true.
@@ -34,13 +34,24 @@ Use when work needs durable project memory, intent, or harness gates. Prefer too
 - Recall is ranked/best-effort, not a full dump.`
 
 /**
+ * Lean-tier instructions — non-caching hosts re-pay this block on every API
+ * call, so it carries only what changes behavior. More tools: raise
+ * PRJCT_MCP_TOOLS.
+ */
+export const PRJCT_INSTRUCTIONS_LEAN = `# prjct — project memory + work cycles
+
+Prefer these tools over Grep for recall. Memories in ENGLISH; secrets refused unless force=true. projectPath optional (defaults to cwd). More tools: PRJCT_MCP_TOOLS=core|standard|all.`
+
+/**
  * Tool surface tiers. Every registered tool costs schema tokens every session.
+ *   lean     — 6 tools for non-caching hosts (Kimi/Codex) that re-pay the
+ *              catalog on every API call
  *   core     — high-signal only (default, ~10 tools)
  *   standard — + files, code-intel, typed mem, cost, signals, skills, tiers, artifacts
  *   all      — + workflows + specs
- * Override with PRJCT_MCP_TOOLS=core|standard|all.
+ * Override with PRJCT_MCP_TOOLS=lean|core|standard|all.
  */
-export type ToolTier = 'core' | 'standard' | 'all'
+export type ToolTier = 'lean' | 'core' | 'standard' | 'all'
 
 export const DEFAULT_MCP_TOOL_TIER: ToolTier = 'core'
 export const MCP_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1_000
@@ -52,16 +63,17 @@ const CATALOG_CACHE_HINT = {
 
 export function resolveTier(envValue: string | undefined = process.env.PRJCT_MCP_TOOLS): ToolTier {
   const raw = (envValue ?? DEFAULT_MCP_TOOL_TIER).toLowerCase()
-  if (raw === 'standard' || raw === 'all' || raw === 'core') return raw
+  if (raw === 'lean' || raw === 'standard' || raw === 'all' || raw === 'core') return raw
   return DEFAULT_MCP_TOOL_TIER
 }
 
 export function createServer(): McpServer {
+  const tier = resolveTier()
   const server = new McpServer(
     { name: 'prjct', version: VERSION },
     {
       capabilities: { tools: { listChanged: false } },
-      instructions: PRJCT_INSTRUCTIONS,
+      instructions: tier === 'lean' ? PRJCT_INSTRUCTIONS_LEAN : PRJCT_INSTRUCTIONS,
       cacheHints: {
         'server/discover': CATALOG_CACHE_HINT,
         'tools/list': CATALOG_CACHE_HINT,
@@ -69,11 +81,11 @@ export function createServer(): McpServer {
     }
   )
 
-  const tier = resolveTier()
-  const extended = tier !== 'core'
-  registerMemoryTools(server, { extended })
-  registerProjectTools(server, { extended })
-  if (tier === 'core') return server
+  const lean = tier === 'lean'
+  const extended = tier === 'standard' || tier === 'all'
+  registerMemoryTools(server, { extended, lean })
+  registerProjectTools(server, { extended, lean })
+  if (tier === 'lean' || tier === 'core') return server
 
   registerFileTools(server)
   registerCodeIntelTools(server)

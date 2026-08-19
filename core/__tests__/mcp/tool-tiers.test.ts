@@ -36,6 +36,34 @@ describe('tiered MCP tool loading (PRJCT_MCP_TOOLS)', () => {
     expect(core).toBeGreaterThanOrEqual(8)
   })
 
+  it('lean tier is 6 tools, a strict subset of core (non-caching hosts)', async () => {
+    const lean = await getTools('lean')
+    const core = await getTools('core')
+    expect(Object.keys(lean).sort()).toEqual([
+      'prjct_analysis',
+      'prjct_guard',
+      'prjct_mem_list',
+      'prjct_mem_save',
+      'prjct_task_set_status',
+      'prjct_task_start',
+    ])
+    for (const name of Object.keys(lean)) expect(core[name]).toBeDefined()
+  })
+
+  it('lean ListTools stays under its char budget (re-paid every API call)', async () => {
+    const tools = await getTools('lean')
+    const totals = Object.values(tools).reduce(
+      (acc, tool) =>
+        acc +
+        (tool.description ?? '').length +
+        (tool.inputSchema ? JSON.stringify(z.toJSONSchema(tool.inputSchema)).length : 0),
+      0
+    )
+    // ~2.8k chars measured 2026-08-19; budget 3.1k so the lean surface cannot
+    // creep back toward core's ~4.3k without an explicit decision here.
+    expect(totals).toBeLessThanOrEqual(3100)
+  })
+
   it('unset and garbage default to core; all remains opt-in', async () => {
     const core = await toolCount('core')
     expect(await toolCount(undefined)).toBe(core)

@@ -20,7 +20,7 @@ import {
 } from '../../services/architecture-snapshot'
 import { findDeadCode, formatDeadCodeMd } from '../../services/dead-code'
 import { detectChanges, formatDetectChangesMd } from '../../services/detect-changes'
-import { optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
+import { boundedLimit, optionalProjectPath, resolveProjectId, resolveProjectPath } from '../resolve'
 import { safeMcpCall } from './error-handler'
 
 // MCP SDK TS2589 workaround: cast server to avoid deep type instantiation
@@ -111,7 +111,7 @@ export function registerCodeIntelTools(server: McpServer) {
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         pattern: z.string().describe('Symbol name substring (case-insensitive)'),
-        limit: z.number().optional().default(30).describe('Max results'),
+        limit: boundedLimit(30, 100).describe('Max results'),
       }),
     },
     safeMcpCall(
@@ -159,7 +159,7 @@ export function registerCodeIntelTools(server: McpServer) {
           .optional()
           .default('both')
           .describe('inbound = callers, outbound = callees'),
-        depth: z.number().optional().default(3).describe('BFS depth 1-5'),
+        depth: boundedLimit(3, 5).describe('BFS depth 1-5'),
       }),
     },
     safeMcpCall(
@@ -245,7 +245,7 @@ export function registerCodeIntelTools(server: McpServer) {
         'Find functions/methods/classes with zero inbound CALLS (excludes entry points, tests, types). Best-effort graph.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
-        limit: z.number().optional().default(50).describe('Max candidates'),
+        limit: boundedLimit(50, 100).describe('Max candidates'),
       }),
     },
     safeMcpCall('prjct_dead_code', async (args: { projectPath: string; limit: number }) => {
@@ -317,7 +317,7 @@ export function registerCodeIntelTools(server: McpServer) {
           .optional()
           .default(false)
           .describe('Force rebuild the co-change matrix'),
-        maxResults: z.number().optional().default(10).describe('Max results (default 10)'),
+        maxResults: boundedLimit(10, 50).describe('Max results (default 10)'),
       }),
     },
     safeMcpCall(
@@ -363,7 +363,7 @@ export function registerCodeIntelTools(server: McpServer) {
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         seedFiles: z.array(z.string()).describe('Seed files to find related context for'),
-        maxResults: z.number().optional().default(15).describe('Max results (default 15)'),
+        maxResults: boundedLimit(15, 50).describe('Max results (default 15)'),
       }),
     },
     safeMcpCall(

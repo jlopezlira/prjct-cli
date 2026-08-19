@@ -31,99 +31,108 @@ type S = any
 /**
  * @param options.extended — standard/all tiers only: context_tiers + safe_artifacts
  *   stay off the default core surface so L0 MCP schema stays ≤20 tools.
+ * @param options.lean — lean tier (non-caching hosts): drop session_resume and
+ *   task_status — both self-describe as redundant with the per-turn hook
+ *   injection, and their schemas are re-paid on EVERY API call by hosts
+ *   without prompt cache.
  */
-export function registerProjectTools(server: McpServer, options: { extended?: boolean } = {}) {
+export function registerProjectTools(
+  server: McpServer,
+  options: { extended?: boolean; lean?: boolean } = {}
+) {
   const s: S = server
 
   // Core: managed session resume (high-value land→prime continuity).
-  s.registerTool(
-    'prjct_session_resume',
-    {
-      description:
-        'Resume after a fresh window: active cycle, last hand-off, journal, and next actions. ' +
-        'Rarely needed — this state is auto-injected into the conversation on every turn by the ' +
-        'session/prompt hooks; pull it only for crash recovery or cross-checking.',
-      inputSchema: z.object({
-        projectPath: optionalProjectPath,
-      }),
-    },
-    safeMcpCall('prjct_session_resume', async (args: { projectPath: string }) => {
-      const projectId = await resolveProjectId(args.projectPath)
-      const overview = await collectActiveTasks(projectId, resolveProjectPath(args.projectPath))
-      const { loadSessionContinuity, loadLastSessionCloseContent, formatSessionResumeCard } =
-        await import('../../services/session-continuity')
-      const stamp = loadSessionContinuity(projectId)
-      const current = overview.current
-      const journal = current
-        ? await import('../../storage/database').then(({ prjctDb }) =>
-            prjctDb
-              .query<{ content: string }>(
-                projectId,
-                'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 3',
-                current.id
-              )
-              .map((j) => j.content)
-              .reverse()
-          )
-        : []
-      const pendingHandoffCue = await import('../../services/agent-switch')
-        .then(({ formatPendingHandoffCue }) => formatPendingHandoffCue(projectId))
-        .catch(() => null)
-      const md = formatSessionResumeCard({
-        stamp,
-        liveCycleDescription: overview.current?.description ?? null,
-        liveCycleId: overview.current?.id ?? null,
-        journal,
-        sessionCloseContent: loadLastSessionCloseContent(projectId),
-        pendingHandoffCue,
+  if (!options.lean)
+    s.registerTool(
+      'prjct_session_resume',
+      {
+        description:
+          'Resume after a fresh window: active cycle, last hand-off, journal, and next actions. ' +
+          'Rarely needed — this state is auto-injected into the conversation on every turn by the ' +
+          'session/prompt hooks; pull it only for crash recovery or cross-checking.',
+        inputSchema: z.object({
+          projectPath: optionalProjectPath,
+        }),
+      },
+      safeMcpCall('prjct_session_resume', async (args: { projectPath: string }) => {
+        const projectId = await resolveProjectId(args.projectPath)
+        const overview = await collectActiveTasks(projectId, resolveProjectPath(args.projectPath))
+        const { loadSessionContinuity, loadLastSessionCloseContent, formatSessionResumeCard } =
+          await import('../../services/session-continuity')
+        const stamp = loadSessionContinuity(projectId)
+        const current = overview.current
+        const journal = current
+          ? await import('../../storage/database').then(({ prjctDb }) =>
+              prjctDb
+                .query<{ content: string }>(
+                  projectId,
+                  'SELECT content FROM task_log WHERE task_id = ? ORDER BY id DESC LIMIT 3',
+                  current.id
+                )
+                .map((j) => j.content)
+                .reverse()
+            )
+          : []
+        const pendingHandoffCue = await import('../../services/agent-switch')
+          .then(({ formatPendingHandoffCue }) => formatPendingHandoffCue(projectId))
+          .catch(() => null)
+        const md = formatSessionResumeCard({
+          stamp,
+          liveCycleDescription: overview.current?.description ?? null,
+          liveCycleId: overview.current?.id ?? null,
+          journal,
+          sessionCloseContent: loadLastSessionCloseContent(projectId),
+          pendingHandoffCue,
+        })
+        return { content: [{ type: 'text', text: md }] }
       })
-      return { content: [{ type: 'text', text: md }] }
-    })
-  )
+    )
 
-  s.registerTool(
-    'prjct_task_status',
-    {
-      description:
-        'Read active work across worktrees plus queued work. ' +
-        'Rarely needed — active work is auto-injected into the conversation on every turn by the ' +
-        'prompt hook; pull it only for crash recovery or cross-checking.',
-      inputSchema: z.object({
-        projectPath: optionalProjectPath,
-      }),
-    },
-    safeMcpCall('prjct_task_status', async (args: { projectPath: string }) => {
-      const projectId = await resolveProjectId(args.projectPath)
-      const overview = await collectActiveTasks(projectId, resolveProjectPath(args.projectPath))
-      const queue = await queueStorage.getActiveTasks(projectId)
+  if (!options.lean)
+    s.registerTool(
+      'prjct_task_status',
+      {
+        description:
+          'Read active work across worktrees plus queued work. ' +
+          'Rarely needed — active work is auto-injected into the conversation on every turn by the ' +
+          'prompt hook; pull it only for crash recovery or cross-checking.',
+        inputSchema: z.object({
+          projectPath: optionalProjectPath,
+        }),
+      },
+      safeMcpCall('prjct_task_status', async (args: { projectPath: string }) => {
+        const projectId = await resolveProjectId(args.projectPath)
+        const overview = await collectActiveTasks(projectId, resolveProjectPath(args.projectPath))
+        const queue = await queueStorage.getActiveTasks(projectId)
 
-      const parts: string[] = []
-      if (overview.all.length === 0) {
-        parts.push('No active work cycle.')
-      } else if (overview.all.length === 1 && overview.current) {
-        const v = overview.current
-        parts.push(`## Active Work Cycle\n**${v.description}**`)
-        parts.push(`Workspace: ${v.label}`)
-        if (v.branch) parts.push(`Branch: ${v.branch}`)
-        parts.push(`Started: ${v.startedAt}`)
-      } else {
-        parts.push(`## Active Tasks (${overview.all.length})`)
-        for (const v of overview.all) {
-          const here = v.isCurrent ? ' [this worktree]' : ''
-          parts.push(`-${here} ${v.label}: ${v.description} — started ${v.startedAt}`)
+        const parts: string[] = []
+        if (overview.all.length === 0) {
+          parts.push('No active work cycle.')
+        } else if (overview.all.length === 1 && overview.current) {
+          const v = overview.current
+          parts.push(`## Active Work Cycle\n**${v.description}**`)
+          parts.push(`Workspace: ${v.label}`)
+          if (v.branch) parts.push(`Branch: ${v.branch}`)
+          parts.push(`Started: ${v.startedAt}`)
+        } else {
+          parts.push(`## Active Tasks (${overview.all.length})`)
+          for (const v of overview.all) {
+            const here = v.isCurrent ? ' [this worktree]' : ''
+            parts.push(`-${here} ${v.label}: ${v.description} — started ${v.startedAt}`)
+          }
         }
-      }
 
-      if (queue.length > 0) {
-        parts.push(`\n## Queue (${queue.length} work items)`)
-        for (const t of queue.slice(0, 10)) {
-          parts.push(`- ${t.description} [${t.priority || 'medium'}]`)
+        if (queue.length > 0) {
+          parts.push(`\n## Queue (${queue.length} work items)`)
+          for (const t of queue.slice(0, 10)) {
+            parts.push(`- ${t.description} [${t.priority || 'medium'}]`)
+          }
         }
-      }
 
-      return { content: [{ type: 'text', text: parts.join('\n') }] }
-    })
-  )
+        return { content: [{ type: 'text', text: parts.join('\n') }] }
+      })
+    )
 
   s.registerTool(
     'prjct_task_start',
@@ -133,14 +142,8 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         description: z.string().describe('Short intent phrase'),
-        linked_spec_id: z
-          .string()
-          .optional()
-          .describe('Spec id for high-stakes work, e.g. "spec_12"'),
-        skip_hooks: z
-          .boolean()
-          .optional()
-          .describe('Skip before/after workflow rules. Default false.'),
+        linked_spec_id: z.string().optional().describe('e.g. "spec_12"'),
+        skip_hooks: z.boolean().optional(),
       }),
     },
     safeMcpCall(
@@ -267,20 +270,22 @@ export function registerProjectTools(server: McpServer, options: { extended?: bo
         const projectId = await resolveProjectId(args.projectPath)
 
         if (args.mode === 'archive') {
-          const superseded = llmAnalysisStorage
-            .getAllFull(projectId)
-            .filter((a) => a.status === 'superseded')
-          if (!superseded.length) {
+          // Bounded by construction: the archive scales with project age, so
+          // an unbounded dump here grew forever. Newest 20 + a count tail.
+          const archive = llmAnalysisStorage.getArchiveSummaries(projectId, 20)
+          if (!archive.entries.length) {
             return { content: [{ type: 'text', text: 'No superseded analyses in the archive.' }] }
           }
           const lines = ['## Analysis Archive (superseded)']
-          for (const a of superseded) {
+          for (const a of archive.entries) {
             const commit = a.commitHash ? a.commitHash.slice(0, 8) : 'unknown'
             lines.push(
               `\n### ${a.analyzedAt} (commit ${commit})`,
               `Style: ${a.analysis.architecture?.style ?? 'unknown'} · patterns ${a.analysis.patterns?.length ?? 0} · anti-patterns ${a.analysis.antiPatterns?.length ?? 0} · tech-debt ${a.analysis.techDebt?.length ?? 0}`
             )
           }
+          const older = archive.total - archive.entries.length
+          if (older > 0) lines.push(`\n_…${older} older superseded analyses (archived in vault)._`)
           return { content: [{ type: 'text', text: lines.join('\n') }] }
         }
 

@@ -253,6 +253,54 @@ class LLMAnalysisStorage {
   }
 
   /**
+   * Superseded-analysis summaries, newest first, bounded by construction:
+   * SQL LIMIT plus no blob parse (counts come from the relational columns the
+   * caller renders, not JSON.parse of every historical body). The archive
+   * grows with project age — an unbounded read here scaled MCP responses
+   * with history, not with the question asked.
+   */
+  getArchiveSummaries(
+    projectId: string,
+    limit: number
+  ): {
+    total: number
+    entries: Array<{
+      id: number
+      commitHash: string | null
+      analyzedAt: string
+      supersededAt: string | null
+      analysis: LLMAnalysis
+    }>
+  } {
+    const total =
+      prjctDb.get<{ c: number }>(
+        projectId,
+        "SELECT COUNT(*) AS c FROM llm_analysis WHERE status = 'superseded'"
+      )?.c ?? 0
+    const rows = prjctDb.query<{
+      id: number
+      commit_hash: string | null
+      analyzed_at: string
+      superseded_at: string | null
+      analysis: string
+    }>(
+      projectId,
+      "SELECT id, commit_hash, analyzed_at, superseded_at, analysis FROM llm_analysis WHERE status = 'superseded' ORDER BY id DESC LIMIT ?",
+      limit
+    )
+    return {
+      total,
+      entries: rows.map((row) => ({
+        id: row.id,
+        commitHash: row.commit_hash,
+        analyzedAt: row.analyzed_at,
+        supersededAt: row.superseded_at,
+        analysis: JSON.parse(row.analysis) as LLMAnalysis,
+      })),
+    }
+  }
+
+  /**
    * Get history of all analyses (for debugging/audit).
    */
   getHistory(
