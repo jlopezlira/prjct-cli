@@ -29,11 +29,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { DAEMON_PATHS } from '../daemon/protocol'
 import configManager from '../infrastructure/config-manager'
+import type { TaskHarness } from '../schemas/state'
 import { recordAgentSessionEnd } from '../services/agent-session-recorder'
 import { embeddingService } from '../services/embeddings'
 import { detectFriction } from '../services/friction-detector'
 import { resolveInstructionRuntime } from '../services/instruction-attribution'
 import { detectAndPersistLeanDebt } from '../services/lean-detector'
+import { recordOutputSlop } from '../services/output-slop-detector'
 import { detectAndPersistPatterns } from '../services/pattern-detector'
 import { recordCleanupReport, runSessionCleanup } from '../services/session-cleanup'
 import { detectSkillMisses } from '../services/skill-miss-detector'
@@ -177,6 +179,7 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
           activeTaskId?: string
           activeTaskDescription?: string
           activeTaskStartedAt?: string
+          activeTaskHarness?: TaskHarness
         } = {}
         if (runHeavySteps && transcriptPath) {
           const raw = await fs.readFile(transcriptPath, 'utf-8').catch(() => null)
@@ -190,8 +193,26 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
             stopContext.activeTaskId = overview.current?.id
             stopContext.activeTaskDescription = overview.current?.description
             stopContext.activeTaskStartedAt = overview.current?.startedAt
+            stopContext.activeTaskHarness = overview.current?.harness
           } catch {
             /* task attribution is best-effort and independent from token usage */
+          }
+        }
+
+        // Adaptive-output feedback: classify only strong, PII-free signals
+        // from the transcript already loaded above. Never emits or blocks Stop.
+        if (runHeavySteps && stopContext.transcriptLines) {
+          try {
+            await recordOutputSlop(p, config.projectId, stopContext.transcriptLines, {
+              runtime,
+              model,
+              sessionId: input.session_id ?? null,
+              taskId: stopContext.activeTaskId ?? null,
+              taskDescription: stopContext.activeTaskDescription ?? null,
+              harness: stopContext.activeTaskHarness ?? null,
+            })
+          } catch {
+            /* optional telemetry must never block session end */
           }
         }
 

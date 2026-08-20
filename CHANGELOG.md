@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-08-20
+
+### Added
+- Package-owned, auto-routed engineering guidance with adaptive anti-slop, RCA, comment discipline, review, merge-conflict, research, and TDD workflows.
+
 ## [4.2.0] - 2026-08-20
 
 ### Added

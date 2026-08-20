@@ -11,6 +11,7 @@
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import { formatLikelyFileForAgent } from '../../services/file-cue'
+import { formatModelOnlyGuidance } from '../../services/private-skill-router'
 import { collectActiveTasks } from '../../services/task-overview'
 import {
   formatRelatedContextForAgent,
@@ -181,6 +182,10 @@ export function registerProjectTools(
             lines.push(`Evidence: ${outcome.harness.expectedEvidence.join(', ')}`)
           }
         }
+        lines.push(
+          '',
+          formatModelOnlyGuidance(outcome.privateSkills ?? {}, outcome.outputProfile ?? 'compact')
+        )
         if (outcome.instructions && outcome.instructions.length > 0) {
           lines.push('', 'Agent instructions:')
           for (const i of outcome.instructions) lines.push(`- ${i}`)
@@ -484,7 +489,14 @@ export function registerProjectTools(
         const { projectMemory } = await import('../../memory/project-memory')
         const { buildDeveloperProfile } = await import('../../services/developer-profile')
         const { renderDeveloperEvolution } = await import('../../services/developer-evolution')
-        const entries = projectMemory.allEntriesForIndex(projectId)
+        const globalEntries = (() => {
+          try {
+            return projectMemory.allEntriesForIndex('global-kb')
+          } catch {
+            return []
+          }
+        })()
+        const entries = [...projectMemory.allEntriesForIndex(projectId), ...globalEntries]
         const body = buildDeveloperProfile(entries)
         const evolution = renderDeveloperEvolution(projectId)
         const text =

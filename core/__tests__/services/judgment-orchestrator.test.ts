@@ -7,6 +7,7 @@ import {
   formatQualityInject,
   intensityFromQuality,
   qualityFromIntensity,
+  reviewDispatchGuidance,
   SHIP_USER_ONLY,
   shipRequiresQuality,
 } from '../../services/judgment-orchestrator'
@@ -84,6 +85,19 @@ describe('formatQualityInject', () => {
     expect(md).toContain(SHIP_USER_ONLY)
     expect(md).toMatch(/MAY suggest/i)
     expect(md).toMatch(/confirms in text|explicitly/i)
+  })
+
+  it('loads private review guidance only at reviewer dispatch', () => {
+    const ledger = createLedger({ target: 't', intensity: 'standard', now: 't0' })
+    const dispatch = buildNextAction(ledger, 'standard')
+    const guidance = reviewDispatchGuidance(dispatch).join('\n')
+    expect(dispatch.kind).toBe('dispatch_reviewers')
+    expect(guidance).toContain('workflow:code-review=')
+    expect(guidance).toContain('Standards')
+    expect(guidance).toContain('comment discipline')
+
+    ledger.verdict = 'approved'
+    expect(reviewDispatchGuidance(buildNextAction(ledger, 'standard'))).toEqual([])
   })
 })
 

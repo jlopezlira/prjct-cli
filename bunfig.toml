@@ -1,3 +1,6 @@
+[loader]
+".md" = "text"
+
 [test]
 # Global test isolation:
 #  1. isolate-cli-home: point PRJCT_CLI_HOME at a temp dir BEFORE any prjct

@@ -87,6 +87,29 @@ describe('buildDeveloperProfile', () => {
     expect(out).not.toContain('## Friction history')
     expect(out).not.toContain('skill-miss noise')
   })
+
+  it('reapplies adaptive output discipline as a developer rule', () => {
+    const signal = entry(
+      'mem_output',
+      'improvement-signal',
+      [
+        '[output-slop] Adaptive output signal.',
+        'Observed: Assistant response repeated substantial content.',
+        'Expected: State each result once.',
+        'Next action: Answer at the smallest useful profile and lead with the outcome.',
+      ].join('\n'),
+      { source: 'output-slop-detector' }
+    )
+
+    const rules = extractDeveloperRules([signal])
+    expect(rules).toHaveLength(1)
+    expect(rules[0]?.kind).toBe('adaptive')
+    expect(rules[0]?.rule).toContain('smallest useful profile')
+    const profile = buildDeveloperProfile([signal])
+    expect(profile).toContain('smallest useful profile')
+    expect(profile).toContain('heuristic, not user pushback')
+    expect(profile).not.toContain('## Friction history')
+  })
 })
 
 describe('extractDeveloperRules', () => {

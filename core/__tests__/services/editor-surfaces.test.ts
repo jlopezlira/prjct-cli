@@ -62,6 +62,7 @@ describe('multi-editor surfaces generated from one contract', () => {
 
   it('every surface composes the shared CONTRACT (single source of truth)', () => {
     for (const surface of all) expect(surface).toContain(CONTRACT.rag)
+    for (const surface of all) expect(surface).toContain(CONTRACT.output)
   })
 
   it('loop-discipline contract is on every multi-runtime surface (SUPERIOR parity)', () => {

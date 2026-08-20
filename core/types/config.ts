@@ -71,9 +71,10 @@ export interface LocalConfig {
    */
   lean?: { mode: 'off' | 'lite' | 'full' | 'ultra' }
   /**
-   * Test-Driven Development intensity. Unset / `off` = zero behaviour change
-   * (opt-in, like `lean`). prjct's users are developers, so the discipline is
-   * available but never forced:
+   * Test-Driven Development intensity. Unset allows on-demand private TDD
+   * guidance for H2/H3 behavior changes, without enabling a ship gate.
+   * Explicit `off` disables that guidance; `assist|strict` enables the
+   * existing project-level discipline:
    *   - `assist` — the skill biases the implement loop test-first
    *     (red → green → refactor); `ship` surfaces a TDD reminder.
    *   - `strict` — test-first is expected; `ship` surfaces a hard TDD gate

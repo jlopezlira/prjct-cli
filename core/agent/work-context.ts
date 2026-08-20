@@ -5,6 +5,7 @@
 
 import configManager from '../infrastructure/config-manager'
 import { type LlmProfile, profileImpliesWeakMode } from '../llm'
+import { formatModelOnlyGuidance } from '../services/private-skill-router'
 import { type StartTaskOutcome, startTask } from '../services/task-service'
 import { stateStorage } from '../storage/state-storage'
 
@@ -21,6 +22,9 @@ export interface OwnedAgentWorkContext {
 
 function formatStartBrief(outcome: StartTaskOutcome): string {
   const lines: string[] = []
+  lines.push(
+    formatModelOnlyGuidance(outcome.privateSkills ?? {}, outcome.outputProfile ?? 'compact')
+  )
   if (outcome.taskId) lines.push(`Work cycle: ${outcome.taskId} — ${outcome.description ?? ''}`)
   if (outcome.branch) lines.push(`Branch: ${outcome.branch}`)
   if (outcome.harness) {

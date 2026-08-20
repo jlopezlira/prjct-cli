@@ -1,0 +1,3 @@
+# Codebase design
+
+Map the existing dependency direction and find the smallest stable seam before introducing an abstraction. Separate policy from mechanism and keep interfaces owned by the consumer that needs substitution. Prefer cohesive modules with explicit inputs and outputs; avoid pass-through layers, speculative generality, and parallel implementations. Preserve local conventions unless a demonstrated failure justifies change. For refactors, keep behavior fixed, move in reviewable steps, and test at the boundary being reshaped. State the tradeoff: what becomes easier, what becomes constrained, and which dependency is removed or inverted.

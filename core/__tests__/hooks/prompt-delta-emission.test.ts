@@ -14,14 +14,28 @@ import os from 'node:os'
 import path from 'node:path'
 import { DAEMON_PATHS } from '../../daemon/protocol'
 import type { HookHost } from '../../hooks/_shared'
-import { _resetGitSnapshotCacheForTests, runPromptHook } from '../../hooks/prompt'
+import {
+  _resetGitSnapshotCacheForTests,
+  packRequiredPromptSection,
+  runPromptHook,
+} from '../../hooks/prompt'
 import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
+import { PRIVATE_SKILL_ASSET_ROOT } from '../../services/private-skill-router'
 import prjctDb from '../../storage/database'
 import { stateStorage } from '../../storage/state-storage'
 import { execFileAsync } from '../../utils/exec'
 
 const fixture: { projectPath: string; projectId: string } = { projectPath: '', projectId: '' }
+
+it('reserves prompt budget for required private guidance before optional state', () => {
+  const required =
+    'Private guidance (auto; read on demand): workflow:diagnosing-bugs=`/pkg/diagnose.md`'
+  const packed = packRequiredPromptSection('state '.repeat(160), required, 300)
+  expect(packed.length).toBeLessThanOrEqual(300)
+  expect(packed).toContain(required)
+  expect(packed).not.toContain('state')
+})
 
 async function git(args: string[]): Promise<void> {
   await execFileAsync('git', args, { cwd: fixture.projectPath })
@@ -85,12 +99,44 @@ async function runTurn(host: HookHost, prompt: string): Promise<string> {
 }
 
 describe('delta emission (kimi/codex)', () => {
+  it('re-emits whole state omitted for required guidance instead of stamping it delivered', async () => {
+    await stateStorage.completeTask(fixture.projectId)
+    // Prime session-start context so the routed turn uses the normal 700-char budget.
+    await runTurn('codex', 'status')
+    await stateStorage.startTask(fixture.projectId, {
+      id: 'large-state-task',
+      description: `large cycle ${'scope '.repeat(75)}TAIL_SENTINEL`,
+      startedAt: new Date().toISOString(),
+      sessionId: 'delta-session',
+    } as Parameters<typeof stateStorage.startTask>[1])
+
+    const first = await runTurn('codex', 'Diagnose a flaky regression')
+    expect(first).toContain('diagnosing-bugs.md')
+    expect(first).not.toContain('large cycle')
+
+    const second = await runTurn('codex', 'continue')
+    expect(second).toContain('large cycle')
+    expect(second).toContain('TAIL_SENTINEL')
+  })
+
+  it('packs an auto-route as one exact-path section and dedupes it by session', async () => {
+    const prompt = 'Diagnose a flaky regression in AGENTS.md'
+    const first = await runTurn('codex', prompt)
+    expect(first).toContain(path.join(PRIVATE_SKILL_ASSET_ROOT, 'diagnosing-bugs.md'))
+    expect(first).toContain(path.join(PRIVATE_SKILL_ASSET_ROOT, 'writing-for-agents.md'))
+    expect(first).not.toContain('Output: standard')
+
+    expect(await runTurn('codex', 'continue')).toBe('')
+    expect(await runTurn('codex', prompt)).toBe('')
+  })
+
   it('turn 2 with only count-noise changes emits nothing', async () => {
     // Dirty BEFORE turn 1 — the clean→dirty transition is material by design;
     // this test pins that dirty→more-dirty (count noise) is NOT.
     await fs.appendFile(path.join(fixture.projectPath, 'app.ts'), '// warm\n')
     const first = await runTurn('kimi', 'continue')
     expect(first).toContain('# prjct: project state')
+    expect(first).not.toContain('Output: compact')
 
     await fs.appendFile(path.join(fixture.projectPath, 'app.ts'), '// edit\n')
     await fs.writeFile(path.join(fixture.projectPath, 'extra.ts'), 'export {}\n')
