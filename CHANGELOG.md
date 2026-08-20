@@ -2,10 +2,16 @@
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-08-20
+
+### Added
+- Package-owned, auto-routed engineering guidance with adaptive anti-slop, RCA, comment discipline, review, merge-conflict, research, and TDD workflows.
+
 ## [4.1.0] - 2026-08-20
 
 ### Added
-- implement private auto invoked engineeri
+- prjct cost: provider/model API cost totals from live OpenRouter catalog
+- `prjct cost [days|all]`: per-project inference cost totals by provider/model. List prices are fetched from the OpenRouter models catalog (cached 24h) — new providers without a CLI ship.
 
 ## [4.0.0] - 2026-08-19
 

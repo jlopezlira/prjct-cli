@@ -75,6 +75,7 @@ export class VersionService {
       if (headVersion && this.isAheadOf(info.current, headVersion)) {
         // Working tree was already bumped (likely by a prior failed
         // ship, or a manual pre-bump); reuse it instead of bumping again.
+        await this.assertGitTagAvailable(info.current)
         return info.current
       }
     }
@@ -82,8 +83,56 @@ export class VersionService {
     // `detect()` precomputes a patch bump; override with the requested level
     // (feat ships → minor, etc.) computed from the current version.
     const next = bumpVersion(info.current, level)
+    await this.assertGitTagAvailable(next)
     await this.writeVersion({ ...info, next })
     return next
+  }
+
+  /**
+   * Fail before touching version files when the candidate release tag already
+   * exists locally or on a configured remote. A stale feature worktree must
+   * never manufacture the same release number as a newer remote main.
+   */
+  private async assertGitTagAvailable(version: string): Promise<void> {
+    const tag = `v${version}`
+    const collision = (location: string): Error =>
+      new Error(
+        `Release ${tag} already exists ${location}. Sync the latest base branch, resolve conflicts, and retry ship so a new version is calculated.`
+      )
+
+    const local = await runGit(['tag', '--list', tag], { cwd: this.projectPath })
+    if (!local.ok) {
+      if (local.kind === 'exit') return
+      throwProc(local)
+    }
+    if (local.stdout.trim().split(/\r?\n/).includes(tag)) {
+      throw collision('as a local Git tag')
+    }
+
+    const configured = await runGit(['remote'], { cwd: this.projectPath })
+    if (!configured.ok) {
+      if (configured.kind === 'exit') return
+      throwProc(configured)
+    }
+    const remotes = configured.stdout
+      .split(/\r?\n/)
+      .map((remote) => remote.trim())
+      .filter(Boolean)
+
+    for (const remote of remotes) {
+      const result = await runGit(
+        ['ls-remote', '--exit-code', '--tags', remote, `refs/tags/${tag}`],
+        { cwd: this.projectPath }
+      )
+      if (result.ok) throw collision(`on Git remote ${remote}`)
+      if (result.kind === 'exit' && result.code === 2) continue
+      if (result.kind === 'exit') {
+        throw new Error(
+          `Could not verify release tag availability on Git remote ${remote}: ${result.stderr.trim() || `git exited ${result.code}`}`
+        )
+      }
+      throwProc(result)
+    }
   }
 
   /**

@@ -59,6 +59,7 @@ describe('COMMANDS', () => {
     const expected = [
       ['insights', 'insights'],
       ['performance', 'performance'],
+      ['cost', 'cost'],
     ] as const
 
     for (const [name, method] of expected) {
@@ -72,10 +73,14 @@ describe('COMMANDS', () => {
     expect(COMMANDS.find((entry) => entry.name === 'performance')?.optionSchema).toEqual({
       numbers: ['days'],
     })
+    expect(COMMANDS.find((entry) => entry.name === 'cost')?.optionSchema).toEqual({
+      numbers: ['days'],
+      booleans: ['all'],
+    })
   })
 
   it('registers v3 work-cycle primitives and keeps task-manager verbs as legacy aliases', () => {
-    for (const name of ['work', 'intent', 'insights', 'performance']) {
+    for (const name of ['work', 'intent', 'insights', 'performance', 'cost']) {
       const command = COMMANDS.find((entry) => entry.name === name)
       expect(command?.surface).toBe('ai-agile')
       expect(REGISTERED_VERBS_SET.has(name)).toBe(true)

@@ -179,6 +179,41 @@ describe('VersionService.bump (idempotency)', () => {
       expect(next).toBe('0.1.1')
     })
   })
+
+  it('rejects before writing when the candidate tag already exists locally', async () => {
+    await withVersionRepository(
+      'prjct-version-tag-',
+      async ({ dir, commitPkg, readPkgVersion }) => {
+        await commitPkg('1.2.3')
+        await execFileAsync('git', ['tag', 'v1.2.4'], { cwd: dir })
+
+        await expect(new VersionService(dir).bump()).rejects.toThrow(
+          /Release v1\.2\.4 already exists as a local Git tag/
+        )
+        expect(await readPkgVersion()).toBe('1.2.3')
+      }
+    )
+  })
+
+  it('rejects before writing when the candidate tag exists only on a remote', async () => {
+    await withVersionRepository(
+      'prjct-version-remote-tag-',
+      async ({ dir, commitPkg, readPkgVersion }) => {
+        await commitPkg('1.2.3')
+        const remoteDir = path.join(dir, 'origin.git')
+        await execFileAsync('git', ['init', '-q', '--bare', remoteDir], { cwd: dir })
+        await execFileAsync('git', ['remote', 'add', 'origin', remoteDir], { cwd: dir })
+        await execFileAsync('git', ['tag', 'v1.2.4'], { cwd: dir })
+        await execFileAsync('git', ['push', '-q', 'origin', 'refs/tags/v1.2.4'], { cwd: dir })
+        await execFileAsync('git', ['tag', '-d', 'v1.2.4'], { cwd: dir })
+
+        await expect(new VersionService(dir).bump()).rejects.toThrow(
+          /Release v1\.2\.4 already exists on Git remote origin/
+        )
+        expect(await readPkgVersion()).toBe('1.2.3')
+      }
+    )
+  })
 })
 
 /**
