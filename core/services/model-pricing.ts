@@ -34,9 +34,11 @@ const DEFAULT_PRICING_URL = 'https://openrouter.ai/api/v1/models'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const FETCH_MS = 8000
 
-let seeded: PricingCatalog | null = null
-let memory: PricingCatalog | null = null
-let testFetch: ((url: string) => Promise<unknown>) | null = null
+const cache = {
+  seeded: null as PricingCatalog | null,
+  memory: null as PricingCatalog | null,
+  testFetch: null as ((url: string) => Promise<unknown>) | null,
+}
 
 const PROVIDER_ALIASES: Record<string, string> = {
   'x-ai': 'xai',
@@ -44,17 +46,17 @@ const PROVIDER_ALIASES: Record<string, string> = {
 }
 
 export function seedPricingCatalog(catalog: PricingCatalog | null): void {
-  seeded = catalog
-  memory = catalog
+  cache.seeded = catalog
+  cache.memory = catalog
 }
 
 export function usePricingFetch(fn: ((url: string) => Promise<unknown>) | null): void {
-  testFetch = fn
-  memory = null
+  cache.testFetch = fn
+  cache.memory = null
 }
 
 export function resetPricingCache(): void {
-  memory = seeded
+  cache.memory = cache.seeded
 }
 
 function dash(id: string): string {
@@ -157,20 +159,20 @@ function sorted(rates: ModelRate[]): ModelRate[] {
 }
 
 function catalog(): PricingCatalog {
-  return memory ?? seeded ?? { rates: [], providers: {} }
+  return cache.memory ?? cache.seeded ?? { rates: [], providers: {} }
 }
 
 export async function ensurePricingCatalog(opts?: { force?: boolean }): Promise<void> {
-  if (seeded) {
-    memory = seeded
+  if (cache.seeded) {
+    cache.memory = cache.seeded
     return
   }
   const now = Date.now()
   if (
     !opts?.force &&
-    memory?.rates?.length &&
-    memory.fetchedAt &&
-    now - memory.fetchedAt < CACHE_TTL_MS
+    cache.memory?.rates?.length &&
+    cache.memory.fetchedAt &&
+    now - cache.memory.fetchedAt < CACHE_TTL_MS
   ) {
     return
   }
@@ -181,25 +183,25 @@ export async function ensurePricingCatalog(opts?: { force?: boolean }): Promise<
     disk.fetchedAt &&
     now - disk.fetchedAt < CACHE_TTL_MS
   ) {
-    memory = disk
+    cache.memory = disk
     return
   }
   try {
     const url = pricingUrl()
-    const payload = testFetch ? await testFetch(url) : await fetchRemote(url)
+    const payload = cache.testFetch ? await cache.testFetch(url) : await fetchRemote(url)
     const rates = sorted(parseOpenRouterModels(payload))
     if (rates.length === 0) {
-      if (disk) memory = disk
+      if (disk) cache.memory = disk
       return
     }
-    memory = {
+    cache.memory = {
       fetchedAt: now,
       rates,
       providers: providersFromRates(rates),
     }
-    writeDiskCache(memory)
+    writeDiskCache(cache.memory)
   } catch {
-    if (disk) memory = disk
+    if (disk) cache.memory = disk
   }
 }
 
