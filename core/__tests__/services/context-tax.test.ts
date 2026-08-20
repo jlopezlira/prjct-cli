@@ -84,19 +84,22 @@ describe('context tax collection', () => {
     expect(heavy!.approxTokens).toBeGreaterThan(2000)
     const checks = contextTaxChecks(taxes)
     const catalog = checks.find((c) => c.name === 'kimi catalog')
-    expect(catalog?.status).toBe('warn')
+    expect(catalog?.status).toBe('error')
     expect(catalog?.message).toContain('heavy: mcp:heavy-mcp')
+    expect(catalog?.message).toContain('ACTION REQUIRED')
   })
 
-  it('flags marathon sessions as a signal (never auto-kill wording)', async () => {
+  it('treats marathon sessions as unhealthy and gives an exact boundary action', async () => {
     await seedCodexSession({ turns: 200, tokensPerTurn: 120_000 })
     const taxes = await collectContextTax()
     const codex = taxes.find((t) => t.host === 'codex')
     expect(codex?.marathonSessions).toBe(1)
     const sessionCheck = contextTaxChecks(taxes).find((c) => c.name === 'codex sessions')
-    expect(sessionCheck?.status).toBe('warn')
-    expect(sessionCheck?.message).toContain('Signal only')
+    expect(sessionCheck?.status).toBe('error')
+    expect(sessionCheck?.message).toContain('ACTION REQUIRED')
+    expect(sessionCheck?.message).not.toContain('Signal only')
     expect(sessionCheck?.message).toContain('prjct land')
+    expect(sessionCheck?.message).toContain('prjct prime')
   })
 
   it('small sessions and light catalogs stay ok', async () => {
@@ -104,5 +107,20 @@ describe('context tax collection', () => {
     const taxes = await collectContextTax()
     const sessionCheck = contextTaxChecks(taxes).find((c) => c.name === 'codex sessions')
     expect(sessionCheck?.status).toBe('ok')
+  })
+
+  it('does not hide a critical catalog when native Kimi tools dominate it', () => {
+    const catalog = contextTaxChecks([
+      {
+        host: 'kimi',
+        servers: [{ server: 'native', chars: 60_000, approxTokens: 15_000 }],
+        totalCatalogChars: 60_000,
+        sessions: [],
+        marathonSessions: 0,
+      },
+    ]).find((candidate) => candidate.name === 'kimi catalog')
+
+    expect(catalog?.status).toBe('error')
+    expect(catalog?.message).toContain('host-native tools dominate')
   })
 })

@@ -387,7 +387,7 @@ prjct install            Install agent surfaces, Claude hooks, Codex status line
 prjct uninstall          Complete system removal
 prjct sync               Sync project state, rebuild indexes
 prjct watch              Auto-sync on file changes
-prjct doctor             Check system health
+prjct doctor             Check system health (`--fix` repairs and verifies)
 prjct hooks <install|uninstall|status>  Git hooks for auto-sync
 prjct context <memory|learnings>  Recall memory
 prjct review-risk        Advisory change-size + delivery-geometry hint (read-only)
@@ -399,6 +399,15 @@ prjct --version / --help
 ```
 
 Every command supports `--md` to emit LLM-optimized markdown for agent consumption.
+
+`prjct doctor --fix` runs a diagnose → repair → verify loop. It automatically
+applies every known safe repair (project setup, Context7, managed hooks/adapters
+and heavy Kimi MCP configuration), then exits non-zero if a required error is
+still present. Heavy third-party Kimi MCP entries are preserved and set to
+`enabled: false`; prjct itself is pinned to the micro tool tier. Doctor never
+deletes an integration or kills an active agent session, so host-boundary fixes
+such as reloading Kimi or starting a fresh Codex session remain explicit
+`ACTION REQUIRED` errors until they are actually resolved.
 
 ## Memory
 

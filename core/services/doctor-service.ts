@@ -20,9 +20,32 @@ import type { CheckResult, DoctorResult } from '../types/services/extracted'
 import { fileExists } from '../utils/file-helper'
 import out from '../utils/output'
 import { VERSION } from '../utils/version'
+import { collectContextTax, contextTaxChecks, type HostContextTax } from './context-tax'
 import context7Service from './context7-service'
 
 // DOCTOR SERVICE
+
+export function summarizeDoctorResult(
+  tools: CheckResult[],
+  project: CheckResult[],
+  context: CheckResult[],
+  recommendations: string[]
+): DoctorResult {
+  const allChecks = [...tools, ...project, ...context]
+  const hasErrors = allChecks.some((check) => check.status === 'error' && !check.optional)
+  const hasWarnings = allChecks.some(
+    (check) => check.status === 'warn' || (check.status === 'error' && check.optional)
+  )
+  return {
+    success: !hasErrors,
+    tools,
+    project,
+    context,
+    recommendations,
+    hasErrors,
+    hasWarnings,
+  }
+}
 
 class DoctorService {
   private projectPath: string = ''
@@ -32,7 +55,10 @@ class DoctorService {
   /**
    * Run all health checks
    */
-  async check(projectPath: string = process.cwd()): Promise<DoctorResult> {
+  async check(
+    projectPath: string = process.cwd(),
+    knownContextTax?: HostContextTax[]
+  ): Promise<DoctorResult> {
     this.projectPath = projectPath
     this.projectId = await configManager.getProjectId(projectPath)
     if (this.projectId) {
@@ -41,21 +67,9 @@ class DoctorService {
 
     const tools = await this.checkTools()
     const project = await this.checkProject()
+    const context = contextTaxChecks(knownContextTax ?? (await collectContextTax()))
     const recommendations = this.generateRecommendations(tools, project)
-
-    const hasErrors = [...tools, ...project].some((c) => c.status === 'error' && !c.optional)
-    const hasWarnings = [...tools, ...project].some(
-      (c) => c.status === 'warn' || (c.status === 'error' && c.optional)
-    )
-
-    return {
-      success: !hasErrors,
-      tools,
-      project,
-      recommendations,
-      hasErrors,
-      hasWarnings,
-    }
+    return summarizeDoctorResult(tools, project, context, recommendations)
   }
 
   /**
@@ -67,17 +81,7 @@ class DoctorService {
     this.printHeader()
     this.printSection('System Tools', result.tools)
     this.printSection('Project Status', result.project)
-
-    // Context tax: what each host re-sends per request (tool catalogs) and
-    // how big recent sessions ran — the real window-burn drivers surfaced
-    // where the user already looks. Fail-soft; skipped when no host logs.
-    try {
-      const { collectContextTax, contextTaxChecks } = await import('./context-tax')
-      const checks = contextTaxChecks(await collectContextTax())
-      if (checks.length > 0) this.printSection('Context Tax', checks)
-    } catch {
-      /* advisory section — never fails doctor */
-    }
+    if (result.context.length > 0) this.printSection('Context Tax', result.context)
 
     if (result.recommendations.length > 0) {
       this.printRecommendations(result.recommendations)
@@ -90,27 +94,55 @@ class DoctorService {
   }
 
   /**
-   * Dynasty D6: auto-heal — reinstall hooks, wire adapters, refresh surfaces.
-   * Returns process exit code (0 ok, 1 if heal had errors).
+   * Diagnose → repair every safe known issue → verify. A repair pass only
+   * succeeds when the second diagnosis has no required errors.
    */
   async heal(projectPath: string = process.cwd()): Promise<number> {
     this.printHeader()
-    out.info('Doctor heal — repairing harness wire…')
+    out.info('Doctor repair loop — diagnose → repair → verify…')
     try {
       const { applyDoctorHeal } = await import('./doctor-heal')
+      const { applyContextTaxHeal } = await import('./context-tax-heal')
+      const { applyPlannedDoctorRepairs } = await import('./doctor-repair')
+      const taxes = await collectContextTax()
+      const initial = await this.check(projectPath, taxes)
+      const checkReport = await applyPlannedDoctorRepairs(
+        [...initial.tools, ...initial.project, ...initial.context],
+        projectPath
+      )
       const report = await applyDoctorHeal(projectPath)
+      const contextReport = await applyContextTaxHeal(taxes, projectPath)
+      out.done(checkReport.line)
+      if (checkReport.applied.length) out.info(`check repairs: ${checkReport.applied.join(', ')}`)
+      if (checkReport.errors.length) {
+        for (const e of checkReport.errors) out.fail(e)
+      }
       out.done(report.line)
       if (report.applied.length) out.info(`applied: ${report.applied.join(', ')}`)
       if (report.skipped.length) out.info(`skipped: ${report.skipped.join(', ')}`)
       if (report.errors.length) {
         for (const e of report.errors) out.fail(e)
       }
+      out.done(contextReport.line)
+      if (contextReport.applied.length)
+        out.info(`context applied: ${contextReport.applied.join(', ')}`)
+      if (contextReport.skipped.length)
+        out.info(`context skipped: ${contextReport.skipped.join(', ')}`)
+      if (contextReport.errors.length) {
+        for (const e of contextReport.errors) out.fail(e)
+      }
       // Re-run checks after heal
       const result = await this.check(projectPath)
       this.printSection('System Tools', result.tools)
       this.printSection('Project Status', result.project)
+      if (result.context.length > 0) this.printSection('Context Tax', result.context)
       this.printSummary(result)
-      return report.errors.length > 0 || result.hasErrors ? 1 : 0
+      return checkReport.errors.length > 0 ||
+        report.errors.length > 0 ||
+        contextReport.errors.length > 0 ||
+        result.hasErrors
+        ? 1
+        : 0
     } catch (e) {
       out.fail(`heal failed: ${(e as Error).message}`)
       return 1

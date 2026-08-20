@@ -237,6 +237,7 @@ export interface DoctorResult {
   success: boolean
   tools: CheckResult[]
   project: CheckResult[]
+  context: CheckResult[]
   recommendations: string[]
   hasErrors: boolean
   hasWarnings: boolean

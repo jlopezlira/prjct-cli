@@ -5,8 +5,9 @@
  * catalogs and marathon sessions (60M+ cumulative tokens) dominate window
  * burn — this surfaces those numbers where the user already looks: doctor.
  *
- * SIGNAL ONLY: marathon sessions get a land→prime suggestion, never an
- * auto-kill (mem_15464). Everything here is fail-soft and read-only.
+ * Critical catalog/session burn is a health error, not an informational
+ * warning. Collection stays fail-soft and read-only; doctor --fix owns the
+ * separate repair pass and must verify afterward.
  */
 
 import fs from 'node:fs/promises'
@@ -17,7 +18,9 @@ import { getKimiMcpConfigPaths } from '../utils/kimi-mcp'
 
 const CHARS_PER_TOKEN = 4
 /** Flag a single MCP server whose catalog costs more than this per request. */
-const SERVER_FLAG_TOKENS = 2_000
+export const SERVER_FLAG_TOKENS = 2_000
+/** A catalog this large is unhealthy even when host-native tools dominate. */
+const KIMI_CATALOG_CRITICAL_TOKENS = 10_000
 /** Flag sessions past either bound as marathons (cumulative window burn). */
 const MARATHON_TOKENS = 10_000_000
 const MARATHON_TURNS = 150
@@ -231,10 +234,16 @@ export function contextTaxChecks(taxes: HostContextTax[]): CheckResult[] {
         .slice(0, 3)
         .map((s) => `${s.server}=${s.approxTokens || '?'}tok`)
         .join(' · ')
+      const totalTokens = Math.round(tax.totalCatalogChars / CHARS_PER_TOKEN)
+      const isCritical = flagged.length > 0 || totalTokens > KIMI_CATALOG_CRITICAL_TOKENS
+      const action =
+        flagged.length > 0
+          ? `ACTION REQUIRED: run \`prjct doctor --fix\` to disable heavy configured MCP entries reversibly, then reload Kimi or start a new session.`
+          : `ACTION REQUIRED: host-native tools dominate this catalog; configure a project-appropriate lean Kimi tool allowlist, then reload or start a new session.`
       checks.push({
         name: 'kimi catalog',
-        status: flagged.length > 0 ? 'warn' : 'ok',
-        message: `≈${Math.round(tax.totalCatalogChars / CHARS_PER_TOKEN).toLocaleString()} tok re-sent/request — ${top}${flagged.length > 0 ? ` · heavy: ${flagged.map((s) => s.server).join(', ')} (consider disabling or a lean tier)` : ''}`,
+        status: isCritical ? 'error' : 'ok',
+        message: `≈${totalTokens.toLocaleString()} tok re-sent/request — ${top}${flagged.length > 0 ? ` · heavy: ${flagged.map((s) => s.server).join(', ')}` : ''}${isCritical ? ` · ${action}` : ''}`,
       })
     }
     if (tax.host === 'codex' && tax.servers.length > 0) {
@@ -248,10 +257,10 @@ export function contextTaxChecks(taxes: HostContextTax[]): CheckResult[] {
       const biggest = [...tax.sessions].sort((a, b) => b.totalTokens - a.totalTokens)[0]!
       checks.push({
         name: `${tax.host} sessions`,
-        status: tax.marathonSessions > 0 ? 'warn' : 'ok',
+        status: tax.marathonSessions > 0 ? 'error' : 'ok',
         message:
           tax.marathonSessions > 0
-            ? `${tax.marathonSessions} marathon session(s) — biggest ${fmtTok(biggest.totalTokens)} tok cumulative over ${biggest.turns} turns. Long sessions re-pay their whole context every turn; a fresh session per task (\`prjct land\` → \`prjct prime\`) resets it. Signal only — your call.`
+            ? `${tax.marathonSessions} marathon session(s) — biggest ${fmtTok(biggest.totalTokens)} tok cumulative over ${biggest.turns} turns. Long sessions re-pay their whole context every turn. ACTION REQUIRED: run \`prjct land --md\`, start a fresh host session, then run \`prjct prime --md\`; doctor cannot shrink an already-open host context safely.`
             : `biggest recent session ${fmtTok(biggest.totalTokens)} tok / ${biggest.turns} turns`,
       })
     }
