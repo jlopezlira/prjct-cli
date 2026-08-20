@@ -32,7 +32,7 @@ Project memory, work cycles, ships, guardrails, or performance. **You run the ve
 | guard | `prjct guard <file>` | 1 |
 | ship | `prjct ship` | 2 |
 | next | `prjct next --md` | 1 |
-| metrics | `prjct insights` / `performance` | 1 |
+| metrics | `prjct insights` / `performance` / `cost` | 1 |
 | land | `prjct land` | 1 |
 | tdd/sdd | `prjct tdd` / `sdd` | 1 |
 | workflows | `prjct workflow` / `seed` | 1 |
@@ -41,7 +41,7 @@ Project memory, work cycles, ships, guardrails, or performance. **You run the ve
 
 ### Routing
 
-- **Tier 1 — auto-execute:** search, remember, sync, guard, insights, performance. One-line confirm; do not ask permission to save.
+- **Tier 1 — auto-execute:** search, remember, sync, guard, insights, performance, cost. One-line confirm; do not ask permission to save.
 - **Tier 2 — confirm once:** work, intent, ship. Never ship without user OK.
 - **Tier 3 — decision-brief** + cast names, knowledge facets, full map: `workflows.md` (pull on demand).
 

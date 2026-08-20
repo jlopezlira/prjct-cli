@@ -17,6 +17,7 @@ import configManager from '../infrastructure/config-manager'
 import { defaultPrConventionFor, detectPrConventionSignal } from '../services/pr-convention'
 import { syncService } from '../services/sync-service'
 import { completeActiveTask, resolveActiveTask } from '../services/task-service'
+import { assertRemoteDefaultBranchIncluded } from '../services/version-service'
 import { getGitBranch } from '../session/git-helpers'
 import { customWorkflowStorage } from '../storage/custom-workflow-storage'
 import { prjctDb } from '../storage/database'
@@ -515,6 +516,14 @@ export class ShippingCommands extends PrjctCommandsBase {
             'Ship needs a release description. Pass one explicitly, e.g. `prjct ship "add universal agent compatibility"`, or ship from a named feature branch.',
         }
       }
+
+      const hasVersionBump = rules.some(
+        (rule) =>
+          rule.type === 'step' &&
+          rule.position === 'before' &&
+          rule.action.startsWith('version:bump')
+      )
+      if (hasVersionBump) await assertRemoteDefaultBranchIncluded(projectPath)
 
       const runCtx: WorkflowRunContext = { feature: featureName }
 

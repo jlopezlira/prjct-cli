@@ -15,9 +15,9 @@
  *   - md-helpers.ts    — buildFlowDiagram for `--md` output
  */
 
-import { safeTruncate } from '../hooks/_shared'
 import { resolveCallerIdentity } from '../services/agent-identity'
 import { formatLikelyFileForAgent } from '../services/file-cue'
+import { formatModelOnlyGuidance } from '../services/private-skill-router'
 import { condenseDeliveredDurable, gateDelivery } from '../services/session-context-cache'
 import { collectActiveTasks } from '../services/task-overview'
 import {
@@ -61,6 +61,37 @@ import {
   workflowInit,
   workflowList,
 } from './workflow/rule-actions/workflows'
+
+const WORK_MD_BUDGET = 2_000
+
+/** Priority-pack whole markdown sections; never cut a guidance section mid-byte. */
+export function packWorkMarkdownSections(
+  required: Array<string | null | undefined | false>,
+  optional: Array<string | null | undefined | false>,
+  budget = WORK_MD_BUDGET
+): string {
+  const kept: string[] = []
+  const packing = { used: 0, omitted: 0 }
+  for (const section of [...required, ...optional]) {
+    if (!section) continue
+    const separator = kept.length > 0 ? 2 : 0
+    if (packing.used + separator + section.length <= budget) {
+      kept.push(section)
+      packing.used += separator + section.length
+    } else {
+      packing.omitted += 1
+    }
+  }
+  const receipt =
+    packing.omitted > 0
+      ? `> ${packing.omitted} lower-priority section(s) omitted from this bounded surface; pull with \`prjct context\`, \`prjct search\`, or \`prjct workflows --md\`.`
+      : null
+  if (receipt) {
+    const separator = kept.length > 0 ? 2 : 0
+    if (packing.used + separator + receipt.length <= budget) kept.push(receipt)
+  }
+  return mdOutput(...kept)
+}
 
 export class WorkflowCommands extends PrjctCommandsBase {
   /**
@@ -127,6 +158,10 @@ export class WorkflowCommands extends PrjctCommandsBase {
       const pipeline = outcome.pipeline
       const harness = outcome.harness
       const orchestration = outcome.orchestration
+      const modelGuidance = formatModelOnlyGuidance(
+        outcome.privateSkills ?? {},
+        outcome.outputProfile ?? 'compact'
+      )
       // Cap the passive surface: 3–4 reranked hits are enough as a "has this
       // come up before?" cue. The agent pulls full bodies on demand via
       // `prjct search <id>` / `prjct context memory`. Keeps work --md lean.
@@ -134,16 +169,20 @@ export class WorkflowCommands extends PrjctCommandsBase {
       // Session-scoped ledger: an entry already delivered in this session
       // (earlier cycle, mem_list, guard) collapses to an id ref here.
       const caller = resolveCallerIdentity('work')
-      const relatedCondensed = await condenseDeliveredDurable(
-        {
-          projectId,
-          projectPath,
-          sessionId: caller.sessionId,
-          surface: 'cli-work',
-        },
-        related.map((h) => ({ id: h.id, content: formatRelatedContextForAgent(h) })),
-        { full: Boolean(options.full) }
-      )
+      const relatedScope = {
+        projectId,
+        projectPath,
+        sessionId: caller.sessionId,
+        surface: 'cli-work' as const,
+      }
+      const relatedDeliverables = related.map((h) => ({
+        id: h.id,
+        content: formatRelatedContextForAgent(h),
+      }))
+      const relatedCondensed = await condenseDeliveredDurable(relatedScope, relatedDeliverables, {
+        full: Boolean(options.full),
+        probe: Boolean(options.md),
+      })
       const relatedLines = [
         ...relatedCondensed.fresh.map((entry) => entry.content),
         ...(relatedCondensed.repeats.length > 0
@@ -211,8 +250,39 @@ export class WorkflowCommands extends PrjctCommandsBase {
 
       const isolation = outcome.isolation
       if (options.md) {
-        const md = mdOutput(
-          mdTaskHeader({ description: taskDescription, status: 'active' }),
+        const alignmentGateRequest = {
+          projectId,
+          projectPath,
+          sessionId: caller.sessionId,
+          surface: 'cli-work' as const,
+          key: 'alignment',
+          content: alignment.md,
+          full: Boolean(options.full),
+          noSession: { mode: 'static' as const, ttlMs: 15 * 60_000 },
+          onRepeat: () => '_Unchanged this session — `prjct work --full` re-emits._',
+        }
+        const alignmentDelivery = await gateDelivery({ ...alignmentGateRequest, probe: true })
+        const alignmentSection = mdSection(
+          'Project alignment',
+          alignmentDelivery.emit ?? alignment.md
+        )
+        const livingKnowledgeSection =
+          relatedLines.length > 0
+            ? mdSection(
+                'Living knowledge — SoT · tips (terminal → user)',
+                [
+                  '> **You are the tip channel** (no separate UI). On your next reply to the user, surface relevant lines as short terminal tips, then act.',
+                  '> **SoT** = binding project truth — do not contradict without `prjct remember` superseding.',
+                  '> **SUGGEST / tip** = propose the live modification in chat (files + action) and apply when editing.',
+                  mdList(relatedLines),
+                ].join('\n')
+              )
+            : null
+        const workSections = [
+          mdTaskHeader({
+            description: [...taskDescription].slice(0, 240).join(''),
+            status: 'active',
+          }),
           isolation
             ? mdSection(
                 '⚠ Isolated to worktree (foreign occupant)',
@@ -258,6 +328,7 @@ export class WorkflowCommands extends PrjctCommandsBase {
                   .join('')
               )
             : null,
+          mdSection('Model guidance', modelGuidance),
           pipeline
             ? mdSection(
                 'Task Pipeline',
@@ -282,35 +353,8 @@ export class WorkflowCommands extends PrjctCommandsBase {
                 mdList(riskLines)
               )
             : null,
-          mdSection(
-            'Project alignment',
-            // Static style snapshot (changes on sync) — once per session;
-            // sessionless short TTL is safe (identical bytes for any agent).
-            (
-              await gateDelivery({
-                projectId,
-                projectPath,
-                sessionId: caller.sessionId,
-                surface: 'cli-work',
-                key: 'alignment',
-                content: alignment.md,
-                full: Boolean(options.full),
-                noSession: { mode: 'static', ttlMs: 15 * 60_000 },
-                onRepeat: () => '_Unchanged this session — `prjct work --full` re-emits._',
-              })
-            ).emit ?? alignment.md
-          ),
-          relatedLines.length > 0
-            ? mdSection(
-                'Living knowledge — SoT · tips (terminal → user)',
-                [
-                  '> **You are the tip channel** (no separate UI). On your next reply to the user, surface relevant lines as short terminal tips, then act.',
-                  '> **SoT** = binding project truth — do not contradict without `prjct remember` superseding.',
-                  '> **SUGGEST / tip** = propose the live modification in chat (files + action) and apply when editing.',
-                  mdList(relatedLines),
-                ].join('\n')
-              )
-            : null,
+          alignmentSection,
+          livingKnowledgeSection,
           likelyFileLines.length > 0
             ? mdSection(
                 'Work scope — prjct (MUST before Grep/Glob)',
@@ -326,12 +370,32 @@ export class WorkflowCommands extends PrjctCommandsBase {
           mdNextSteps([
             { label: 'Synthesize context on close', command: 'prjct remember context "..."' },
             { label: 'Ship when done', command: 'prjct ship --md' },
-          ])
+          ]),
+        ]
+        const md = packWorkMarkdownSections(
+          [
+            workSections[0],
+            workSections[1],
+            workSections[2],
+            workSections[3],
+            workSections[4],
+            workSections[5],
+            workSections[6],
+            workSections[7],
+            workSections[10],
+            workSections[11],
+          ],
+          [workSections[8], workSections[9]]
         )
-        // Hard budget on the passive surface — no single work start should blow
-        // up the agent's context. Per-entry caps already bound the parts; this
-        // is the belt-and-suspenders ceiling.
-        console.log(safeTruncate(md, 2000))
+        if (md.includes(alignmentSection) && !alignmentDelivery.suppressed) {
+          await gateDelivery({ ...alignmentGateRequest, full: true })
+        }
+        if (livingKnowledgeSection && md.includes(livingKnowledgeSection)) {
+          await condenseDeliveredDurable(relatedScope, relatedDeliverables, {
+            full: Boolean(options.full),
+          })
+        }
+        console.log(md)
       } else {
         out.done(`Work: ${taskDescription}`)
         if (isolation) {
@@ -349,6 +413,7 @@ export class WorkflowCommands extends PrjctCommandsBase {
           }
         }
         if (orchestration) out.info(orchestration.directive)
+        out.info(modelGuidance)
         out.info(alignment.line)
         if (riskLines.length > 0) {
           out.info('⚠ Risk — what bit us in this area before (read before you edit)')

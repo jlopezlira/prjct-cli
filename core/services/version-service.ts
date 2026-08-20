@@ -22,6 +22,61 @@ import * as fileHelper from '../utils/file-helper'
 
 // VersionService
 
+/**
+ * Refresh the remote default branch and require the shipping branch to include
+ * it. This closes the race where another release reaches main before its tag
+ * or package publication exists, leaving tag-only collision checks blind.
+ */
+export async function assertRemoteDefaultBranchIncluded(projectPath: string): Promise<void> {
+  const configured = await runGit(['remote'], { cwd: projectPath })
+  if (!configured.ok) {
+    if (configured.kind === 'exit') return
+    throwProc(configured)
+  }
+  const remotes = configured.stdout
+    .split(/\r?\n/)
+    .map((remote) => remote.trim())
+    .filter(Boolean)
+  if (remotes.length === 0) return
+
+  const remote = remotes.includes('origin') ? 'origin' : remotes[0]
+  if (!remote) return
+  const head = await runGit(['ls-remote', '--symref', remote, 'HEAD'], { cwd: projectPath })
+  if (!head.ok) {
+    if (head.kind !== 'exit') throwProc(head)
+    throw new Error(
+      `Could not verify the latest base branch on Git remote ${remote}: ${head.stderr.trim() || `git exited ${head.code}`}`
+    )
+  }
+  const branch = head.stdout.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m)?.[1]
+  if (!branch) return
+
+  const remoteRef = `refs/remotes/${remote}/${branch}`
+  const fetched = await runGit(['fetch', '--quiet', remote, `refs/heads/${branch}:${remoteRef}`], {
+    cwd: projectPath,
+  })
+  if (!fetched.ok) {
+    if (fetched.kind !== 'exit') throwProc(fetched)
+    throw new Error(
+      `Could not refresh ${remote}/${branch} before ship: ${fetched.stderr.trim() || `git exited ${fetched.code}`}`
+    )
+  }
+
+  const included = await runGit(['merge-base', '--is-ancestor', remoteRef, 'HEAD'], {
+    cwd: projectPath,
+  })
+  if (included.ok) return
+  if (included.kind !== 'exit') throwProc(included)
+  if (included.code === 1) {
+    throw new Error(
+      `Ship branch does not include the latest ${remote}/${branch}. Sync that base branch and resolve conflicts before shipping; version calculation on stale history is unsafe.`
+    )
+  }
+  throw new Error(
+    `Could not compare HEAD with ${remote}/${branch} before ship: ${included.stderr.trim() || `git exited ${included.code}`}`
+  )
+}
+
 export class VersionService {
   private projectPath: string
 
@@ -75,6 +130,7 @@ export class VersionService {
       if (headVersion && this.isAheadOf(info.current, headVersion)) {
         // Working tree was already bumped (likely by a prior failed
         // ship, or a manual pre-bump); reuse it instead of bumping again.
+        await this.assertGitTagAvailable(info.current)
         return info.current
       }
     }
@@ -82,8 +138,56 @@ export class VersionService {
     // `detect()` precomputes a patch bump; override with the requested level
     // (feat ships → minor, etc.) computed from the current version.
     const next = bumpVersion(info.current, level)
+    await this.assertGitTagAvailable(next)
     await this.writeVersion({ ...info, next })
     return next
+  }
+
+  /**
+   * Fail before touching version files when the candidate release tag already
+   * exists locally or on a configured remote. A stale feature worktree must
+   * never manufacture the same release number as a newer remote main.
+   */
+  private async assertGitTagAvailable(version: string): Promise<void> {
+    const tag = `v${version}`
+    const collision = (location: string): Error =>
+      new Error(
+        `Release ${tag} already exists ${location}. Sync the latest base branch, resolve conflicts, and retry ship so a new version is calculated.`
+      )
+
+    const local = await runGit(['tag', '--list', tag], { cwd: this.projectPath })
+    if (!local.ok) {
+      if (local.kind === 'exit') return
+      throwProc(local)
+    }
+    if (local.stdout.trim().split(/\r?\n/).includes(tag)) {
+      throw collision('as a local Git tag')
+    }
+
+    const configured = await runGit(['remote'], { cwd: this.projectPath })
+    if (!configured.ok) {
+      if (configured.kind === 'exit') return
+      throwProc(configured)
+    }
+    const remotes = configured.stdout
+      .split(/\r?\n/)
+      .map((remote) => remote.trim())
+      .filter(Boolean)
+
+    for (const remote of remotes) {
+      const result = await runGit(
+        ['ls-remote', '--exit-code', '--tags', remote, `refs/tags/${tag}`],
+        { cwd: this.projectPath }
+      )
+      if (result.ok) throw collision(`on Git remote ${remote}`)
+      if (result.kind === 'exit' && result.code === 2) continue
+      if (result.kind === 'exit') {
+        throw new Error(
+          `Could not verify release tag availability on Git remote ${remote}: ${result.stderr.trim() || `git exited ${result.code}`}`
+        )
+      }
+      throwProc(result)
+    }
   }
 
   /**

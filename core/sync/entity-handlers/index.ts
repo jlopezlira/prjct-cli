@@ -67,6 +67,7 @@ export const UNKNOWN_ENTITY_TYPES: ReadonlySet<string> = new Set([
   'subtasks',
   'metrics_daily',
   'work_cost_snapshots',
+  'inference_cost_snapshots',
   'velocity_sprints',
   // analysis: pushed to the cloud (for the web view) but NOT applied locally.
   // It's a derived, regenerable artifact (`prjct sync` rebuilds it) and its rich

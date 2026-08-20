@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  assertRemoteDefaultBranchIncluded,
   bumpMajor,
   bumpMinor,
   bumpPatch,
@@ -177,6 +178,87 @@ describe('VersionService.bump (idempotency)', () => {
       )
       const next = await new VersionService(dir).bump()
       expect(next).toBe('0.1.1')
+    })
+  })
+
+  it('rejects before writing when the candidate tag already exists locally', async () => {
+    await withVersionRepository(
+      'prjct-version-tag-',
+      async ({ dir, commitPkg, readPkgVersion }) => {
+        await commitPkg('1.2.3')
+        await execFileAsync('git', ['tag', 'v1.2.4'], { cwd: dir })
+
+        await expect(new VersionService(dir).bump()).rejects.toThrow(
+          /Release v1\.2\.4 already exists as a local Git tag/
+        )
+        expect(await readPkgVersion()).toBe('1.2.3')
+      }
+    )
+  })
+
+  it('rejects before writing when the candidate tag exists only on a remote', async () => {
+    await withVersionRepository(
+      'prjct-version-remote-tag-',
+      async ({ dir, commitPkg, readPkgVersion }) => {
+        await commitPkg('1.2.3')
+        const remoteDir = path.join(dir, 'origin.git')
+        await execFileAsync('git', ['init', '-q', '--bare', remoteDir], { cwd: dir })
+        await execFileAsync('git', ['remote', 'add', 'origin', remoteDir], { cwd: dir })
+        await execFileAsync('git', ['tag', 'v1.2.4'], { cwd: dir })
+        await execFileAsync('git', ['push', '-q', 'origin', 'refs/tags/v1.2.4'], { cwd: dir })
+        await execFileAsync('git', ['tag', '-d', 'v1.2.4'], { cwd: dir })
+
+        await expect(new VersionService(dir).bump()).rejects.toThrow(
+          /Release v1\.2\.4 already exists on Git remote origin/
+        )
+        expect(await readPkgVersion()).toBe('1.2.3')
+      }
+    )
+  })
+})
+
+describe('assertRemoteDefaultBranchIncluded', () => {
+  it('accepts a branch that includes the refreshed remote default branch', async () => {
+    await withVersionRepository('prjct-version-base-', async ({ dir, commitPkg }) => {
+      await commitPkg('1.2.3')
+      const remoteDir = path.join(dir, 'origin.git')
+      await execFileAsync('git', ['init', '-q', '--bare', remoteDir], { cwd: dir })
+      await execFileAsync(
+        'git',
+        ['--git-dir', remoteDir, 'symbolic-ref', 'HEAD', 'refs/heads/main'],
+        {
+          cwd: dir,
+        }
+      )
+      await execFileAsync('git', ['remote', 'add', 'origin', remoteDir], { cwd: dir })
+      await execFileAsync('git', ['push', '-q', 'origin', 'main'], { cwd: dir })
+
+      await expect(assertRemoteDefaultBranchIncluded(dir)).resolves.toBeUndefined()
+    })
+  })
+
+  it('blocks a stale ship branch even before the newer release has a tag', async () => {
+    await withVersionRepository('prjct-version-stale-base-', async ({ dir, commitPkg }) => {
+      await commitPkg('1.2.3')
+      const remoteDir = path.join(dir, 'origin.git')
+      await execFileAsync('git', ['init', '-q', '--bare', remoteDir], { cwd: dir })
+      await execFileAsync(
+        'git',
+        ['--git-dir', remoteDir, 'symbolic-ref', 'HEAD', 'refs/heads/main'],
+        {
+          cwd: dir,
+        }
+      )
+      await execFileAsync('git', ['remote', 'add', 'origin', remoteDir], { cwd: dir })
+      await execFileAsync('git', ['push', '-q', 'origin', 'main'], { cwd: dir })
+
+      await commitPkg('1.3.0')
+      await execFileAsync('git', ['push', '-q', 'origin', 'main'], { cwd: dir })
+      await execFileAsync('git', ['reset', '--hard', 'HEAD~1'], { cwd: dir })
+
+      await expect(assertRemoteDefaultBranchIncluded(dir)).rejects.toThrow(
+        /does not include the latest origin\/main/
+      )
     })
   })
 })

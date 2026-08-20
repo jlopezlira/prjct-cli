@@ -750,6 +750,28 @@ export const COMMANDS: CommandMeta[] = [
     ],
   },
   {
+    name: 'cost',
+    group: 'optional',
+    surface: 'ai-agile',
+    routing: { group: 'product', method: 'cost' },
+    optionSchema: { numbers: ['days'], booleans: ['all'] },
+    description: 'Inference cost totals by provider/model from live public list prices',
+    usage: {
+      claude: 'p. cost [7|30|90|all]',
+      terminal: 'prjct cost [days|all] [--md]',
+    },
+    params: '[days|all]',
+    implemented: true,
+    hasTemplate: false,
+    requiresProject: true,
+    isOptional: true,
+    features: [
+      'Sums measured token_usage for this project over 1–90 days or all history',
+      'Prices from the live OpenRouter models catalog (new providers without a CLI ship)',
+      'Reports Total API cost per model and provider; caches the catalog locally for 24h',
+    ],
+  },
+  {
     name: 'performance',
     group: 'optional',
     surface: 'ai-agile',

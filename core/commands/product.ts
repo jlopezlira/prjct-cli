@@ -15,6 +15,14 @@ import {
   type SubstrateHealth,
 } from '../memory/substrate-health'
 import { isJunkCaptureContent } from '../services/capture-junk'
+import {
+  buildInferenceCostReport,
+  formatInferenceCostMd,
+  formatInferenceCostText,
+  parseCostWindow,
+  saveInferenceCostSnapshot,
+} from '../services/inference-cost'
+import { ensurePricingCatalog } from '../services/model-pricing'
 import { resolveActiveTask } from '../services/task-service'
 import {
   buildWorkCostSnapshot,
@@ -35,6 +43,7 @@ import { requireProject } from './guards'
 
 interface ProductOptions extends MdOption {
   days?: number
+  all?: boolean
 }
 
 interface TypeCountRow {
@@ -180,7 +189,7 @@ export class ProductCommands extends PrjctCommandsBase {
       case 'spend':
       case 'tokens':
       case 'usage':
-        return this.cost(forwarded, projectPath, options)
+        return this.insightsCost(forwarded, projectPath, options)
       case 'backfill':
         return this.backfill(projectPath, options)
       default:
@@ -304,6 +313,30 @@ export class ProductCommands extends PrjctCommandsBase {
   }
 
   async cost(
+    input: string | null = null,
+    projectPath: string = process.cwd(),
+    options: ProductOptions = {}
+  ): Promise<CommandResult> {
+    const window = parseCostWindow(input, options)
+    if (!window.ok) return failHard(window.error, options)
+    return runProductCommand(
+      projectPath,
+      options,
+      async (projectId) => {
+        await ensurePricingCatalog()
+        const { ensureHostTokenUsage } = await import('../services/host-usage')
+        await ensureHostTokenUsage(projectId, projectPath)
+        const report = buildInferenceCostReport(projectId, { days: window.days })
+        await saveInferenceCostSnapshot(projectId, report)
+        return report
+      },
+      (report) =>
+        console.log(options.md ? formatInferenceCostMd(report) : formatInferenceCostText(report)),
+      (report) => report
+    )
+  }
+
+  async insightsCost(
     input: string | null = null,
     projectPath: string = process.cwd(),
     options: ProductOptions = {}

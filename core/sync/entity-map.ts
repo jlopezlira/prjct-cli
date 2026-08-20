@@ -30,6 +30,7 @@ const TABLE_BY_ENTITY: Record<string, string> = {
   shipped_features: 'shipped_features',
   metrics_daily: 'metrics_daily',
   work_cost_snapshots: 'work_cost_snapshots',
+  inference_cost_snapshots: 'inference_cost_snapshots',
   velocity_sprints: 'velocity_sprints',
   // Project-understanding artifacts: the sealed analysis (patterns, anti-
   // patterns, tech-debt, risk-areas, insights) and SDD specs. Previously
@@ -51,6 +52,7 @@ const TABLE_BY_ENTITY: Record<string, string> = {
   workflow_rule: 'workflow_rules',
   metric: 'metrics_daily',
   work_cost_snapshot: 'work_cost_snapshots',
+  inference_cost_snapshot: 'inference_cost_snapshots',
   velocity: 'velocity_sprints',
   spec: 'specs',
   project: 'projects',
@@ -98,6 +100,7 @@ const GROUP_BY_TABLE: Record<string, IncludeGroup> = {
   workflow_rules: 'workflows',
   metrics_daily: 'metrics',
   work_cost_snapshots: 'metrics',
+  inference_cost_snapshots: 'metrics',
   velocity_sprints: 'metrics',
   archives: 'archives',
   analysis: 'analysis',

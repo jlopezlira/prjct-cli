@@ -32,7 +32,15 @@ import { executeWorkflowRules } from '../workflow-engine/workflow-engine'
 import { type LikelyFileHit, rankLikelyFiles } from './file-cue'
 import { buildLivingContextPrompt, parseLivingContextFields } from './living-context-contract'
 import { memoryService } from './memory-service'
+import {
+  type OutputProfile,
+  outputProfileFor,
+  type PrivateSkillRoute,
+  routePrivateSkills,
+  tddRoutingMode,
+} from './private-skill-router'
 import projectService from './project-service'
+import { detectRepositoryWorkflowState } from './repository-workflow-state'
 import { buildTaskHarness, evaluateHarnessCompletion } from './task-harness'
 import { type OrchestrationPlan, orchestrationFor } from './task-orchestration'
 import {
@@ -58,6 +66,10 @@ export interface StartTaskOutcome {
   harness?: TaskHarness
   /** Triage → orchestration plan: model/effort + spec/tests + fan-out directive. */
   orchestration?: OrchestrationPlan
+  /** Private package-owned engineering pointers selected for this intent. */
+  privateSkills?: PrivateSkillRoute
+  /** Adaptive model response discipline selected for this intent. */
+  outputProfile?: OutputProfile
   pipeline?: {
     classification: TaskPipelineClassification
     station: TaskPipelineStation
@@ -367,6 +379,14 @@ export async function startTask(
   const taskId = generateUUID()
   const linkedSpecId = options.spec
   const harness = buildTaskHarness(description)
+  const routingInput = {
+    intent: description,
+    harness,
+    tddMode: tddRoutingMode(cfg?.tdd?.mode),
+    ...detectRepositoryWorkflowState(projectPath),
+  } as const
+  const privateSkills = routePrivateSkills(routingInput)
+  const outputProfile = outputProfileFor(routingInput)
 
   // Triage → orchestration: turn the harness + the project's SDD/TDD modes
   // into a concrete plan (model tier, effort, spec/tests ceremony, fan-out) so
@@ -616,6 +636,8 @@ export async function startTask(
     linkedSpecId,
     harness,
     orchestration,
+    privateSkills,
+    outputProfile,
     ownerAgent: owner.agent,
     ownerIdentity: owner.identity,
     isolation,
@@ -757,6 +779,20 @@ async function recallRelatedContext(
  */
 export const TASK_CONTEXT_PROMPT = buildLivingContextPrompt()
 
+const BUG_RCA_CONTEXT_SUFFIX = [
+  '',
+  'Bug-cycle RCA receipt — include these compact fields in the same context entry:',
+  'Symptom · exact repro command · causal mechanism · discriminating evidence · why prior tests missed it · regression seam/test · prevention.',
+  'Use `unknown` for unavailable fields; never copy secrets or raw logs.',
+].join('\n')
+
+/** Add a compact, structured RCA receipt only when a bug cycle closes. */
+export function taskContextPromptFor(harness?: Pick<TaskHarness, 'kind'> | null): string {
+  return harness?.kind === 'bug'
+    ? `${TASK_CONTEXT_PROMPT}${BUG_RCA_CONTEXT_SUFFIX}`
+    : TASK_CONTEXT_PROMPT
+}
+
 export type SetStatusOutcome =
   | {
       ok: true
@@ -836,7 +872,7 @@ export async function setTaskStatus(
         taskId: wsTask.id,
         status: value,
         verificationWarnings: verification.warnings,
-        contextPrompt: TASK_CONTEXT_PROMPT,
+        contextPrompt: taskContextPromptFor(wsTask.harness),
       }
     }
 
@@ -923,7 +959,9 @@ export async function setTaskStatus(
     status: value,
     verificationWarnings: verification.warnings,
     contextPrompt:
-      normalized === 'done' || normalized === 'completed' ? TASK_CONTEXT_PROMPT : undefined,
+      normalized === 'done' || normalized === 'completed'
+        ? taskContextPromptFor(active.harness)
+        : undefined,
   }
 }
 

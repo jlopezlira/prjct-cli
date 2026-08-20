@@ -24,6 +24,7 @@ import {
   intensityFromChangeset,
   type NextActionCard,
 } from './precision-judgment'
+import { resolvePrivateSkillPath } from './private-skill-router'
 
 /**
  * Ship policy: suggest OK, execute only after explicit user text this turn.
@@ -189,10 +190,31 @@ export function formatQualityInject(
       `BLUE: ${card.judgeCharters.blue}`
     )
   }
+  lines.push(...reviewDispatchGuidance(card))
   if (card.rankedFixIds.length) {
     lines.push('', `### Blast rank: ${card.rankedFixIds.join(' → ')}`)
   }
   return lines.join('\n')
+}
+
+/** Private methodology is exposed only while reviewers are being dispatched. */
+export function reviewDispatchGuidance(card: NextActionCard): string[] {
+  if (card.kind !== 'dispatch_reviewers') return []
+  const workflow = (() => {
+    try {
+      return resolvePrivateSkillPath('code-review.md')
+    } catch {
+      // Source/dev installs may be incomplete; the quality loop remains usable.
+      return null
+    }
+  })()
+  return [
+    '',
+    '### Review methodology (auto; read on demand)',
+    workflow ? `workflow:code-review=\`${workflow}\`` : '',
+    '- Keep Standards findings and Spec/acceptance findings independent; do not let one substitute for the other.',
+    '- Standards includes comment discipline: keep comments for intent, invariants, constraints, and non-obvious tradeoffs—not narration of visible code.',
+  ].filter(Boolean)
 }
 
 /**

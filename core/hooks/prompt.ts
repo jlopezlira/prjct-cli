@@ -37,7 +37,14 @@ import {
 } from '../services/instruction-guidance'
 import { qualityInjectForProject } from '../services/judgment-orchestrator'
 import { loopGuardVerdict } from '../services/loop-guard'
+import {
+  formatPrivateSkillPointers,
+  routePrivateSkills,
+  tddRoutingMode,
+} from '../services/private-skill-router'
+import { detectRepositoryWorkflowState } from '../services/repository-workflow-state'
 import { gateDelivery, normalizeStateForMaterialChange } from '../services/session-context-cache'
+import { buildTaskHarness } from '../services/task-harness'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
@@ -496,6 +503,20 @@ function appendPromptSection(
   return candidate.length <= budget ? candidate : null
 }
 
+/** Reserve a bounded lane for required model guidance before optional cues. */
+export function packRequiredPromptSection(
+  payload: string,
+  required: string,
+  budget = STATE_BUDGET
+): string {
+  if (required.length >= budget) return safeTruncate(required, budget)
+  const combined = payload ? `${payload}\n\n${required}` : required
+  // Whole blocks only. If state cannot coexist with required guidance this
+  // turn, omit it unstamped; the next turn can deliver it after guidance
+  // dedupes. Never truncate state and then mark its unseen tail delivered.
+  return combined.length <= budget ? combined : required
+}
+
 function buildTopicalCueResult(projectId: string, prompt: string): TopicalCueResult | null {
   try {
     const keywords = extractKeywords(prompt)
@@ -781,6 +802,13 @@ function formatRelative(isoTimestamp: string): string {
 
 interface PromptGuidanceComputation {
   prioritized: string
+  /** Baseline cue payload without private model guidance. Keeping this
+   *  independent prevents a route from changing/stamp-churning other cues. */
+  cuePrioritized: string
+  /** Auto-routed private guidance, packed atomically and gated by route identity. */
+  modelGuidance: string | null
+  modelGuidanceKey: string | null
+  modelGuidanceIncluded: boolean
   /** Only the per-prompt cue sections that made the budget — the delta
    *  payload for non-caching hosts when the state block is unchanged. */
   cueOnly: string
@@ -800,20 +828,44 @@ function computePromptGuidance(
   projectId: string,
   prompt: string,
   state: string,
-  budget = STATE_BUDGET
+  budget = STATE_BUDGET,
+  tddMode?: 'off' | 'assist' | 'strict',
+  hasMergeConflicts = false
 ): PromptGuidanceComputation {
   const cueResult = buildTopicalCueResult(projectId, prompt)
   const files = buildIndexedFileCue(projectId, prompt)
   const delivery = buildDeliveryGuidance(prompt)
   const guidance = buildSelectiveGuidance(projectId, prompt)
-  const sections = [cueResult?.cue, delivery, guidance?.text, files].filter(
+  const deliveryIntent = classifyDeliveryIntent(prompt)
+  const routingInput = {
+    intent: prompt,
+    harness: buildTaskHarness(prompt),
+    // Task start already auto-routes TDD for a truly absent preference.
+    // Prompt turns repeat it only for an explicit config/env assist|strict.
+    tddMode: tddRoutingMode(tddMode) ?? 'off',
+    hasMergeConflicts,
+    ...(deliveryIntent === 'review' ? { purpose: 'review' as const } : {}),
+  }
+  const route = routePrivateSkills(routingInput)
+  const modelGuidance = formatPrivateSkillPointers(route)
+  const cueSections = [cueResult?.cue, delivery, guidance?.text, files].filter(
     (section): section is string => Boolean(section)
   )
-  const prioritized = sections.reduce<string>(
+  const cuePrioritized = cueSections.reduce<string>(
     (payload, section) => appendPromptSection(payload, section, budget) ?? payload,
     safeTruncate(state, budget)
   )
-  const cueOnly = sections.filter((section) => prioritized.includes(section)).join('\n\n')
+  // A routed private workflow/reference is the complete on-demand pointer for
+  // this turn. Do not stack topical/file/delivery cues beside it; they are
+  // optional and can surface on an unrouted turn without taxing this one.
+  const prioritized = modelGuidance
+    ? packRequiredPromptSection(state, modelGuidance, budget)
+    : cuePrioritized
+  const cueOnly = cueSections.filter((section) => prioritized.includes(section)).join('\n\n')
+  const modelGuidanceIncluded = Boolean(modelGuidance && prioritized.includes(modelGuidance))
+  const modelGuidanceKey = modelGuidance
+    ? `private-skill:${route.workflow?.id ?? 'none'}:${route.reference?.id ?? 'none'}`
+    : null
   const guidanceIncluded = Boolean(guidance?.text && prioritized.includes(guidance.text))
   const deliveryIncluded = Boolean(delivery && prioritized.includes(delivery))
   const guidanceRuleId = deliveryIncluded
@@ -821,7 +873,18 @@ function computePromptGuidance(
     : guidanceIncluded
       ? (guidance?.memoryIds[0] ?? null)
       : null
-  return { prioritized, cueOnly, cueResult, guidance, guidanceIncluded, guidanceRuleId }
+  return {
+    prioritized,
+    cuePrioritized,
+    modelGuidance,
+    modelGuidanceKey,
+    modelGuidanceIncluded,
+    cueOnly,
+    cueResult,
+    guidance,
+    guidanceIncluded,
+    guidanceRuleId,
+  }
 }
 
 export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {
@@ -834,6 +897,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         if (!prompt) return null
         const config = await configManager.readConfig(p)
         if (!config?.projectId) return null
+        const { hasMergeConflicts } = detectRepositoryWorkflowState(p)
         // Kimi: SessionStart stdout never reaches the model, so the persona /
         // cold-start digest parked by the session-start hook is injected HERE,
         // on the session's first prompt only (stamp consumed = deduped).
@@ -863,7 +927,6 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 () => null
               )
           : null
-        if (!parts && !sessionContext) return null
         const sessionId = input.session_id ?? input.conversation_id
         const budget = sessionContext ? KIMI_FIRST_PROMPT_BUDGET : STATE_BUDGET
         const bumpTurn = Boolean(parts?.standing?.includes('Active work cycle:'))
@@ -926,7 +989,12 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           const packed = stateCandidates.reduce<{
             blocks: string[]
             used: number
-            stamps: Array<{ key?: string; text: string; standing: boolean }>
+            stamps: Array<{
+              key?: string
+              text: string
+              deliveredText: string
+              standing: boolean
+            }>
             hasStanding: boolean
           }>(
             (acc, candidate) => {
@@ -934,14 +1002,15 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
               if (acc.used + sep + candidate.text.length <= stateBudget) {
                 acc.blocks.push(candidate.text)
                 acc.used += sep + candidate.text.length
-                acc.stamps.push(candidate)
+                acc.stamps.push({ ...candidate, deliveredText: candidate.text })
                 if (candidate.standing) acc.hasStanding = true
               } else if (acc.used === 0) {
                 // Alone over budget: deliver best-effort once, stamp in full.
                 // (−20 leaves room for the '# prjct: signals' header line.)
-                acc.blocks.push(safeTruncate(candidate.text, stateBudget - 20))
+                const deliveredText = safeTruncate(candidate.text, stateBudget - 20)
+                acc.blocks.push(deliveredText)
                 acc.used = stateBudget
-                acc.stamps.push(candidate)
+                acc.stamps.push({ ...candidate, deliveredText })
                 if (candidate.standing) acc.hasStanding = true
               }
               return acc
@@ -960,8 +1029,36 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           // of the same cue ships once per session, not once per prompt.
           // appendPromptSection only adds whole sections that fit, so nothing
           // below ever needs a post-hoc truncation.
-          const { prioritized, cueOnly, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
-            computePromptGuidance(config.projectId, prompt, base, budget)
+          const {
+            prioritized,
+            cuePrioritized,
+            modelGuidance,
+            modelGuidanceKey,
+            modelGuidanceIncluded,
+            cueOnly,
+            cueResult,
+            guidance,
+            guidanceIncluded,
+            guidanceRuleId,
+          } = computePromptGuidance(
+            config.projectId,
+            prompt,
+            base,
+            budget,
+            config.tdd?.mode,
+            hasMergeConflicts
+          )
+          const modelGuidanceGate =
+            modelGuidance && modelGuidanceKey && modelGuidanceIncluded
+              ? await gateDelivery({
+                  ...gateBase,
+                  surface: 'prompt-cues',
+                  key: modelGuidanceKey,
+                  content: modelGuidance,
+                  full: force,
+                  probe: true,
+                })
+              : null
           const cueGate = cueOnly
             ? await gateDelivery({
                 ...gateBase,
@@ -972,11 +1069,24 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 probe: true,
               })
             : null
+          const modelGuidanceFresh =
+            Boolean(modelGuidance && modelGuidanceIncluded) &&
+            modelGuidanceGate?.suppressed === false
           const cueFresh = Boolean(cueOnly) && cueGate?.suppressed === false
-          const emitted = cueFresh ? prioritized || null : base || null
-          // Stamp exactly what was delivered (same normalize as the probes,
-          // or probe/stamp hashes would never agree and suppression dies).
+          const emitted = (() => {
+            if (modelGuidanceFresh && cueFresh) return prioritized || null
+            if (modelGuidanceFresh && modelGuidance) {
+              return packRequiredPromptSection(base, modelGuidance, budget) || null
+            }
+            if (cueFresh && cueOnly) return cuePrioritized || null
+            return base || null
+          })()
+          // Stamp only blocks whose delivered representation is visible.
+          // Oversized single blocks deliberately stamp the full source after
+          // their one bounded preview; fitting blocks remain unstamped when
+          // required guidance displaced them and can re-emit next turn.
           for (const stamp of packed.stamps) {
+            if (!emitted?.includes(stamp.deliveredText)) continue
             await gateDelivery({
               ...gateBase,
               surface: stamp.standing ? 'prompt-state' : 'prompt-cues',
@@ -992,6 +1102,15 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
               surface: 'prompt-cues',
               key: 'guidance',
               content: cueOnly,
+              full: true,
+            })
+          }
+          if (modelGuidanceFresh && modelGuidance && modelGuidanceKey) {
+            await gateDelivery({
+              ...gateBase,
+              surface: 'prompt-cues',
+              key: modelGuidanceKey,
+              content: modelGuidance,
               full: true,
             })
           }
@@ -1027,7 +1146,14 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         const state = parts ? joinStateParts(parts, parts.events) : null
         const base = [sessionContext, state].filter(Boolean).join('\n\n')
         const { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
-          computePromptGuidance(config.projectId, prompt, base, budget)
+          computePromptGuidance(
+            config.projectId,
+            prompt,
+            base,
+            budget,
+            config.tdd?.mode,
+            hasMergeConflicts
+          )
         const afterEmitRecord: PromptAfterEmit = {
           projectId: config.projectId,
           projectPath: p,
@@ -1111,7 +1237,10 @@ async function rebuildPromptAfterEmit(
   const { cueResult, guidance, guidanceIncluded, guidanceRuleId } = computePromptGuidance(
     config.projectId,
     prompt,
-    state ?? ''
+    state ?? '',
+    STATE_BUDGET,
+    config.tdd?.mode,
+    detectRepositoryWorkflowState(projectPath).hasMergeConflicts
   )
   return {
     projectId: config.projectId,

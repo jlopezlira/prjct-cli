@@ -26,6 +26,15 @@ const MAX_PREFERENCES = 25
 const MAX_FRICTION = 15
 const MAX_PRINCIPLES = 10
 const MAX_LEAD_RULES = 6
+const ADAPTIVE_RULE_SOURCES = new Set(['friction-detector', 'output-slop-detector'])
+
+function isAdaptiveSignal(entry: MemoryEntry): boolean {
+  return (
+    entry.type === 'improvement-signal' &&
+    typeof entry.tags?.source === 'string' &&
+    ADAPTIVE_RULE_SOURCES.has(entry.tags.source)
+  )
+}
 
 function teaser(content: string): string {
   return truncate(content.replace(/\s+/g, ' ').trim(), 200)
@@ -44,11 +53,19 @@ function frictionLine(content: string): string {
 export function extractDeveloperRules(
   declared: MemoryEntry[],
   limit = MAX_LEAD_RULES
-): Array<{ rule: string; sourceId: string; kind: 'preference' | 'friction' }> {
-  const out: Array<{ rule: string; sourceId: string; kind: 'preference' | 'friction' }> = []
+): Array<{
+  rule: string
+  sourceId: string
+  kind: 'preference' | 'friction' | 'adaptive'
+}> {
+  const out: Array<{
+    rule: string
+    sourceId: string
+    kind: 'preference' | 'friction' | 'adaptive'
+  }> = []
   const seen = new Set<string>()
 
-  const push = (raw: string, sourceId: string, kind: 'preference' | 'friction') => {
+  const push = (raw: string, sourceId: string, kind: 'preference' | 'friction' | 'adaptive') => {
     const rule = normalizeRule(raw)
     if (!rule || rule.length < 12) return
     const key = rule.toLowerCase()
@@ -63,12 +80,12 @@ export function extractDeveloperRules(
     push(p.content, p.id, 'preference')
   }
 
-  for (const f of declared.filter(
-    (e) => e.type === 'improvement-signal' && e.tags?.source === 'friction-detector'
-  )) {
+  for (const f of declared.filter(isAdaptiveSignal)) {
     if (out.length >= limit) break
     const next = extractNextAction(f.content) ?? extractLesson(f.content)
-    if (next) push(next, f.id, 'friction')
+    if (next) {
+      push(next, f.id, f.tags?.source === 'friction-detector' ? 'friction' : 'adaptive')
+    }
   }
 
   return out
@@ -102,9 +119,7 @@ function extractLesson(content: string): string | null {
 function extractWorkingPrinciples(declared: MemoryEntry[], limit = MAX_PRINCIPLES): string[] {
   const out: string[] = []
   const seen = new Set<string>()
-  for (const f of declared.filter(
-    (e) => e.type === 'improvement-signal' && e.tags?.source === 'friction-detector'
-  )) {
+  for (const f of declared.filter(isAdaptiveSignal)) {
     const next = extractNextAction(f.content)
     if (!next) continue
     const n = normalizeRule(next)
@@ -121,17 +136,20 @@ export function buildDeveloperProfile(declared: MemoryEntry[]): string | null {
   // `declared` is newest-first; recent guidance reflects current preference.
   const preferences = declared.filter((e) => e.type === 'feedback').slice(0, MAX_PREFERENCES)
   const friction = declared
-    .filter((e) => e.type === 'improvement-signal' && e.tags?.source === 'friction-detector')
+    .filter((entry) => entry.tags?.source === 'friction-detector')
+    .slice(0, MAX_FRICTION)
+  const adaptive = declared
+    .filter((entry) => entry.tags?.source === 'output-slop-detector')
     .slice(0, MAX_FRICTION)
 
-  if (preferences.length === 0 && friction.length === 0) return null
+  if (preferences.length === 0 && friction.length === 0 && adaptive.length === 0) return null
 
   const leadRules = extractDeveloperRules(declared, MAX_LEAD_RULES)
   const principles = extractWorkingPrinciples(declared, MAX_PRINCIPLES)
 
   const lines: string[] = ['# Developer profile', '']
   lines.push(
-    '> Synthesized from the developer’s stated feedback and their pushback.',
+    '> Synthesized from stated feedback, observed pushback, and coarse adaptive quality signals.',
     '> Read this to act as they would — match these preferences without being asked.',
     ''
   )
@@ -140,7 +158,7 @@ export function buildDeveloperProfile(declared: MemoryEntry[]): string | null {
   if (leadRules.length > 0) {
     lines.push('## Act as this developer — rules in force', '')
     for (const r of leadRules) {
-      const tag = r.kind === 'preference' ? 'said' : 'showed'
+      const tag = r.kind === 'preference' ? 'said' : r.kind === 'friction' ? 'showed' : 'adapted'
       lines.push(`- ${r.rule}  \`${r.sourceId}\` _(${tag})_`)
     }
     lines.push('')
@@ -154,7 +172,7 @@ export function buildDeveloperProfile(declared: MemoryEntry[]): string | null {
   }
 
   if (principles.length > 0) {
-    lines.push('## Working principles — from their pushback (do this instead)', '')
+    lines.push('## Working principles — corrective and adaptive next actions', '')
     for (const p2 of principles) lines.push(`- ${p2}`)
     lines.push('')
   }
@@ -162,6 +180,14 @@ export function buildDeveloperProfile(declared: MemoryEntry[]): string | null {
   if (friction.length > 0) {
     lines.push('## Friction history — what frustrated them, do not repeat', '')
     for (const f of friction) lines.push(`- ${frictionLine(f.content)}  \`${f.id}\``)
+    lines.push('')
+  }
+
+  if (adaptive.length > 0) {
+    lines.push('## Output-quality adaptation — heuristic, not user pushback', '')
+    for (const signal of adaptive) {
+      lines.push(`- ${frictionLine(signal.content)}  \`${signal.id}\``)
+    }
     lines.push('')
   }
 

@@ -108,11 +108,23 @@ export function buildMemoryL0Index(input: BuildMemoryL0IndexInput): MemoryL0Inde
 
   // Developer rules first (act-as-them) — small budget.
   try {
-    const pool = projectMemory.recall(input.projectId, {
+    const projectRules = projectMemory.recall(input.projectId, {
       types: ['feedback', 'improvement-signal'],
       limit: 40,
       dedupeByKey: false,
     })
+    const globalRules = (() => {
+      try {
+        return projectMemory.recall('global-kb', {
+          types: ['feedback', 'improvement-signal'],
+          limit: 20,
+          dedupeByKey: false,
+        })
+      } catch {
+        return []
+      }
+    })()
+    const pool = [...projectRules, ...globalRules]
     const rules = extractDeveloperRules(pool, DEV_RULES)
     if (rules.length > 0) {
       lines.push('**How this developer works (act as them):**')

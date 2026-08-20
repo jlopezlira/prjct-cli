@@ -191,6 +191,7 @@ export type DeliverySurface =
   | 'prompt-cues'
   | 'pre-search'
   | 'pre-edit'
+  | 'post-edit'
   | 'pre-bash-commit'
   | 'cwd-changed'
   | 'mcp-result'
@@ -344,7 +345,7 @@ export async function condenseDeliveredDurable<T extends DeliverableEntry>(
     surface: DeliverySurface
   },
   entries: T[],
-  opts: { full?: boolean } = {}
+  opts: { full?: boolean; probe?: boolean } = {}
 ): Promise<CondensedDelivery<T>> {
   if (scope.sessionId === undefined) return { fresh: entries, repeats: [] }
   try {
@@ -365,7 +366,7 @@ export async function condenseDeliveredDurable<T extends DeliverableEntry>(
       },
       { fresh: [], repeats: [] }
     )
-    await writeGateFile(target, stored)
+    if (!opts.probe) await writeGateFile(target, stored)
     return partitioned
   } catch {
     return { fresh: entries, repeats: [] }
