@@ -177,6 +177,28 @@ describe('inference cost report', () => {
     expect(xai?.subsidizedUsd).toBe(5)
   })
 
+  it('ignores estimated context-tax rows that have no model id', () => {
+    insertUsage({
+      id: 'tax',
+      cycle: 'c1',
+      source: 'hook-injection:claude',
+      input: 1886,
+      output: 0,
+    })
+    insertUsage({
+      id: 'grok',
+      cycle: 'c1',
+      source: 'grok-session:abc',
+      input: 1_000_000,
+      output: 0,
+      model: 'grok-4.6',
+    })
+    const report = buildInferenceCostReport(fixture.projectId, { days: 7 })
+    expect(report.tokensIn).toBe(1_000_000)
+    expect(report.byModel.map((m) => m.model)).toEqual(['grok-4.6'])
+    expect(report.byProvider.map((p) => p.provider)).toEqual(['xai'])
+  })
+
   it('does not double-count cycle-total rows when per-model rows exist', () => {
     insertUsage({
       id: 'parent',

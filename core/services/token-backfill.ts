@@ -12,8 +12,8 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
+import { resolveUserHome } from '../infrastructure/user-home'
 import { prjctDb } from '../storage/database'
 import {
   parseTranscriptJsonl,
@@ -33,7 +33,7 @@ export interface BackfillResult {
 /** Claude Code stores transcripts under a path-derived directory name. */
 function transcriptDirFor(projectPath: string): string {
   const sanitized = projectPath.replace(/[/.]/g, '-')
-  return path.join(os.homedir(), '.claude', 'projects', sanitized)
+  return path.join(resolveUserHome(), '.claude', 'projects', sanitized)
 }
 
 export async function backfillTaskTokens(

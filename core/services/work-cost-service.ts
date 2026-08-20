@@ -197,6 +197,8 @@ export function recordTaskTokenUsage(
     isEstimated?: boolean
     /** Where the measurement came from: transcript|mcp|cli. */
     source?: string
+    /** Epoch ms. Default now. Historical backfill must pass the session/task time. */
+    measuredAt?: number
   }
 ): void {
   if (!taskId || tokensIn + tokensOut <= 0) return
@@ -262,7 +264,10 @@ export function recordTaskTokenUsage(
   try {
     const source = meta?.source ?? 'cli'
     const eventKey = `${taskId}:${source}`
-    const now = Date.now()
+    const measuredAt =
+      typeof meta?.measuredAt === 'number' && Number.isFinite(meta.measuredAt)
+        ? meta.measuredAt
+        : Date.now()
     prjctDb.run(
       projectId,
       `INSERT INTO token_usage
@@ -284,8 +289,8 @@ export function recordTaskTokenUsage(
       to,
       meta?.model ?? null,
       meta?.description ?? null,
-      now,
-      now
+      measuredAt,
+      measuredAt
     )
   } catch {
     /* best-effort typed mirror — the event row stays the source of truth */
