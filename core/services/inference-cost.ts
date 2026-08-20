@@ -150,9 +150,14 @@ export function buildInferenceCostReport(
   })
 
   for (const row of counted) {
+    const modelId = row.model_id?.trim() ?? ''
+    // Context-tax estimates (hook-injection / cli-md) have no model — that
+    // is `prjct insights cost`. This report is inference: every host that
+    // recorded a model on the work cycle, not only the agent currently in use.
+    if (!modelId) continue
     const tokensIn = Number(row.input_tokens) || 0
     const tokensOut = Number(row.output_tokens) || 0
-    const rate = row.model_id ? resolveModelRate(row.model_id) : null
+    const rate = resolveModelRate(modelId)
     const provider: ProviderId = rate?.provider ?? providerFromSource(row.source ?? '')
     const priced = rate ? apiCostUsd(tokensIn, tokensOut, rate) : null
     const unpriced = priced === null ? tokensIn + tokensOut : 0
@@ -160,7 +165,7 @@ export function buildInferenceCostReport(
     const meteredUsd = 0
     const subsidizedUsd = apiUsd - meteredUsd
 
-    const modelKey = row.model_id?.trim() || '(unattributed)'
+    const modelKey = modelId
     const existingModel = byModelMap.get(modelKey)
     if (existingModel) {
       existingModel.tokensIn += tokensIn

@@ -324,6 +324,8 @@ export class ProductCommands extends PrjctCommandsBase {
       options,
       async (projectId) => {
         await ensurePricingCatalog()
+        const { ensureHostTokenUsage } = await import('../services/host-usage')
+        await ensureHostTokenUsage(projectId, projectPath)
         const report = buildInferenceCostReport(projectId, { days: window.days })
         await saveInferenceCostSnapshot(projectId, report)
         return report

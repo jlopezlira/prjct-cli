@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-08-20
+
+### Added
+- prjct cost: model-agnostic inference usage service (any host, any model)
+
 ## [4.1.0] - 2026-08-20
 
 ### Added
