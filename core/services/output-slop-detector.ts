@@ -45,19 +45,21 @@ const RESULT_MARKERS =
   /\b(?:result|outcome|found|root cause|fixed|implemented|completed|passed|failed|done|resultado|hallazgo|encontr[eé]|causa|corregid[oa]|implementad[oa]|completad[oa]|pas[oó]|fall[oó])\b/i
 
 function latestExchange(lines: TranscriptJsonlLine[]): { prompt: string; response: string } | null {
-  let prompt = ''
-  let latest: { prompt: string; response: string } | null = null
+  const state: {
+    prompt: string
+    latest: { prompt: string; response: string } | null
+  } = { prompt: '', latest: null }
   for (const raw of lines as TranscriptLine[]) {
     const role = raw.role ?? raw.message?.role
     const content = textOf(raw.content ?? raw.message?.content)
     if (!content) continue
     if (role === 'user') {
-      prompt = content
+      state.prompt = content
     } else if (role === 'assistant') {
-      latest = { prompt, response: content }
+      state.latest = { prompt: state.prompt, response: content }
     }
   }
-  return latest
+  return state.latest
 }
 
 function wordCount(text: string): number {
@@ -111,12 +113,12 @@ function normalizedRepeatedUnits(text: string): Array<{ key: string; words: numb
 
 function repeatedWordCount(text: string): number {
   const seen = new Set<string>()
-  let repeated = 0
+  const result = { repeated: 0 }
   for (const unit of normalizedRepeatedUnits(text)) {
-    if (seen.has(unit.key)) repeated += unit.words
+    if (seen.has(unit.key)) result.repeated += unit.words
     else seen.add(unit.key)
   }
-  return repeated
+  return result.repeated
 }
 
 function nextActionFor(reason: OutputSlopReason): string {

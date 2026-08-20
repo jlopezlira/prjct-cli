@@ -2,10 +2,15 @@
 
 ## [Unreleased]
 
-## [4.2.0] - 2026-08-20
+## [4.3.0] - 2026-08-20
 
 ### Added
 - Package-owned, auto-routed engineering guidance with adaptive anti-slop, RCA, comment discipline, review, merge-conflict, research, and TDD workflows.
+
+## [4.2.0] - 2026-08-20
+
+### Added
+- prjct cost: model-agnostic inference usage service (any host, any model)
 
 ## [4.1.0] - 2026-08-20
 

@@ -74,13 +74,15 @@ function commentGroups(
 ): { groups: CommentGroup[]; nonBlank: number } {
   const groups: CommentGroup[] = []
   const lines = text.split(/\r?\n/)
-  let nonBlank = 0
-  let block: CommentGroup | null = null
-  let lineGroup: CommentGroup | null = null
+  const state: {
+    nonBlank: number
+    block: CommentGroup | null
+    lineGroup: CommentGroup | null
+  } = { nonBlank: 0, block: null, lineGroup: null }
 
   const pushLineGroup = (): void => {
-    if (lineGroup) groups.push(lineGroup)
-    lineGroup = null
+    if (state.lineGroup) groups.push(state.lineGroup)
+    state.lineGroup = null
   }
 
   const add = (group: CommentGroup, raw: string): void => {
@@ -95,13 +97,13 @@ function commentGroups(
   }
 
   for (const raw of lines) {
-    if (raw.trim()) nonBlank += 1
+    if (raw.trim()) state.nonBlank += 1
 
-    if (block) {
-      add(block, raw)
+    if (state.block) {
+      add(state.block, raw)
       if (raw.includes('*/')) {
-        groups.push(block)
-        block = null
+        groups.push(state.block)
+        state.block = null
       }
       continue
     }
@@ -109,11 +111,11 @@ function commentGroups(
     const blockStart = raw.indexOf('/*')
     if (blockStart >= 0) {
       pushLineGroup()
-      block = { lines: 0, words: 0, publicDoc: false, directive: false }
-      add(block, raw.slice(blockStart))
+      state.block = { lines: 0, words: 0, publicDoc: false, directive: false }
+      add(state.block, raw.slice(blockStart))
       if (raw.slice(blockStart + 2).includes('*/')) {
-        groups.push(block)
-        block = null
+        groups.push(state.block)
+        state.block = null
       }
       continue
     }
@@ -124,16 +126,16 @@ function commentGroups(
       trimmed.startsWith('//') ||
       (hashComment && trimmed.startsWith('#') && !trimmed.startsWith('#!'))
     if (isLineComment) {
-      lineGroup ??= { lines: 0, words: 0, publicDoc: false, directive: false }
-      add(lineGroup, raw)
+      state.lineGroup ??= { lines: 0, words: 0, publicDoc: false, directive: false }
+      add(state.lineGroup, raw)
     } else {
       pushLineGroup()
     }
   }
 
   pushLineGroup()
-  if (block) groups.push(block)
-  return { groups, nonBlank }
+  if (state.block) groups.push(state.block)
+  return { groups, nonBlank: state.nonBlank }
 }
 
 /**

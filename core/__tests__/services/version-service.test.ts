@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  assertRemoteDefaultBranchIncluded,
   bumpMajor,
   bumpMinor,
   bumpPatch,
@@ -213,6 +214,52 @@ describe('VersionService.bump (idempotency)', () => {
         expect(await readPkgVersion()).toBe('1.2.3')
       }
     )
+  })
+})
+
+describe('assertRemoteDefaultBranchIncluded', () => {
+  it('accepts a branch that includes the refreshed remote default branch', async () => {
+    await withVersionRepository('prjct-version-base-', async ({ dir, commitPkg }) => {
+      await commitPkg('1.2.3')
+      const remoteDir = path.join(dir, 'origin.git')
+      await execFileAsync('git', ['init', '-q', '--bare', remoteDir], { cwd: dir })
+      await execFileAsync(
+        'git',
+        ['--git-dir', remoteDir, 'symbolic-ref', 'HEAD', 'refs/heads/main'],
+        {
+          cwd: dir,
+        }
+      )
+      await execFileAsync('git', ['remote', 'add', 'origin', remoteDir], { cwd: dir })
+      await execFileAsync('git', ['push', '-q', 'origin', 'main'], { cwd: dir })
+
+      await expect(assertRemoteDefaultBranchIncluded(dir)).resolves.toBeUndefined()
+    })
+  })
+
+  it('blocks a stale ship branch even before the newer release has a tag', async () => {
+    await withVersionRepository('prjct-version-stale-base-', async ({ dir, commitPkg }) => {
+      await commitPkg('1.2.3')
+      const remoteDir = path.join(dir, 'origin.git')
+      await execFileAsync('git', ['init', '-q', '--bare', remoteDir], { cwd: dir })
+      await execFileAsync(
+        'git',
+        ['--git-dir', remoteDir, 'symbolic-ref', 'HEAD', 'refs/heads/main'],
+        {
+          cwd: dir,
+        }
+      )
+      await execFileAsync('git', ['remote', 'add', 'origin', remoteDir], { cwd: dir })
+      await execFileAsync('git', ['push', '-q', 'origin', 'main'], { cwd: dir })
+
+      await commitPkg('1.3.0')
+      await execFileAsync('git', ['push', '-q', 'origin', 'main'], { cwd: dir })
+      await execFileAsync('git', ['reset', '--hard', 'HEAD~1'], { cwd: dir })
+
+      await expect(assertRemoteDefaultBranchIncluded(dir)).rejects.toThrow(
+        /does not include the latest origin\/main/
+      )
+    })
   })
 })
 

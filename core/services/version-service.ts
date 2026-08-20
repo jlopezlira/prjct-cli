@@ -22,6 +22,61 @@ import * as fileHelper from '../utils/file-helper'
 
 // VersionService
 
+/**
+ * Refresh the remote default branch and require the shipping branch to include
+ * it. This closes the race where another release reaches main before its tag
+ * or package publication exists, leaving tag-only collision checks blind.
+ */
+export async function assertRemoteDefaultBranchIncluded(projectPath: string): Promise<void> {
+  const configured = await runGit(['remote'], { cwd: projectPath })
+  if (!configured.ok) {
+    if (configured.kind === 'exit') return
+    throwProc(configured)
+  }
+  const remotes = configured.stdout
+    .split(/\r?\n/)
+    .map((remote) => remote.trim())
+    .filter(Boolean)
+  if (remotes.length === 0) return
+
+  const remote = remotes.includes('origin') ? 'origin' : remotes[0]
+  if (!remote) return
+  const head = await runGit(['ls-remote', '--symref', remote, 'HEAD'], { cwd: projectPath })
+  if (!head.ok) {
+    if (head.kind !== 'exit') throwProc(head)
+    throw new Error(
+      `Could not verify the latest base branch on Git remote ${remote}: ${head.stderr.trim() || `git exited ${head.code}`}`
+    )
+  }
+  const branch = head.stdout.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m)?.[1]
+  if (!branch) return
+
+  const remoteRef = `refs/remotes/${remote}/${branch}`
+  const fetched = await runGit(['fetch', '--quiet', remote, `refs/heads/${branch}:${remoteRef}`], {
+    cwd: projectPath,
+  })
+  if (!fetched.ok) {
+    if (fetched.kind !== 'exit') throwProc(fetched)
+    throw new Error(
+      `Could not refresh ${remote}/${branch} before ship: ${fetched.stderr.trim() || `git exited ${fetched.code}`}`
+    )
+  }
+
+  const included = await runGit(['merge-base', '--is-ancestor', remoteRef, 'HEAD'], {
+    cwd: projectPath,
+  })
+  if (included.ok) return
+  if (included.kind !== 'exit') throwProc(included)
+  if (included.code === 1) {
+    throw new Error(
+      `Ship branch does not include the latest ${remote}/${branch}. Sync that base branch and resolve conflicts before shipping; version calculation on stale history is unsafe.`
+    )
+  }
+  throw new Error(
+    `Could not compare HEAD with ${remote}/${branch} before ship: ${included.stderr.trim() || `git exited ${included.code}`}`
+  )
+}
+
 export class VersionService {
   private projectPath: string
 

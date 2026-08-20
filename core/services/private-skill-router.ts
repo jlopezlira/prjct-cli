@@ -166,24 +166,32 @@ export function resolvePrivateSkillPath(
     throw new Error('Private skill path escapes the private asset root.')
   }
 
-  let canonicalRoot: string
-  let canonicalFile: string
-  try {
-    canonicalRoot = fs.realpathSync.native(assetRoot)
-    canonicalFile = fs.realpathSync.native(path.join(canonicalRoot, normalized))
-  } catch {
-    if (assetRoot === PRIVATE_SKILL_ASSET_ROOT) {
-      return materializeEmbeddedPrivateSkillPath(normalized)
-    }
-    throw new Error(`Private skill asset is missing: ${relativeFile}`)
-  }
-  if (assetRoot === PRIVATE_SKILL_ASSET_ROOT) {
-    let canonicalPackageAssets: string
+  const { canonicalRoot, canonicalFile } = (() => {
     try {
-      canonicalPackageAssets = fs.realpathSync.native(path.join(PACKAGE_ROOT, 'assets'))
+      const root = fs.realpathSync.native(assetRoot)
+      return {
+        canonicalRoot: root,
+        canonicalFile: fs.realpathSync.native(path.join(root, normalized)),
+      }
     } catch {
-      throw new Error('Private skill package asset root is missing.')
+      if (assetRoot === PRIVATE_SKILL_ASSET_ROOT) {
+        return {
+          canonicalRoot: '',
+          canonicalFile: materializeEmbeddedPrivateSkillPath(normalized),
+        }
+      }
+      throw new Error(`Private skill asset is missing: ${relativeFile}`)
     }
+  })()
+  if (!canonicalRoot) return canonicalFile
+  if (assetRoot === PRIVATE_SKILL_ASSET_ROOT) {
+    const canonicalPackageAssets = (() => {
+      try {
+        return fs.realpathSync.native(path.join(PACKAGE_ROOT, 'assets'))
+      } catch {
+        throw new Error('Private skill package asset root is missing.')
+      }
+    })()
     if (!isWithin(canonicalPackageAssets, canonicalRoot)) {
       throw new Error('Private skill root escapes the canonical package assets directory.')
     }
