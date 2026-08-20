@@ -66,20 +66,17 @@ export async function applyContextTaxHeal(
     .map((server) => server.server.slice('mcp:'.length))
 
   for (const serverName of heavyNames) {
-    let found = false
+    const matchingConfigs: string[] = []
     for (const configPath of configCandidates(projectPath, explicitConfigPaths)) {
-      let loaded: Awaited<ReturnType<typeof readDocument>>
-      try {
-        loaded = await readDocument(configPath)
-      } catch (error) {
+      const loaded = await readDocument(configPath).catch((error) => {
         errors.push(
           `${path.basename(path.dirname(configPath))}/${path.basename(configPath)}: ${(error as Error).message}`
         )
-        continue
-      }
+        return null
+      })
       const entry = loaded?.document.mcpServers?.[serverName]
       if (!loaded || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue
-      found = true
+      matchingConfigs.push(configPath)
       if (entry.enabled === false) {
         skipped.push(`kimi:${serverName} already disabled`)
         continue
@@ -104,7 +101,7 @@ export async function applyContextTaxHeal(
         serverName === 'prjct' ? 'kimi:prjct pinned to micro' : `kimi:${serverName} disabled`
       )
     }
-    if (!found) {
+    if (matchingConfigs.length === 0) {
       errors.push(
         `kimi:${serverName}: owning mcp.json entry not found; disable it in the active Kimi MCP configuration`
       )

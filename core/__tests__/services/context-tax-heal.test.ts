@@ -17,21 +17,20 @@ const heavyKimiTax: HostContextTax = {
 }
 
 describe('context tax heal', () => {
-  let tempDir = ''
-  let configPath = ''
+  const state = { tempDir: '', configPath: '' }
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-context-heal-'))
-    configPath = path.join(tempDir, 'mcp.json')
+    state.tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-context-heal-'))
+    state.configPath = path.join(state.tempDir, 'mcp.json')
   })
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true })
+    await fs.rm(state.tempDir, { recursive: true, force: true })
   })
 
   it('reversibly disables a heavy Kimi MCP and preserves its configuration', async () => {
     await fs.writeFile(
-      configPath,
+      state.configPath,
       `${JSON.stringify(
         {
           untouched: { theme: 'dark' },
@@ -49,8 +48,8 @@ describe('context tax heal', () => {
       )}\n`
     )
 
-    const report = await applyContextTaxHeal([heavyKimiTax], process.cwd(), [configPath])
-    const config = JSON.parse(await fs.readFile(configPath, 'utf-8'))
+    const report = await applyContextTaxHeal([heavyKimiTax], process.cwd(), [state.configPath])
+    const config = JSON.parse(await fs.readFile(state.configPath, 'utf-8'))
 
     expect(report.applied).toEqual(['kimi:storybook-mcp disabled'])
     expect(report.errors).toEqual([])
@@ -67,14 +66,14 @@ describe('context tax heal', () => {
 
   it('is idempotent and never disables native tools', async () => {
     await fs.writeFile(
-      configPath,
+      state.configPath,
       `${JSON.stringify({
         mcpServers: { 'storybook-mcp': { command: 'npx', enabled: false } },
       })}\n`
     )
 
     const report: ContextTaxHealReport = await applyContextTaxHeal([heavyKimiTax], process.cwd(), [
-      configPath,
+      state.configPath,
     ])
 
     expect(report.applied).toEqual([])
@@ -84,7 +83,7 @@ describe('context tax heal', () => {
 
   it('repairs a heavy prjct catalog by pinning micro instead of disabling the harness', async () => {
     await fs.writeFile(
-      configPath,
+      state.configPath,
       `${JSON.stringify({
         mcpServers: { prjct: { command: 'prjct', env: { EXISTING: 'kept' } } },
       })}\n`
@@ -95,8 +94,8 @@ describe('context tax heal', () => {
       totalCatalogChars: 12_000,
     }
 
-    const report = await applyContextTaxHeal([tax], process.cwd(), [configPath])
-    const config = JSON.parse(await fs.readFile(configPath, 'utf-8'))
+    const report = await applyContextTaxHeal([tax], process.cwd(), [state.configPath])
+    const config = JSON.parse(await fs.readFile(state.configPath, 'utf-8'))
 
     expect(report.applied).toEqual(['kimi:prjct pinned to micro'])
     expect(config.mcpServers.prjct.enabled).toBeUndefined()
@@ -107,7 +106,7 @@ describe('context tax heal', () => {
   })
 
   it('reports an unresolved heavy server when its owning config cannot be found', async () => {
-    const report = await applyContextTaxHeal([heavyKimiTax], process.cwd(), [configPath])
+    const report = await applyContextTaxHeal([heavyKimiTax], process.cwd(), [state.configPath])
 
     expect(report.applied).toEqual([])
     expect(report.errors).toEqual([
