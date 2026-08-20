@@ -11,6 +11,7 @@ import configManager from '../infrastructure/config-manager'
 import type { FindingSeverity, JudgmentLedger, RefuteVerdict } from '../schemas/judgment'
 import { FindingSeveritySchema, RefuteVerdictSchema } from '../schemas/judgment'
 import { computeCommittedChangeset, type DeliveryTier } from '../services/delivery-geometry'
+import { reviewDispatchGuidance } from '../services/judgment-orchestrator'
 import {
   advanceFixRound,
   applyBatchRefutation,
@@ -595,6 +596,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
         `BLUE: ${card.judgeCharters.blue}`
       )
     }
+    lines.push(...reviewDispatchGuidance(card))
     if (card.rankedFixIds.length) {
       lines.push('', `### Blast rank: ${card.rankedFixIds.join(' → ')}`)
     }

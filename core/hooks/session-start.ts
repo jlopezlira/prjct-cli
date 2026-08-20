@@ -348,11 +348,23 @@ function buildKnowledgeDigest(projectId: string): string | null {
   // a cold model (post-update) acts as the developer without MCP pull.
   const devRules = (() => {
     try {
-      const pool = projectMemory.recall(projectId, {
+      const projectRules = projectMemory.recall(projectId, {
         types: ['feedback', 'improvement-signal'],
         limit: 40,
         dedupeByKey: false,
       })
+      const globalRules = (() => {
+        try {
+          return projectMemory.recall('global-kb', {
+            types: ['feedback', 'improvement-signal'],
+            limit: 20,
+            dedupeByKey: false,
+          })
+        } catch {
+          return []
+        }
+      })()
+      const pool = [...projectRules, ...globalRules]
       return extractDeveloperRules(pool, DIGEST_DEV_RULES)
     } catch {
       return []

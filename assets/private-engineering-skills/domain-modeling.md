@@ -1,0 +1,3 @@
+# Domain modeling
+
+Begin with the business language used by domain experts. Define terms before types and make ambiguous synonyms explicit. Identify entities by continuity, value objects by structural equality, aggregates by consistency boundary, and services only for behavior that belongs to no object. Put invariants beside the state transitions that enforce them. Model invalid states out when practical; otherwise reject them at the narrowest boundary. Keep persistence and transport shapes from dictating the domain. Use examples and counterexamples to test the language, lifecycle, ownership, and concurrency assumptions.

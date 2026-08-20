@@ -43,8 +43,9 @@ export const CONTRACT = {
   /** Loop-discipline parity across Claude/Codex/Gemini/Cursor/Grok (SUPERIOR multi-runtime). */
   // Kept short: Codex SKILL.md hard cap ~1024B including metadata marker.
   loop: 'Loop: land; H2+ intent; tip→user SoT; close.',
+  output: 'Output: compact; H2+ standard; full on request.',
   /** Multi-project isolation — skill is never project identity. Keep short (Codex ~1024B). */
-  identity: 'L0 portable; id=cwd.',
+  identity: 'portable; id=cwd.',
 } as const
 
 /**
@@ -60,7 +61,7 @@ export function buildCompactSkill(): string {
     '',
     '# prjct',
     '',
-    'Run `prjct <cmd> --md` and follow it.',
+    'Run `prjct <cmd> --md`; follow it.',
     '',
     `- ${CONTRACT.rag}`,
     `- ${CONTRACT.entrypoint}`,
@@ -69,6 +70,7 @@ export function buildCompactSkill(): string {
     `- ${CONTRACT.kb}`,
     `- ${CONTRACT.ship}`,
     `- ${CONTRACT.loop}`,
+    `- ${CONTRACT.output}`,
     `- ${CONTRACT.identity}`,
     '',
     `Commit footer: \`${FOOTER}\``,
@@ -105,6 +107,7 @@ export function buildGlobalConfig(rigName: string): string {
     `- Sovereign knowledge base — ${CONTRACT.kb}`,
     `- ${CONTRACT.remember}`,
     `- ${CONTRACT.loop}`,
+    `- ${CONTRACT.output}`,
     '- On close, save synthesized context; raw quotes, counters, detector rows, and transcript chunks are inputs, not final memory',
     '- prjct remembers and shows the path; the agent decides how to execute with its own native tools',
     '- Treat prjct output as signals, not a prescriptive harness',

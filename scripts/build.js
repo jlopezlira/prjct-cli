@@ -108,6 +108,7 @@ async function buildJs() {
     minify: true,
     keepNames: true,
     packages: 'external',
+    loader: { '.md': 'text' },
     metafile: true,
     define: versionDefine,
     banner: {
@@ -143,6 +144,7 @@ const __dirname = __pathDirname(__filename);`,
     minify: true,
     keepNames: true,
     packages: 'external',
+    loader: { '.md': 'text' },
     define: versionDefine,
     plugins: [stripShebangPlugin()],
     banner: {
@@ -187,6 +189,7 @@ const __dirname = __pathDirname(__filename);`,
     minify: true,
     keepNames: true,
     packages: 'external',
+    loader: { '.md': 'text' },
     define: versionDefine,
     plugins: [stripShebangPlugin()],
     banner: {
@@ -213,6 +216,7 @@ const __dirname = __pathDirname(__filename);`,
     minify: true,
     keepNames: true,
     packages: 'external',
+    loader: { '.md': 'text' },
     define: versionDefine,
     plugins: [stripShebangPlugin()],
     banner: {
@@ -541,6 +545,31 @@ function bundleTemplates() {
   return fileCount
 }
 
+/** Copy private, offline engineering guidance beside compiled output. */
+function bundlePrivateEngineeringSkills() {
+  const source = path.join(ROOT, 'assets', 'private-engineering-skills')
+  const target = path.join(DIST, 'assets', 'private-engineering-skills')
+  const required = [
+    'diagnosing-bugs.md',
+    'tdd.md',
+    'code-review.md',
+    'resolving-merge-conflicts.md',
+    'research.md',
+    'writing-for-agents.md',
+    'comment-discipline.md',
+    'domain-modeling.md',
+    'codebase-design.md',
+  ]
+  for (const file of required) {
+    if (!fs.statSync(path.join(source, file), { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`Missing private engineering asset: ${file}`)
+    }
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.cpSync(source, target, { recursive: true, dereference: false })
+  console.log(`  → dist/assets/private-engineering-skills (${required.length} files)`)
+}
+
 /**
  * Print build summary with file sizes
  */
@@ -615,6 +644,9 @@ async function main() {
 
   console.log('\nBundling templates...')
   bundleTemplates()
+
+  console.log('\nBundling private engineering skills...')
+  bundlePrivateEngineeringSkills()
 
   printSummary()
   console.log('\nBuild complete!')

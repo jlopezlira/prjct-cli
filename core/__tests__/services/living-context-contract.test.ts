@@ -7,6 +7,7 @@ import {
   formatRelatedContextForAgent,
   type RelatedContextHit,
   TASK_CONTEXT_PROMPT,
+  taskContextPromptFor,
 } from '../../services/task-service'
 
 describe('living context contract', () => {
@@ -30,6 +31,17 @@ describe('living context contract', () => {
     expect(TASK_CONTEXT_PROMPT).toContain('Next implication')
     expect(TASK_CONTEXT_PROMPT).toContain('Key data is still required')
     expect(TASK_CONTEXT_PROMPT).toContain('Raw detector output is input, not the final context')
+  })
+
+  it('adds an RCA receipt only when a bug cycle closes', () => {
+    const bug = taskContextPromptFor({ kind: 'bug' })
+    expect(bug).toContain('Bug-cycle RCA receipt')
+    expect(bug).toContain('exact repro command')
+    expect(bug).toContain('causal mechanism')
+    expect(bug).toContain('regression seam/test')
+    expect(bug).toContain('never copy secrets or raw logs')
+
+    expect(taskContextPromptFor({ kind: 'feature' })).toBe(TASK_CONTEXT_PROMPT)
   })
 
   it('parses structured context fields so storage can tag useful retrieval dimensions', () => {

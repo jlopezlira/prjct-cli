@@ -223,4 +223,20 @@ describe('condenseDeliveredDurable — CLI ledger', () => {
     expect((await condenseDeliveredDurable(scope, entries)).fresh.length).toBe(1)
     expect((await condenseDeliveredDurable(scope, entries)).fresh.length).toBe(1)
   })
+
+  it('probe does not stamp entries omitted by a later budget pack', async () => {
+    const scope = {
+      projectId: uid(),
+      projectPath: `/tmp/${uid()}`,
+      sessionId: 'session-probe',
+      surface: 'cli-work' as const,
+    }
+    const entries = [{ id: 'mem_1', content: 'optional living knowledge' }]
+    expect((await condenseDeliveredDurable(scope, entries, { probe: true })).fresh.length).toBe(1)
+    _resetDeliveredLedgerForTests()
+    expect((await condenseDeliveredDurable(scope, entries, { probe: true })).fresh.length).toBe(1)
+    await condenseDeliveredDurable(scope, entries)
+    _resetDeliveredLedgerForTests()
+    expect((await condenseDeliveredDurable(scope, entries, { probe: true })).repeats.length).toBe(1)
+  })
 })

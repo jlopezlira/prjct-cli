@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-08-20
+
+### Added
+- implement private auto invoked engineeri
+
 ## [4.0.0] - 2026-08-19
 
 ### Added
