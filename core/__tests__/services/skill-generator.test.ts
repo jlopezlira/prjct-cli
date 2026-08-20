@@ -502,6 +502,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(tier1).toContain('guard')
       expect(tier1).toContain('insights')
       expect(tier1).toContain('performance')
+      expect(tier1).toContain('cost')
     })
 
     it('groups work / intent / ship into Tier 2 (confirm once)', async () => {

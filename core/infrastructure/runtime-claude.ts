@@ -211,7 +211,7 @@ Or: p. work | p. ship | p. remember`,
 • "see progress" → View stats
 • "plan ahead" → Strategic thinking
 
-Or: p. work | p. insights | p. performance`,
+Or: p. work | p. insights | p. performance | p. cost`,
 
       ideaCaptured: `Ready to start?
 • "start this" → Begin now

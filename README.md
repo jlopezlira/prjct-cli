@@ -214,6 +214,7 @@ checks. See [EVALS.md](./EVALS.md) for the full workflow.
 |---|---|
 | `prjct insights value --md` | Durable memory, preventive guardrails, shipped work, sync metrics, and detected agent coverage. |
 | `prjct insights quality --md` | Duplicate, stale, low-signal, or untyped memories before they poison recall. |
+| `prjct cost [days\|all] --md` | Inference cost totals by provider/model (1–90 days or all history). Rates come from the live OpenRouter catalog — new providers without a CLI ship. |
 | `prjct insights cost --md` | AI work cost: token coverage, subscription burn, context reuse, and capture gaps. |
 | `prjct insights report 7 --md` | A human/team report from shipped work and carry-forward lessons. |
 | `prjct insights continue codex --md` | A continuation brief for the next agent with checks it should run first. |
@@ -291,6 +292,7 @@ Cursor uses its installed prjct router file; other agents use AGENTS.md, a nativ
 | `prjct search "<query>"` | Search project memory — blended BM25 + semantic + recency recall (`prjct search mem_1234` resolves an entry by id). |
 | `prjct guard <file>` | Surface preventive memory before editing a risky file. |
 | `prjct performance [days]` | Measure dev+LLM efficiency per work cycle. |
+| `prjct cost [days\|all]` | Inference tokens and API-equivalent vs subsidized cost by provider. |
 | `prjct insights [value\|quality\|cost\|report\|continue\|guardrails]` | Project intelligence, token cost, and quality proof. |
 | `prjct ship [name]` | Run the project's ship workflow (commit, push, PR, persist). |
 | `prjct sync` | Re-index files, git co-change, imports; refresh project analysis. |

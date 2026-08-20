@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-08-20
+
+### Added
+- prjct cost: provider/model API cost totals from live OpenRouter catalog
+- `prjct cost [days|all]`: per-project inference cost totals by provider/model. List prices are fetched from the OpenRouter models catalog (cached 24h) — new providers without a CLI ship.
+
 ## [4.0.0] - 2026-08-19
 
 ### Added
