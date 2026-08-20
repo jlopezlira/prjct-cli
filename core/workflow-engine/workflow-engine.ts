@@ -40,7 +40,7 @@ import type { LocalConfig, ProjectPersona } from '../types/config'
 import { getErrorMessage } from '../types/fs'
 import type { WorkflowRule } from '../types/storage/extended'
 import type { WorkflowExecutionResult, WorkflowRunContext } from '../types/workflow.js'
-import { execAsync, execFileAsync } from '../utils/exec'
+import { execAsync, execFileAsync, matchProc, runProc } from '../utils/exec'
 import { detectProjectCommands } from '../utils/project-commands'
 import {
   finishWorkflowRun,
@@ -129,15 +129,32 @@ async function runVerifyAction(rule: WorkflowRule, projectPath: string): Promise
           return detected
         })
       : configuredCommand
-  try {
-    await execAsync(command, { timeout: rule.timeoutMs, cwd: projectPath, env: { ...process.env } })
-  } catch (error) {
-    throw new Error(
-      `Verification failed: \`${command}\`\n${getErrorMessage(error)}\n` +
-        'Stop-the-line: do not proceed. Fix the failure and re-run this check — ' +
-        'unverified output must not advance.'
-    )
-  }
+  // runProc (not exec): stdin ignored so bun test does not hang in watch/pipe
+  // mode; tree-kill on timeout; overflow is infra not a silent 1MB crash.
+  const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'
+  const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
+  const result = await runProc(shell, shellArgs, {
+    timeoutMs: rule.timeoutMs,
+    cwd: projectPath,
+    env: { ...process.env },
+    maxBuffer: 32 * 1024 * 1024,
+  })
+  if (result.ok) return
+  const detail = matchProc(result, {
+    ok: () => '',
+    exit: (r) => {
+      const out = `${r.stderr}\n${r.stdout}`.trim()
+      return out ? out.slice(-4000) : `exit ${r.code}`
+    },
+    timeout: (r) => `timed out after ${r.budgetMs}ms`,
+    spawn: (r) => r.cause.message,
+    overflow: (r) => `output exceeded ${r.maxBuffer} bytes`,
+  })
+  throw new Error(
+    `Verification failed: \`${command}\`\n${detail}\n` +
+      'Stop-the-line: do not proceed. Fix the failure and re-run this check — ' +
+      'unverified output must not advance.'
+  )
 }
 
 /**

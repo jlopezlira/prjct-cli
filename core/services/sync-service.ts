@@ -515,6 +515,10 @@ class SyncService {
       )
 
       const workCost = await phase('work-cost', () => publishWorkCostSnapshots(this.projectId!))
+      await phase('inference-cost', async () => {
+        const { publishInferenceCostSnapshots } = await import('./inference-cost')
+        return publishInferenceCostSnapshots(this.projectId!)
+      })
 
       // 9b. Archive stale data (PRJ-267)
       await phase('archive', () => archiveStaleData(this.projectId!))

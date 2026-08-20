@@ -84,7 +84,9 @@ describe('insights cost', () => {
         now
       )
 
-      const result = await new ProductCommands().cost('30', fixture.projectPath, { md: true })
+      const result = await new ProductCommands().insightsCost('30', fixture.projectPath, {
+        md: true,
+      })
       const snapshot = result as typeof result & WorkCostSnapshot
 
       expect(result.success).toBe(true)
@@ -120,7 +122,9 @@ describe('insights cost', () => {
         'memory.remember.context'
       )
 
-      const result = await new ProductCommands().cost('30', fixture.projectPath, { md: true })
+      const result = await new ProductCommands().insightsCost('30', fixture.projectPath, {
+        md: true,
+      })
       const snapshot = result as typeof result & WorkCostSnapshot
 
       expect(result.success).toBe(true)
@@ -139,7 +143,9 @@ describe('insights cost', () => {
   it('keeps missing task/session/token capture visible', async () => {
     const log = spyOn(console, 'log').mockImplementation(() => {})
     try {
-      const result = await new ProductCommands().cost('30', fixture.projectPath, { md: true })
+      const result = await new ProductCommands().insightsCost('30', fixture.projectPath, {
+        md: true,
+      })
       const snapshot = result as typeof result & WorkCostSnapshot
 
       expect(result.success).toBe(true)

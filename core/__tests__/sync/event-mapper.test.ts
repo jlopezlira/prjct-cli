@@ -146,6 +146,22 @@ describe('mapCliEventToWebFormat — entityType-driven', () => {
     ).toBe('archives')
   })
 
+  it('maps inference cost snapshots to cloud metrics analytics', () => {
+    const result = mapCliEventToWebFormat(
+      'proj-1',
+      publishedEvent('inference_cost_snapshots', 'upsert', {
+        id: 'inference-cost-7d',
+        windowDays: 7,
+        simulatedUsd: 5.9,
+        models: [{ model: 'grok-4.6', inputPerMillion: 2, simulatedUsd: 5 }],
+      })
+    )
+    expect(result?.entity_type).toBe('inference_cost_snapshots')
+    expect(result?.entity_id).toBe('inference-cost-7d')
+    expect(result?.data.window_days).toBe(7)
+    expect(result?.data.simulated_usd).toBe(5.9)
+  })
+
   it('maps work cost snapshots to cloud metrics analytics', () => {
     const result = mapCliEventToWebFormat(
       'proj-1',
