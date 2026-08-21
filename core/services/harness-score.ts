@@ -112,10 +112,6 @@ export function computeHarnessScore(
   const mcpTier = resolveTier(undefined)
   const mcpTools = countDefaultTools()
   const hasWorkflowsPointer = skill.includes('workflows.md')
-  const multiProvider =
-    providerCount >= WORLD_CLASS.providerMapsMin &&
-    SUPPORTED_PROVIDERS.includes('claude') &&
-    SUPPORTED_PROVIDERS.includes('gemini')
 
   const criteria: HarnessCriterion[] = [
     criterion(
@@ -177,13 +173,29 @@ export function computeHarnessScore(
         `${tierCount} tiers; L0 skill=${l0.skillTokens}tok routing=${l0.routingBytes}B ${l0.ok ? 'ok' : 'OVER'}`
       )
     })(),
-    criterion(
-      'model-ssot',
-      'Model policy SSOT',
-      multiProvider ? 5 : SUPPORTED_PROVIDERS.includes('claude') ? 3 : 1,
-      'capability classes across ≥6 providers',
-      multiProvider ? 'multi-provider SSOT' : 'partial maps'
-    ),
+    (() => {
+      // Was "Model policy SSOT — capability classes across ≥6 providers",
+      // which kept scoring 5/5 after that policy was deleted: it had quietly
+      // degraded into a provider head-count under a stale label. The property
+      // worth grading now is the opposite one — that prjct emits no model or
+      // effort directive, so every subagent inherits the user's model.
+      const capping = [
+        'model: "opus"',
+        'model: "sonnet"',
+        'model: "haiku"',
+        'over-deliberate',
+        'not exhaustive',
+        'max-tier',
+        'mid-tier',
+      ].filter((needle) => skill.includes(needle))
+      return criterion(
+        'model-agnostic',
+        'Model-agnostic dispatch',
+        capping.length === 0 ? 5 : 1,
+        'names no model or effort tier',
+        capping.length === 0 ? 'inherits the session model' : `caps: ${capping.join(', ')}`
+      )
+    })(),
     criterion(
       'enforced-defaults',
       'Code-enforced lean defaults',

@@ -79,8 +79,11 @@ export function buildDynastyOutcomes(projectId: string): DynastyOutcomes {
     },
     {
       name: 'Token economics (24h)',
-      measured: `≈${tokens.tokens24h} · score ${tokens.score}/100`,
-      note: 'compound judgment > fresh-window thrash',
+      measured:
+        tokens.score === null
+          ? `≈${tokens.tokens24h} · no cycle budget set`
+          : `≈${tokens.tokens24h} · budget adherence ${tokens.score}/100`,
+      note: 'measurement, not a quality grade — fewer tokens is not a better outcome',
     },
   ]
 

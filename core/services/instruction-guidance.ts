@@ -65,10 +65,22 @@ export function buildDeliveryGuidance(prompt: string): string | null {
 const BROAD_TERMINATION_DENIAL =
   'prjct: denied broad process termination. Identify the exact numeric PID, verify the target, then use `kill <PID>` or `kill -TERM <PID>`.'
 
+/**
+ * A denial the agent can act on. The generic PID advice is wrong — and
+ * unactionable — when nothing about the command concerned `kill`; naming the
+ * token and the rule is what lets the caller fix the command instead of
+ * guessing and retrying blind.
+ */
+function unresolvedExecutableDenial(token: string): string {
+  return `prjct: denied — the command-position token \`${token}\` resolves at runtime, so prjct cannot verify it is not a broad process kill. Run the executable under its literal name (a variable or substitution is only rejected in command position, never as an argument).`
+}
+
 /** Command-position token whose identity is dynamically resolved ($VAR, $(...), `...`) — cannot be proven safe by a literal-string comparison. */
 const UNRESOLVED_EXECUTABLE = /[$`]/
 
-export function classifyBroadProcessTermination(command: string): boolean {
+type TerminationDenial = { kind: 'broad-kill' } | { kind: 'unresolved-executable'; token: string }
+
+export function classifyBroadProcessTerminationReason(command: string): TerminationDenial | null {
   for (const rawArgs of shellCommands(command)) {
     const args = unwrapCommand(rawArgs)
     const executableRaw = args[0]
@@ -76,38 +88,52 @@ export function classifyBroadProcessTermination(command: string): boolean {
     // Fail closed on obfuscated executable identity — e.g. `a=killall; $a -9
     // node` or `$(echo pkill) -f node` — rather than let substitution/
     // variable-expansion slip an otherwise-denied command past a literal
-    // token comparison.
-    if (UNRESOLVED_EXECUTABLE.test(executableRaw)) return true
+    // token comparison. Only COMMAND position is affected: `$(…)` in an
+    // argument, or an assignment like `OUT=$(…)`, never reaches here because
+    // the lexer lifts substitutions out before tokenizing.
+    if (UNRESOLVED_EXECUTABLE.test(executableRaw)) {
+      return { kind: 'unresolved-executable', token: executableRaw }
+    }
     const executable = executableRaw.split('/').at(-1)?.toLowerCase()
-    if (executable === 'killall') return true
+    if (executable === 'killall') return { kind: 'broad-kill' }
     // Any `pkill` invocation matches by name/pattern across every process
     // that matches, the same "no single verified PID" blast radius as
     // killall — `-f` only changes WHAT it matches against (full command
     // line vs bare process name), not whether the termination is broad.
-    if (executable === 'pkill') return true
+    if (executable === 'pkill') return { kind: 'broad-kill' }
     if (
       (executable === 'sh' || executable === 'bash' || executable === 'zsh') &&
       args.some((arg) => /^-[^-]*c/.test(arg))
     ) {
       const commandIndex = args.findIndex((arg) => /^-[^-]*c/.test(arg)) + 1
-      if (commandIndex > 0 && classifyBroadProcessTermination(args[commandIndex] ?? '')) return true
+      const nested =
+        commandIndex > 0 ? classifyBroadProcessTerminationReason(args[commandIndex] ?? '') : null
+      if (nested) return nested
     }
     if (executable === 'xargs') {
       const nestedName = (arg: string) => arg.split('/').at(-1)?.toLowerCase()
       if (args.some((arg) => nestedName(arg) === 'killall' || nestedName(arg) === 'pkill')) {
-        return true
+        return { kind: 'broad-kill' }
       }
       // xargs inherently applies its wrapped command to a LIST of inputs
       // (typically PIDs from `pgrep`/`ps|grep|awk`) — `xargs kill`/`xargs
       // kill -9` terminates every one of them without single-PID
       // verification, even though bare `kill <PID>` is the sanctioned path
       // on its own.
-      if (args.some((arg) => nestedName(arg) === 'kill')) return true
+      if (args.some((arg) => nestedName(arg) === 'kill')) return { kind: 'broad-kill' }
     }
   }
-  return false
+  return null
+}
+
+export function classifyBroadProcessTermination(command: string): boolean {
+  return classifyBroadProcessTerminationReason(command) !== null
 }
 
 export function broadProcessTerminationDenial(command: string): string | null {
-  return classifyBroadProcessTermination(command) ? BROAD_TERMINATION_DENIAL : null
+  const reason = classifyBroadProcessTerminationReason(command)
+  if (!reason) return null
+  return reason.kind === 'broad-kill'
+    ? BROAD_TERMINATION_DENIAL
+    : unresolvedExecutableDenial(reason.token)
 }

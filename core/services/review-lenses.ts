@@ -32,7 +32,7 @@ export const LENS_CATALOG: Record<string, LensSpec> = {
   architecture: {
     label: 'eng feasibility',
     rubric:
-      'Then read the codebase paths listed above (Read tool, cap 10 files). Can this be built ON TOP of what exists? Does the spec contradict an existing state machine, schema, or contract? What failure modes / dependencies / edge cases are missing? Include a short ASCII diagram + cite at least one concrete symbol from the codebase in notes when applicable.',
+      'Then read the codebase paths listed above (Read tool) — as many as the change actually spans. Can this be built ON TOP of what exists? Does the spec contradict an existing state machine, schema, or contract? What failure modes / dependencies / edge cases are missing? Include a short ASCII diagram + cite at least one concrete symbol from the codebase in notes when applicable.',
   },
   design: {
     label: 'UX/DX',

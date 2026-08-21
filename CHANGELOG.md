@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-08-21
+
+### Added
+- Stop the harness capping what the model can do
+
 ## [4.5.0] - 2026-08-21
 
 ### Changed

@@ -310,9 +310,43 @@ async function runGitCommit(
   const template = rawTemplate || (runCtx.version ? 'feat: $FEATURE (v$VERSION)' : 'feat: $FEATURE')
   const msg = `${expandTemplate(template, runCtx)}\n\nGenerated with [p/](https://www.prjct.app/)`
 
-  await execFileAsync('git', ['add', '.'], { cwd: projectPath })
+  // Respect a deliberate staging.
+  //
+  // This was an unconditional `git add .`, which swept the entire working tree
+  // into the commit even when the author had staged a specific subset — that
+  // is how unrelated in-progress work landed in a release commit and failed CI
+  // on the release itself. An empty index still means "take everything" (the
+  // documented convenience path, and the only sensible reading when nothing
+  // was selected), but a non-empty index is a choice, so honour it and add
+  // only the artifacts this ship run wrote.
+  const staged = await execFileAsync('git', ['diff', '--cached', '--name-only'], {
+    cwd: projectPath,
+  })
+    .then((r) => String(r.stdout ?? '').trim())
+    .catch(() => '')
+  if (staged) {
+    for (const artifact of SHIP_ARTIFACT_PATHS) {
+      // Missing path (or a repo that doesn't use it) is not an error.
+      await execFileAsync('git', ['add', '--', artifact], { cwd: projectPath }).catch(
+        () => undefined
+      )
+    }
+  } else {
+    await execFileAsync('git', ['add', '.'], { cwd: projectPath })
+  }
   await execFileAsync('git', ['commit', '-m', msg], { cwd: projectPath })
 }
+
+/** Files an earlier ship step writes, which must reach the commit either way. */
+const SHIP_ARTIFACT_PATHS = [
+  'CHANGELOG.md',
+  'package.json',
+  'package-lock.json',
+  'bun.lock',
+  'bun.lockb',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+] as const
 
 /**
  * Decide the `git push` args from the current branch and its configured

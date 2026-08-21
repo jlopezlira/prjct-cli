@@ -399,7 +399,12 @@ function buildKnowledgeDigest(projectId: string): string | null {
 
   const lines: string[] = ['## What this project already knows', '']
   lines.push(
-    '> Carried across sessions and model updates — this survived even if your conversation context did not. Apply these; do not re-derive from source.'
+    // Paired with the role block's "state, not prescription. Decide whether
+    // any of this matters" a few lines earlier, "Apply these; do not re-derive
+    // from source" read as a direct contradiction in one payload — one half
+    // says judge it, the other says obey it and don't check. Say the useful
+    // part: this is prior findings, and re-deriving them costs a rediscovery.
+    '> Carried across sessions and model updates — this survived even if your conversation context did not. Prefer these over re-deriving from source; verify one before relying on it if the code may have moved.'
   )
   if (devRules.length > 0) {
     lines.push('', '**How this developer works (act as them):**')

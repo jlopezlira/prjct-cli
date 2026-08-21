@@ -243,17 +243,26 @@ export function pointsFromDiffLines(changedLines: number): number {
 }
 
 /**
- * Delegation trigger — the multi-file write rule as a one-liner, shared by
- * the Claude per-turn hook (event-counted) and the rig-agnostic
- * `prjct work`/`status` surfaces (git-counted): same thresholds, same words,
- * regardless of how the rig learned the count. Returns null under threshold.
+ * Delegation trigger — the multi-file write reminder, shared by the Claude
+ * per-turn hook (event-counted) and the rig-agnostic `prjct work`/`status`
+ * surfaces (git-counted). Returns null under threshold.
+ *
+ * The text deliberately names the BAND, not the live file count. Callers gate
+ * re-delivery on content, so embedding the running count (…20 files, …21
+ * files) made the string change every turn and defeated the gate: the notice
+ * re-fired on every single turn for the rest of the cycle.
+ *
+ * It also states the fact and the check, never the verdict. A wide file count
+ * is normal for a rename, a codemod, or removing a policy — "this is no longer
+ * one change" is a guess prjct cannot make from a count, and repeating it at a
+ * working agent is noise.
  */
 export function renderDelegationTrigger(filesTouched: number): string | null {
   if (filesTouched >= 8) {
-    return `⚠ Delegation trigger: ${filesTouched} files edited this cycle. This is no longer one change — split the remainder into its own cycle/PR and run a FRESH-context review of what's already written before \`prjct status done\`.`
+    return '⚠ Delegation trigger: 8+ files edited this cycle. Wide edits hide cross-file breaks — review the full diff with fresh eyes before `prjct status done`. If the remainder is genuinely separate work, split it into its own cycle/PR; if it is one coherent change, carry on.'
   }
   if (filesTouched >= 4) {
-    return `↳ Delegation trigger: ${filesTouched} files edited this cycle. Keep ONE writer thread; before closing, review the full diff with fresh eyes (subagent or re-read) — multi-file changes hide cross-file breaks.`
+    return '↳ Delegation trigger: 4+ files edited this cycle. Keep ONE writer thread; before closing, review the full diff with fresh eyes — multi-file changes hide cross-file breaks.'
   }
   return null
 }

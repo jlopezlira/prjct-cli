@@ -221,14 +221,46 @@ export function formatMemoryDigestLine(
   const body = (e.content ?? '').replace(/\s+/g, ' ').trim()
   // If body is essentially the title, skip teaser.
   if (body.length <= title.length + 8) return `${title}  \`${e.id}\``
-  // Prefer content after first sentence for the teaser.
-  const after = body
-    .slice(title.length)
+  // Prefer content after the first sentence for the teaser — but only strip
+  // the title when the body actually starts with it. `deriveTitle` shortens,
+  // rewrites wikilinks, appends "(PR #n)", and falls back to `<type> <id>`
+  // entirely; a blind `body.slice(title.length)` then cut the teaser at the
+  // wrong offset and ate real characters off the front ("exer must strip …").
+  const titleCore = title
+    .replace(/\s*\(PR #\d+\)$/, '')
+    .replace(/…$/, '')
+    .trim()
+  const bodyStartsWithTitle =
+    titleCore.length > 0 && body.toLowerCase().startsWith(titleCore.toLowerCase())
+  const after = (bodyStartsWithTitle ? body.slice(titleCore.length) : body)
     .replace(/^[\s.:;—-]+/, '')
     .trim()
   if (after.length < opts.minTeaser) return `${title}  \`${e.id}\``
-  const teaser = after.length > opts.maxTeaser ? `${after.slice(0, opts.maxTeaser - 1)}…` : after
-  return `${title} — ${teaser}  \`${e.id}\``
+  return `${title} — ${clipTeaser(after, opts.maxTeaser)}  \`${e.id}\``
+}
+
+/**
+ * Clip to a whole clause, never mid-word.
+ *
+ * A hard `slice(0, 89)` cut every L0 line at a character boundary, so the
+ * operative half of a rule was routinely the half that got dropped — "Node
+ * exec() pipes stdin, so bun test …". A rule truncated before its verb is
+ * worse than no rule: it still spends the reader's attention but carries no
+ * instruction. Prefer the last sentence end, else the last word boundary.
+ */
+function clipTeaser(text: string, max: number): string {
+  if (text.length <= max) return text
+  const window = text.slice(0, max - 1)
+  const sentenceEnd = Math.max(
+    window.lastIndexOf('. '),
+    window.lastIndexOf('; '),
+    window.lastIndexOf('! '),
+    window.lastIndexOf('? ')
+  )
+  // Only honour a sentence end that leaves a useful amount of text.
+  if (sentenceEnd > max * 0.5) return window.slice(0, sentenceEnd + 1)
+  const wordEnd = window.lastIndexOf(' ')
+  return `${(wordEnd > max * 0.5 ? window.slice(0, wordEnd) : window).trimEnd()}…`
 }
 
 /**

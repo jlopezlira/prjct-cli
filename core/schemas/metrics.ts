@@ -47,19 +47,25 @@ export type AgentUsage = z.infer<typeof AgentUsageSchema>
  *
  * Used for estimating cost savings from context compression
  */
+// Keys are the REAL model ids the API accepts, not dotted marketing names —
+// `claude-opus-4.5` never matched anything a rig reports, so those lookups
+// silently fell through to `default` and mispriced the cost report.
 const TOKEN_COSTS = {
-  // Current models (2026)
-  'claude-opus-4.5': 0.005, // $5/M input - flagship
-  'claude-sonnet-4.5': 0.003, // $3/M input - balanced
-  'claude-haiku-4.5': 0.001, // $1/M input - fastest
-  // Previous gen models
-  'claude-opus-4': 0.015, // $15/M input
-  'claude-sonnet-4': 0.003, // $3/M input
+  // Claude 5 family
+  'claude-fable-5': 0.01, // $10/M input - most capable
+  'claude-opus-5': 0.005, // $5/M input - flagship
+  'claude-sonnet-5': 0.003, // $3/M input - balanced
+  'claude-haiku-4-5': 0.001, // $1/M input - fastest
+  // Previous generations
+  'claude-opus-4-8': 0.005, // $5/M input
+  'claude-opus-4-7': 0.005, // $5/M input
+  'claude-opus-4-6': 0.005, // $5/M input
+  'claude-sonnet-4-6': 0.003, // $3/M input
   // Other providers
   'gpt-4o': 0.0025, // $2.50/M input
   'gemini-pro': 0.00125, // $1.25/M input
-  // Default: Claude Sonnet (most common for Claude Code)
-  default: 0.003, // $3/M input
+  // Default: Claude Opus 5 (what Claude Code runs unless told otherwise)
+  default: 0.005, // $5/M input
 } as const
 
 type ModelName = keyof typeof TOKEN_COSTS

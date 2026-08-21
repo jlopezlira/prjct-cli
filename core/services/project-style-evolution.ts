@@ -398,6 +398,29 @@ interface StyleBridgeEntry {
   tags: Record<string, string>
 }
 
+/**
+ * Join a label and its elaboration, dropping the elaboration when the model
+ * just restated the label.
+ *
+ * Style synthesis regularly returns `description` ≈ `name` and `suggestion` ≈
+ * `issue`. Concatenating blindly produced entries like "Command manifest as
+ * single wire: Command manifest as single wire: Command manifest as single
+ * wire" and "Relying on model to land session memory. Suggestion: Relying on
+ * model to land session memory." — which are then injected as authoritative
+ * project knowledge, spending the reader's attention to say nothing.
+ */
+function joinDistinct(label: string, detail: string, separator: string): string {
+  const head = label.trim()
+  const tail = detail.trim()
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+  if (!tail || norm(tail) === norm(head) || norm(tail).startsWith(norm(head))) return head
+  return `${head}${separator}${tail}`
+}
+
 function desiredStyleBridgeEntries(snapshot: ProjectStyleSnapshot): StyleBridgeEntry[] {
   const p = snapshot.payload
   const entries = [
@@ -412,7 +435,7 @@ function desiredStyleBridgeEntries(snapshot: ProjectStyleSnapshot): StyleBridgeE
     })),
     ...p.patterns.slice(0, 25).map((pat) => ({
       type: 'pattern' as const,
-      content: `${pat.name}: ${pat.description}`,
+      content: joinDistinct(pat.name, pat.description, ': '),
       tags: {
         topic: `style:pattern:${pat.key}`,
         name: pat.name,
@@ -422,7 +445,7 @@ function desiredStyleBridgeEntries(snapshot: ProjectStyleSnapshot): StyleBridgeE
     })),
     ...p.antiPatterns.slice(0, 25).map((a) => ({
       type: 'anti-pattern' as const,
-      content: `${a.issue}. Suggestion: ${a.suggestion}`,
+      content: joinDistinct(a.issue, a.suggestion, '. Suggestion: '),
       tags: {
         topic: `style:anti:${a.key}`,
         name: a.issue,

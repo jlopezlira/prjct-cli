@@ -30,6 +30,38 @@ describe('classifyBroadProcessTermination', () => {
       expect(classifyBroadProcessTermination('npm test')).toBe(false)
       expect(classifyBroadProcessTermination('echo $HOME && ls')).toBe(false)
     })
+
+    // `VAR=$(cmd …)` is ONE assignment, not an env-prefixed command. The
+    // unwrapper used to strip the `VAR=` prefix (right for `FOO=bar cmd`),
+    // which promoted the inner command's ARGUMENTS to command position — so
+    // any `$` among them read as an unresolved executable and these everyday
+    // shapes were denied, with advice about PIDs that made no sense.
+    it('allows a command-substitution assignment whose inner command takes $ arguments', () => {
+      const benign = [
+        'OUT=$(echo "$CWD") ; echo done',
+        'N=$(cat "$F" | wc -l); echo $N',
+        'ROOT=$(git rev-parse --show-toplevel) && cd "$ROOT"',
+        'JSON=$(printf \'{"cwd":"%s"}\' "$PWD") && echo "$JSON"',
+        'SHA=$(gh pr view --json headRefOid -q .headRefOid); echo "$SHA"',
+      ]
+      for (const command of benign) {
+        expect(classifyBroadProcessTermination(command)).toBe(false)
+      }
+    })
+
+    // A quoted heredoc body is inert text to the shell. Lexed as commands, its
+    // words landed in command position — so any `${…}` inside a Python/JS
+    // payload denied the whole call.
+    it('allows a heredoc whose body contains $ and backticks', () => {
+      const heredoc = [
+        "python3 - <<'PYEOF'",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: this literal placeholder inside the heredoc body is exactly what used to trigger the denial.
+        'print("${m.modelDirective(\'orchestrator\')}")',
+        'print(`echo pkill`)',
+        'PYEOF',
+      ].join('\n')
+      expect(classifyBroadProcessTermination(heredoc)).toBe(false)
+    })
   })
 
   describe('killall — always denied', () => {
@@ -89,6 +121,11 @@ describe('classifyBroadProcessTermination', () => {
       expect(classifyBroadProcessTermination('$(echo killall) node')).toBe(true)
       expect(classifyBroadProcessTermination('`echo pkill` -f node')).toBe(true)
     })
+
+    it('still sees a broad kill hidden INSIDE a substitution', () => {
+      expect(classifyBroadProcessTermination('OUT=$(killall node); echo "$OUT"')).toBe(true)
+      expect(classifyBroadProcessTermination('echo "$(pkill -f vite)"')).toBe(true)
+    })
   })
 
   describe('sudo-wrapped commands, including combined short-flag clusters', () => {
@@ -105,6 +142,19 @@ describe('classifyBroadProcessTermination', () => {
     it('returns the denial message only when the command is classified as broad termination', () => {
       expect(broadProcessTerminationDenial('kill 12345')).toBeNull()
       expect(broadProcessTerminationDenial('pkill node')).toContain('prjct: denied')
+    })
+
+    it('gives PID advice for a real broad kill', () => {
+      expect(broadProcessTerminationDenial('killall node')).toContain('exact numeric PID')
+    })
+
+    // Telling an agent to "identify the exact numeric PID" when it ran no
+    // kill at all is unactionable — it retries blind. Name the token and rule.
+    it('explains the actual rule for an unresolved executable, not PIDs', () => {
+      const denial = broadProcessTerminationDenial('$a -9 node') ?? ''
+      expect(denial).toContain('$a')
+      expect(denial).toContain('resolves at runtime')
+      expect(denial).not.toContain('exact numeric PID')
     })
   })
 })

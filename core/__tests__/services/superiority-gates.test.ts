@@ -87,34 +87,33 @@ describe('package install parse (PreToolUse superiority)', () => {
   })
 })
 
-describe('context-pressure density guard (no forced session kill)', () => {
-  it('default: never hard-blocks ship; compact preference only', () => {
-    const crit = contextPressureVerdict(
-      { maxTurnsPerCycle: 10 } as never,
-      { turnCount: 8 } as never
+describe('context-pressure reports measured token spend (no forced session kill)', () => {
+  // Levels come from tokens against an explicitly configured budget. A turn
+  // count is not context and no longer produces a level at all.
+  const spent = (tokens: number) =>
+    contextPressureVerdict(
+      { maxTokensPerCycle: 100_000 } as never,
+      { turnCount: 2, tokensIn: tokens, tokensOut: 0 } as never
     )
+
+  it('default: never hard-blocks ship; compact preference only', () => {
+    const crit = spent(85_000)
     expect(crit.level).toBe('critical')
     expect(contextPressureBlocksExpansion(crit)).toBe(false)
     expect(contextPressureRequiresCompactPath(crit)).toBe(true)
-    expect(crit.cue).toMatch(/Session continues|density|compact/i)
-    expect(contextPressureStatusLine(crit)).toMatch(/density|compact/i)
+    expect(crit.cue).toMatch(/token budget/i)
+    expect(contextPressureStatusLine(crit)).toMatch(/budget/i)
 
-    const warn = contextPressureVerdict(
-      { maxTurnsPerCycle: 10 } as never,
-      { turnCount: 6 } as never
-    )
+    const warn = spent(65_000)
     expect(warn.level).toBe('warn')
     expect(contextPressureBlocksExpansion(warn)).toBe(false)
     expect(contextPressureRequiresCompactPath(warn)).toBe(true)
-    expect(warn.cue).toMatch(/Keep the chat|compact|high-signal/i)
-    expect(contextPressureStatusLine(warn)).toMatch(/density|compact/i)
+    expect(warn.cue).toMatch(/token budget/i)
+    expect(contextPressureStatusLine(warn)).toMatch(/budget/i)
   })
 
   it('opt-in hardBlockShip only when configured', () => {
-    const crit = contextPressureVerdict(
-      { maxTurnsPerCycle: 10 } as never,
-      { turnCount: 8 } as never
-    )
+    const crit = spent(85_000)
     expect(
       contextPressureBlocksExpansion(crit, {
         contextPressure: { hardBlockShip: true },

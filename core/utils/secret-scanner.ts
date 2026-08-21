@@ -40,12 +40,58 @@ const SECRET_PATTERNS: ReadonlyArray<{ name: string; re: RegExp }> = [
     name: 'PEM private key',
     re: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
   },
+  // The AKIA… pattern above is the access key ID, which is not the credential.
+  // The SECRET access key is the 40-char value, too generic to match bare —
+  // so match it by its assignment context.
+  {
+    name: 'AWS secret access key',
+    re: /aws_?secret_?access_?key["']?\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}/i,
+  },
 ]
+
+/**
+ * Words that mark a match as documentation rather than a credential. Denying
+ * placeholders blocked real work — documenting a key's shape in a README,
+ * writing a fixture, even editing this scanner's own test — and told the author
+ * to "remove the secret" when there was none to remove.
+ */
+const PLACEHOLDER_WORD =
+  /example|redacted|placeholder|your[-_]?(?:key|token|secret)|dummy|<[a-z-]+>/i
+
+/**
+ * Shortest credential body any pattern here accepts, so a match that is only
+ * a prefix plus filler cannot pass as real.
+ */
+const MIN_CREDENTIAL_CHARS = 16
+
+/**
+ * A match is a placeholder when its entropy-bearing body is just filler.
+ *
+ * These patterns are open-ended, so a REAL key butted against padding (`…xyz`
+ * followed by 160k `y`s in the same string) matches as one long token ending
+ * in a giant identical run. Testing the raw match for a repeated run would
+ * therefore read that real key as a placeholder. Instead drop one trailing run
+ * — which is either the padding or the placeholder's own body — and ask
+ * whether a credential-sized body survives.
+ */
+export function isPlaceholderSecret(match: string): boolean {
+  if (PLACEHOLDER_WORD.test(match)) return true
+  const withoutTrailingRun = match.replace(/(.)\1{7,}$/, '')
+  return withoutTrailingRun.length < MIN_CREDENTIAL_CHARS
+}
 
 export function scanForSecrets(text: string): string[] {
   if (!text) return []
   const hits: string[] = []
-  for (const { name, re } of SECRET_PATTERNS) if (re.test(text)) hits.push(name)
+  for (const { name, re } of SECRET_PATTERNS) {
+    // Check EVERY match, not just the first, and judge each on its own
+    // substring. Scanning only the first match would let a placeholder at the
+    // top of a README mask a real key further down; judging the whole text
+    // would let the word "example" anywhere suppress a real key.
+    const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)
+    const matches = text.match(global)
+    if (matches?.some((m) => !isPlaceholderSecret(m))) hits.push(name)
+  }
   return hits
 }
 

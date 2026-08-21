@@ -1,22 +1,24 @@
 /**
- * Context-pressure cues — signal-density guard, NOT a forced session killer.
+ * Context-pressure cues — a report of MEASURED token spend, nothing else.
  *
- * Policy (product, 2026-07): long sessions are fine. What we protect is that
- * the window does not fill with junk (broad Grep, re-research, padded recall).
- * Hosts (Codex/Claude) already show real context % — when THAT hits 100%, the
- * host may need a new window. prjct must not invent a second, earlier "you
- * must land / clear" ritual that thrash-ends productive work.
+ * This used to derive "context density" from `turns / maxTurnsPerCycle`
+ * (default 15). A turn count is not context: on turn 9 of a cycle it announced
+ * `context density (~60%)` and told the model to stop searching the codebase —
+ * "no broad Grep/Glob thrash", "do not re-index the tree", "high-signal tools
+ * only" — while the real window might be 3% full. That is a false fact about
+ * the model's own state, used to cap how much work it does.
  *
- * Uses turn count + optional token budget as a soft proxy only.
- * Soft cues at 60%/70% of cycle budget. Ship hard-block is OFF by default
- * (opt-in: LocalConfig.contextPressure.hardBlockShip === true).
+ * Now the ratio comes only from tokens actually spent against a budget the
+ * project explicitly configured (`maxTokensPerCycle`). With no budget there is
+ * nothing measured, so there is no cue. The cue reports the number and names
+ * the cheaper tools that exist; it never forbids reading code. "This cycle is
+ * long" is a separate, honest signal already carried by the loop guard.
  */
 
 import type { LocalConfig } from '../types/config'
 
-const DEFAULT_TURN_SOFT = 15
 const WARN_RATIO = 0.6
-const CRITICAL_RATIO = 0.7
+const CRITICAL_RATIO = 0.8
 
 export type ContextPressureLevel = 'ok' | 'warn' | 'critical'
 
@@ -38,60 +40,54 @@ export interface ContextPressureVerdict {
 }
 
 /**
- * Prefer configured maxTurnsPerCycle; fall back to the stuck threshold so
- * projects without an explicit budget still get soft density cues.
+ * Report token spend against an explicitly configured `maxTokensPerCycle`.
+ * No budget configured → nothing is measured → no cue. Turn count is reported
+ * for callers but never drives the level.
  */
 export function contextPressureVerdict(
   config: LocalConfig | null | undefined,
   task: ContextPressureTask | null | undefined
 ): ContextPressureVerdict {
   const turns = task?.turnCount ?? 0
-  const limit =
-    config?.maxTurnsPerCycle && config.maxTurnsPerCycle > 0
-      ? config.maxTurnsPerCycle
-      : DEFAULT_TURN_SOFT
-  const ratio = limit > 0 ? turns / limit : 0
+  const limit = config?.maxTokensPerCycle ?? 0
+  const spent = (task?.tokensIn ?? 0) + (task?.tokensOut ?? 0)
+  const ratio = limit > 0 ? spent / limit : 0
 
-  if (!task || turns <= 0) {
+  if (!task || limit <= 0 || spent <= 0) {
     return { level: 'ok', cue: null, turns, limit, ratio: 0 }
   }
 
-  // Token budget twin (when present) can escalate independently.
-  const tokenBudget = config?.maxTokensPerCycle ?? 0
-  const spent = (task.tokensIn ?? 0) + (task.tokensOut ?? 0)
-  const tokenRatio = tokenBudget > 0 ? spent / tokenBudget : 0
-  const effective = Math.max(ratio, tokenRatio)
+  const pct = Math.round(ratio * 100)
+  const spentK = Math.round(spent / 1000)
+  const limitK = Math.round(limit / 1000)
 
-  if (effective >= CRITICAL_RATIO) {
+  // State the measurement and name the cheaper tools. Never forbid reading
+  // code — the model decides what it needs to see to do the work correctly.
+  if (ratio >= CRITICAL_RATIO) {
     return {
       level: 'critical',
       turns,
       limit,
-      ratio: effective,
-      cue: `# prjct: context density (high ~${Math.round(effective * 100)}%)
-Session continues — do NOT force land/clear just because the cycle is long.
-Protect the window: no broad Grep/Glob thrash, no re-research from zero, pull memory by id (\`prjct context memory mem_N\`), prefer compact format.
-Persist durable signal with \`prjct remember\` / land when YOU choose hygiene — not as a kill switch.
-Host "Context 100%" is the real window limit; until then keep working with high-signal tools only.`,
+      ratio,
+      cue: `# prjct: token budget (${pct}% — ${spentK}k of ${limitK}k this cycle)
+This is the budget YOU configured for a cycle, not the host context window — the host shows that separately, and the session continues either way.
+Cheaper routes when they answer the same question: \`prjct context memory mem_N\` (pull by id), \`prjct code trace <symbol>\`, \`prjct search\`.
+Read whatever the work actually requires; a wrong answer costs more than the tokens saved.`,
     }
   }
 
-  if (effective >= WARN_RATIO) {
+  if (ratio >= WARN_RATIO) {
     return {
       level: 'warn',
       turns,
       limit,
-      ratio: effective,
-      cue: `# prjct: context density (~${Math.round(effective * 100)}%)
-Keep the chat — prefer high-signal tools only:
-1. Finish the current slice (no new rabbit holes)
-2. Recall compact / by-id — do not re-index the tree
-3. Optional hygiene later: \`prjct land\` then \`prjct prime\` if the HOST context is actually full
-Do not treat this as "session must end".`,
+      ratio,
+      cue: `# prjct: token budget (${pct}% — ${spentK}k of ${limitK}k this cycle)
+Informational. Cheaper routes when they answer the same question: \`prjct context memory mem_N\`, \`prjct code trace <symbol>\`, \`prjct search\`. Not a reason to stop reading code.`,
     }
   }
 
-  return { level: 'ok', cue: null, turns, limit, ratio: effective }
+  return { level: 'ok', cue: null, turns, limit, ratio }
 }
 
 /**
@@ -113,17 +109,17 @@ export function contextPressureBlocksExpansion(
  * Empty string when ok (no noise on the chrome).
  */
 export function contextPressureStatusLine(v: ContextPressureVerdict): string {
-  if (v.level === 'critical') {
-    return `ctx:${Math.round(v.ratio * 100)}% density — compact tools only`
-  }
-  if (v.level === 'warn') {
-    return `ctx:${Math.round(v.ratio * 100)}% density — prefer compact`
+  // "ctx:" read as the host context window; this is the cycle token budget.
+  if (v.level === 'critical' || v.level === 'warn') {
+    return `budget:${Math.round(v.ratio * 100)}% of cycle tokens`
   }
   return ''
 }
 
 /**
- * Prefer compact tool use (pull-by-id, no thrash) — NOT "must land/new window".
+ * True once measured spend crosses the configured budget threshold. A hint to
+ * prefer pull-by-id recall where it answers the same question — never a gate
+ * on reading code.
  */
 export function contextPressureRequiresCompactPath(v: ContextPressureVerdict): boolean {
   return v.level === 'warn' || v.level === 'critical'
