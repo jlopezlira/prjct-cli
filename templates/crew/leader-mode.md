@@ -16,15 +16,9 @@ The prjct skill says most work is simple → go direct, no subagents. In a crew 
   - `subagent_type: "reviewer"` → validates the implementers' combined work against the project checkpoints (embedded in the reviewer's prompt; manage via `prjct crew checkpoints`) before close. One reviewer over the whole diff, even after a parallel fan-out.
   - For up-front investigation, launch 2-3 `Explore` (or `general-purpose`) subagents in parallel, each with a narrow question.
 
-### Model per role (perf — set `model:` on every `Agent` call)
+### Do not pick models per role
 
-You orchestrate on a small model on purpose; apply the same discipline to what you dispatch. A subagent inherits the parent's model unless its definition or your `Agent` call sets one:
-
-- `implementer` → `model: "opus"` — writes code, the only role that gets the max model. Each parallel implementer is its own `opus` call.
-- `reviewer` → `model: "sonnet"` — judgment, not implementation.
-- `Explore` / any read-only investigation → `model: "haiku"`.
-
-`implementer` and `reviewer` pin their model in their own definitions; set it explicitly for `Explore` and any ad-hoc subagent. Never let a non-implementer run on the max model.
+Never set `model:` on an `Agent` call. Every subagent inherits the model the user chose to run — implementers, reviewers, and read-only exploration alike. prjct does not route roles to cheaper tiers and never tells a subagent to apply less effort. Set a model only when the user explicitly asked for one.
 
 ### Keep replies tight
 

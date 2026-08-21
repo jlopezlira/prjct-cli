@@ -1,34 +1,43 @@
 /**
- * Crew agent models are a single source of truth (harness pillar 3).
+ * Crew agents carry NO model pin (harness pillar 3).
  *
- * The leader/implementer/reviewer `model:` frontmatter is stamped from
- * AGENT_MODEL_POLICY at install time, so the static templates can never drift
- * from the policy that the rest of the multi-agent dispatch already uses.
+ * Installs used to stamp `model:` per role (leader=haiku, reviewer=sonnet,
+ * implementer=opus), which capped every role below the model the user chose to
+ * run. The pin is now stripped at install time so each crew agent inherits the
+ * session model. See `core/schemas/model.ts`.
  */
 
 import { describe, expect, it } from 'bun:test'
-import { applyCrewModelPolicy } from '../../commands/crew'
-import { getAgentModelPolicy } from '../../schemas/model'
+import { stripCrewModelPin } from '../../commands/crew'
 
-const FRONTMATTER = '---\nname: x\nmodel: PLACEHOLDER\ncolor: blue\n---\n\nbody\n'
+const FRONTMATTER = '---\nname: x\nmodel: sonnet\ncolor: blue\n---\n\nbody\n'
 
-describe('crew model policy derives from AGENT_MODEL_POLICY', () => {
-  const cases = [
-    ['.claude/agents/leader.md', 'orchestrator'],
-    ['.claude/agents/implementer.md', 'implementer'],
-    ['.claude/agents/reviewer.md', 'reviewer'],
+describe('crew install strips the model pin', () => {
+  const dests = [
+    '.claude/agents/leader.md',
+    '.claude/agents/implementer.md',
+    '.claude/agents/reviewer.md',
   ] as const
 
-  for (const [dest, role] of cases) {
-    it(`stamps ${dest} with the ${role} policy model`, () => {
-      const out = applyCrewModelPolicy(FRONTMATTER, dest)
-      expect(out).toContain(`model: ${getAgentModelPolicy(role).model}`)
-      expect(out).not.toContain('PLACEHOLDER')
+  for (const dest of dests) {
+    it(`removes the model: line from ${dest}`, () => {
+      const out = stripCrewModelPin(FRONTMATTER, dest)
+      expect(out).not.toContain('model:')
+      // Everything else in the frontmatter survives.
+      expect(out).toContain('name: x')
+      expect(out).toContain('color: blue')
+      expect(out).toContain('body')
+      expect(out).toBe('---\nname: x\ncolor: blue\n---\n\nbody\n')
     })
   }
 
+  it('is a no-op for a template with no model: line', () => {
+    const tpl = '---\nname: leader\n---\n'
+    expect(stripCrewModelPin(tpl, '.claude/agents/leader.md')).toBe(tpl)
+  })
+
   it('leaves files not mapped to a crew role untouched', () => {
     const tpl = '---\nmodel: keep\n---\n'
-    expect(applyCrewModelPolicy(tpl, '.claude/agents/other.md')).toBe(tpl)
+    expect(stripCrewModelPin(tpl, '.claude/agents/other.md')).toBe(tpl)
   })
 })

@@ -2,7 +2,6 @@
 name: leader
 description: "Leader (Orchestrator, blue). Decomposes the user's request, delegates work to implementer/reviewer subagents, and never edits application code directly."
 tools: Read, Glob, Grep, Bash, Agent
-model: haiku
 color: blue
 ---
 
@@ -53,15 +52,9 @@ When you launch a subagent, instruct it to reply with a **one-screen summary** �
 
 Subagents must not write reports to disk. Persistence on this project goes through `prjct` CLI verbs only — SQLite is the only allowed surface.
 
-## Model policy when dispatching (perf — non-negotiable)
+## Do not pick models when dispatching
 
-You run on a small model on purpose: you orchestrate, you do not implement. Apply the same discipline to what you dispatch — a subagent inherits your model unless its definition or your Agent call sets one:
-
-- `implementer` → `model: "opus"` (it writes code; the only role that gets max).
-- `reviewer` → `model: "sonnet"` (judgment, not implementation).
-- `Explore` / any read-only investigation subagent you spawn → set `model: "haiku"` in the Agent call — they route information, they don't write code.
-
-`implementer` and `reviewer` already pin their model in their own definitions; you must set it explicitly for `Explore` and any ad-hoc subagent. Never let a non-implementer subagent run on the max model — that is what made tasks crawl.
+Never set `model:` in an Agent call. Every subagent inherits the model the user chose to run, and that is correct for all of them — implementers, reviewers, and read-only exploration alike. prjct does not route roles to cheaper tiers, and it never tells a subagent to apply less effort. If the user wants a specific model for a specific dispatch, they will say so.
 
 ## Point, don't carry — nothing leaves prjct (MUST)
 

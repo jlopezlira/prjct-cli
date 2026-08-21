@@ -50,19 +50,20 @@ describe('renderAuditDispatch — points reviewers at prjct, never embeds the sp
     expect(out).toContain('Read tool')
   })
 
-  it('keeps the non-implementer model policy on a Claude rig', async () => {
+  it('names no model on a Claude rig', async () => {
     const out = await renderAuditDispatch('spec-x', 'X', emptySpecContent('g'), undefined, 'claude')
-    expect(out).toContain('model: "sonnet"')
-    expect(out).toContain("NOT the parent's max model")
+    expect(out).toContain('Do not set `model:` on any reviewer')
+    expect(out).not.toContain('model: "sonnet"')
+    expect(out).not.toContain("NOT the parent's max model")
     expect(out).toContain('via the Agent tool') // native subagent dispatch
   })
 
-  it('emulates the fan-out and uses the rig model on a non-Claude rig', async () => {
+  it('emulates the fan-out on a non-Claude rig, still naming no model', async () => {
     const c = emptySpecContent('Add auth to the API endpoint with a DB schema migration')
     const out = await renderAuditDispatch('spec-g', 'X', c, undefined, 'gemini')
     expect(out).toContain('no native subagent tool')
     expect(out).toContain('EMULATE the fan-out')
-    expect(out).toContain('2.5-flash') // gemini review-tier model
+    expect(out).not.toContain('2.5-flash') // no rig model is prescribed
     expect(out).not.toContain('via the Agent tool')
     // Still never embeds the spec — points at prjct by id.
     expect(out).toContain('prjct spec show spec-g --md')

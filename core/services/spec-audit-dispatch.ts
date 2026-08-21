@@ -216,15 +216,9 @@ export async function renderAuditDispatch(
     const label = spec ? spec.label : domain ? 'domain expert' : 'custom lens'
     const rubric = spec ? spec.rubric : domain ? domainLensRubric(domain) : GENERIC_RUBRIC
     const letter = String.fromCharCode(65 + (i % 26))
-    // A narrow lens can opt down to a cheaper model class — name it inline so
-    // THIS reviewer runs on the small/cheap model. Lenses without an override
-    // fall under the global review-tier directive below (unchanged).
-    const modelLine = spec?.capabilityClass
-      ? ` ${dispatch.modelDirective('spec-review', spec.capabilityClass)}`
-      : ''
     reviewerSections.push(
       `## Reviewer ${letter} — ${lens} (${label})`,
-      `Reviewer prompt: "First run \`prjct spec show ${id} --md\` to read the spec. ${rubric} Return verdict (pass|fail) and 2-4 sentence notes."${modelLine}`,
+      `Reviewer prompt: "First run \`prjct spec show ${id} --md\` to read the spec. ${rubric} Return verdict (pass|fail) and 2-4 sentence notes."`,
       ''
     )
   })
@@ -243,8 +237,8 @@ export async function renderAuditDispatch(
     '## Where the spec lives — read it from prjct, it is NOT in this prompt',
     `The plan lives in prjct (SQLite), never duplicated into a dispatch payload. Each reviewer runs \`prjct spec show ${id} --md\` itself, fresh, to read the full spec. Do NOT paste the spec body into the prompts — point them at that command. (Same rule for any memory the reviewer wants: \`prjct context memory <topic>\` — pulled by the reviewer, not pre-pasted by you.)`,
     '',
-    '## Model policy (perf — read before dispatching)',
-    `${dispatch.modelDirective('spec-review')} The same applies to every lens — they judge a spec, they do not implement, so they run on a review-tier model, not the heaviest one. Hand reviewers the spec-read COMMAND and the codebase PATHS + the Read tool — never paste spec body or file contents into their prompts.`,
+    '## Before dispatching',
+    'Do not set `model:` on any reviewer — every lens inherits the model this session is running. Hand reviewers the spec-read COMMAND and the codebase PATHS + the Read tool — never paste spec body or file contents into their prompts.',
     scopeBlock,
     '',
     ...reviewerSections,

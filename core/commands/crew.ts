@@ -12,7 +12,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getTemplateContent } from '../agentic/template-loader'
 import configManager from '../infrastructure/config-manager'
-import { type AgentRole, getAgentModelPolicy } from '../schemas/model'
+import type { AgentRole } from '../schemas/model'
 import {
   buildEmulatedCrewProtocol,
   CREW_ROLES,
@@ -81,16 +81,14 @@ const CREW_AGENT_ROLES: Record<string, AgentRole> = Object.fromEntries(
 )
 
 /**
- * Stamp each crew agent's `model:` frontmatter from AGENT_MODEL_POLICY at
- * install time, so the per-role model lives in ONE place (the policy SSOT) and
- * the static templates can never drift from it. No-op for files not mapped to a
- * role, or templates without a `model:` line.
+ * Strip any `model:` frontmatter from a crew agent at install time so the
+ * subagent inherits whatever model the user is driving. prjct does not pick
+ * models for roles — see `core/schemas/model.ts`. No-op for files not mapped
+ * to a role, or templates with no `model:` line.
  */
-export function applyCrewModelPolicy(content: string, destRelative: string): string {
-  const role = CREW_AGENT_ROLES[destRelative]
-  if (!role) return content
-  const { model } = getAgentModelPolicy(role)
-  return content.replace(/^model:[ \t].*$/m, `model: ${model}`)
+export function stripCrewModelPin(content: string, destRelative: string): string {
+  if (!CREW_AGENT_ROLES[destRelative]) return content
+  return content.replace(/^model:[ \t].*(?:\r?\n)?/m, '')
 }
 
 const CHECKPOINTS_FILE: CrewFile = {
@@ -272,7 +270,7 @@ export class CrewCommands extends PrjctCommandsBase {
       for (const f of AGENT_FILES) {
         const dest = path.join(projectPath, f.destRelative)
         const template = await readTemplate(f.templateKey)
-        const content = applyCrewModelPolicy(
+        const content = stripCrewModelPin(
           f.destRelative === '.claude/agents/reviewer.md'
             ? spliceCheckpoints(template, checkpointsRow.content)
             : template,
