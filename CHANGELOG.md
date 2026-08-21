@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-08-21
+
+### Added
+- fix: doctor stops reporting things it cannot know
+
 ## [4.6.0] - 2026-08-21
 
 ### Added
