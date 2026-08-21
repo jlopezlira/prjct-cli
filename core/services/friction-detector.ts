@@ -271,16 +271,36 @@ function extractSpecificConstraint(excerpt: string): string | null {
   return null
 }
 
+/** Brackets opened and closed in equal number — a cheap completeness proxy. */
+function isBalanced(text: string): boolean {
+  const count = (ch: string) => text.split(ch).length - 1
+  return count('(') === count(')') && count('[') === count(']') && count('{') === count('}')
+}
+
+/**
+ * A promoted constraint becomes a PERMANENT rule under "How this developer
+ * works (act as them)" in every future session, so it has to be a complete,
+ * self-contained clause.
+ *
+ * This used to `.slice(0, MAX_CONSTRAINT_CHARS)`, which minted standing rules
+ * that stop mid-sentence — a real one read "Always: Avoid real per-pair
+ * verdicts), synthesize ALL 7 batches into one prioritized implementation list
+ * and start implementing the high". Unmatched paren, "7 batches" that exist in
+ * no future session, cut mid-word. An instruction the reader cannot satisfy is
+ * worse than no instruction: it still spends attention and invites guessing.
+ * If it does not fit whole, it is not a rule — drop it.
+ */
 function cleanConstraint(raw: string): string | null {
   const r = raw
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^[-*•]\s+/, '')
     .replace(/[.!?]+$/, '')
-    .slice(0, MAX_CONSTRAINT_CHARS)
   if (r.length < 12) return null
+  if (r.length > MAX_CONSTRAINT_CHARS) return null
   // Never persist residual raw negation lead-ins.
   if (/^(?:nope|no|stop|wait|cancel)\b/i.test(r)) return null
+  if (!isBalanced(r)) return null
   return r
 }
 

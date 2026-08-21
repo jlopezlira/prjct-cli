@@ -508,7 +508,19 @@ export class ShippingCommands extends PrjctCommandsBase {
         return { success: false, clarification }
       }
 
-      const featureName = taskFeatureName ?? (await inferShipFeatureFromBranch(projectPath))
+      // Precedence: explicit argument → feature branch → active cycle.
+      //
+      // The active cycle used to outrank the branch, so a ship inherited
+      // whatever cycle happened to be open — which is routinely stale. That
+      // released work under a months-old cycle title for a change
+      // about model selection, and wrote that title into the PR, the commit,
+      // and the CHANGELOG. The branch names the unit actually being shipped;
+      // `inferShipFeatureFromBranch` returns null on main/master, so the cycle
+      // description still covers shipping from a trunk branch.
+      const featureName =
+        normalizeShipFeature(feature) ??
+        (await inferShipFeatureFromBranch(projectPath)) ??
+        taskFeatureName
       if (!featureName) {
         return {
           success: false,

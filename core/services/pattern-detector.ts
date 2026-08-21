@@ -30,6 +30,20 @@ import type { LocalConfig } from '../types/config'
 import { exitCodeMeans, runGit, throwProc } from '../utils/exec'
 import { collectFromPersistedEvents } from './persisted-events'
 
+/**
+ * Auto-detected signals are NOT `learning`.
+ *
+ * Persisting them as `learning` put pure git telemetry ("Hot file: `x.ts` — 8
+ * touches in the last 7 days") into the L0 Learnings section, where it
+ * out-competed real learnings for the handful of lines that ride every
+ * session — 44 of them in this project's corpus. They are recomputable from
+ * git and already surfaced by `signals-digest` (which selects on the source
+ * tag, not the type), so they belong in a type L0 does not inject.
+ */
+const AUTO_SIGNAL_TYPE = 'system-event'
+/** Event row written by `remember` for AUTO_SIGNAL_TYPE — used by the dedup scans. */
+const AUTO_SIGNAL_EVENT = 'memory.remember.system-event'
+
 const HOT_FILE_PATTERN_TAG = 'hot-file'
 const HOT_FILE_SOURCE_TAG = 'pattern-detector-auto'
 const RECURRING_BUG_PATTERN_TAG = 'recurring-bug'
@@ -119,7 +133,7 @@ export async function detectAndPersistPatterns(
         }
         try {
           await projectMemory.remember(projectPath, {
-            type: 'learning',
+            type: AUTO_SIGNAL_TYPE,
             content:
               `Hot file: \`${hf.path}\` — ${hf.touches} touches in the last ${WINDOW_DAYS} days. ` +
               `Worth a refactor pass or a deliberate decision about why it churns this often.`,
@@ -157,7 +171,7 @@ export async function detectAndPersistPatterns(
         }
         try {
           await projectMemory.remember(projectPath, {
-            type: 'learning',
+            type: AUTO_SIGNAL_TYPE,
             content:
               `Recurring bug pattern: gotchas tagged \`topic:${r.topic}\` reported ${r.occurrences} ` +
               `times in the last ${RECURRING_WINDOW_DAYS} days. Likely a real underlying issue — ` +
@@ -190,7 +204,7 @@ export async function detectAndPersistPatterns(
       if (previous > 0 && delta >= TECH_DEBT_GROWTH_THRESHOLD) {
         try {
           await projectMemory.remember(projectPath, {
-            type: 'learning',
+            type: AUTO_SIGNAL_TYPE,
             content:
               `Tech debt growing: TODO/FIXME/XXX count rose by ${delta} (now ${debtSnapshot.totalCount}, was ${previous}). ` +
               `Consider a focused debt-reduction pass before adding more features.`,
@@ -376,7 +390,7 @@ function collectAlreadyMarkedHotFiles(projectId: string): Set<string> {
   // The user can prune.
   const files = collectFromPersistedEvents<string>(
     projectId,
-    "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 200",
+    `SELECT data FROM events WHERE type = '${AUTO_SIGNAL_EVENT}' ORDER BY id DESC LIMIT 200`,
     [],
     (tags, parsed) => {
       if (tags.source !== HOT_FILE_SOURCE_TAG) return undefined
@@ -405,7 +419,7 @@ function collectAlreadyMarkedRecurringBugs(projectId: string): Set<string> {
   const cutoffMs = Date.now() - RECURRING_WINDOW_DAYS * 24 * 60 * 60 * 1000
   const topics = collectFromPersistedEvents<string>(
     projectId,
-    "SELECT data FROM events WHERE type = 'memory.remember.learning' ORDER BY id DESC LIMIT 200",
+    `SELECT data FROM events WHERE type = '${AUTO_SIGNAL_EVENT}' ORDER BY id DESC LIMIT 200`,
     [],
     (tags, parsed) => {
       if (tags.source !== RECURRING_BUG_SOURCE_TAG) return undefined

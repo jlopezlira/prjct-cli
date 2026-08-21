@@ -314,6 +314,22 @@ export class UpdateCommands extends PrjctCommandsBase {
         result.errors.push(`Commands: ${getErrorMessage(err)}`)
       }
 
+      // Regenerate the skill pair (SKILL.md + workflows.md).
+      //
+      // Upgrade did not do this — `generateAndInstall` was reachable only from
+      // `prjct sync` and `doctor --fix`. So a new version installed cleanly
+      // while the previous release's skill text kept driving every session: the
+      // model-capping policy removed in v4.5.0 was still on disk, instructing
+      // agents, after upgrading to v4.5.0. Any shipped change to the skill body
+      // must reach the user on upgrade.
+      try {
+        const { skillGenerator } = await import('../services/skill-generator')
+        const generated = await skillGenerator.generateAndInstall()
+        result.details.push(`Skills regenerated (${generated.generated.length})`)
+      } catch (err) {
+        result.errors.push(`Skills: ${getErrorMessage(err)}`)
+      }
+
       // Reinstall global config (replaces old prjct section between markers)
       try {
         const installer = new CommandInstaller()

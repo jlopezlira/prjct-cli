@@ -11,8 +11,12 @@ export interface TokenEconomics {
   /** Tokens on the active cycle if any. */
   cycleTokens: number
   cycleBudget: number | null
-  /** 0–100 health: under budget / low spend = higher. */
-  score: number
+  /**
+   * 0–100 adherence to a configured cycle budget, or null when the project set
+   * none. Never a proxy for quality: spending fewer tokens is not a better
+   * outcome, it is just less work.
+   */
+  score: number | null
   line: string
 }
 
@@ -49,21 +53,20 @@ export function buildTokenEconomics(
   const cycleTokens = (opts.cycleTokensIn ?? 0) + (opts.cycleTokensOut ?? 0)
   const cycleBudget = opts.maxTokensPerCycle ?? null
 
-  // Score: reward measured low thrash; penalize over-budget cycles.
+  // Budget adherence — ONLY meaningful against a budget the project set.
+  //
+  // This used to score raw spend: under 50k tokens scored 90, over 500k scored
+  // 35. That is a "did you do less work" meter wearing a quality label — a day
+  // that shipped nothing outscored a day that shipped three PRs, and the only
+  // way to reach 100 was to stop working. With no budget configured there is
+  // nothing to adhere to, so there is no score to report.
   const score = (() => {
-    if (tokens24h === 0 && cycleTokens === 0) return 80
-    if (cycleBudget && cycleBudget > 0) {
-      const ratio = cycleTokens / cycleBudget
-      if (ratio <= 0.5) return 100
-      if (ratio <= 0.8) return 85
-      if (ratio <= 1.0) return 70
-      if (ratio <= 1.2) return 45
-      return 25
-    }
-    if (tokens24h < 50_000) return 90
-    if (tokens24h < 200_000) return 75
-    if (tokens24h < 500_000) return 55
-    return 35
+    if (!cycleBudget || cycleBudget <= 0) return null
+    const ratio = cycleTokens / cycleBudget
+    if (ratio <= 0.8) return 100
+    if (ratio <= 1.0) return 85
+    if (ratio <= 1.2) return 60
+    return 40
   })()
 
   const budgetBit =
@@ -72,7 +75,10 @@ export function buildTokenEconomics(
       : cycleTokens > 0
         ? `cycle=${cycleTokens}`
         : 'cycle=—'
-  const line = `Token economics: 24h≈${tokens24h} · ${budgetBit} · score=${score}/100 (compound judgment > fresh-window thrash)`
+  const line =
+    score === null
+      ? `Token economics: 24h≈${tokens24h} · ${budgetBit} · no cycle budget set (measurement only)`
+      : `Token economics: 24h≈${tokens24h} · ${budgetBit} · budget adherence=${score}/100`
 
   return { tokens24h, cycleTokens, cycleBudget, score, line }
 }
