@@ -236,10 +236,17 @@ export function contextTaxChecks(taxes: HostContextTax[]): CheckResult[] {
         .join(' · ')
       const totalTokens = Math.round(tax.totalCatalogChars / CHARS_PER_TOKEN)
       const isCritical = flagged.length > 0 || totalTokens > KIMI_CATALOG_CRITICAL_TOKENS
+      // Do NOT point at `prjct doctor --fix`. No heal action disables an MCP
+      // entry (see doctor-heal.ts), and these servers are observed from Kimi's
+      // session wire log rather than read from a file prjct manages — a Kimi
+      // config can carry no MCP entries at all and still show a heavy catalog.
+      // The old text sent the reader to run `--fix`, which changed nothing and
+      // re-printed the same ACTION REQUIRED: an instruction that cannot be
+      // satisfied, which an agent will retry instead of acting on.
       const action =
         flagged.length > 0
-          ? `ACTION REQUIRED: run \`prjct doctor --fix\` to disable heavy configured MCP entries reversibly, then reload Kimi or start a new session.`
-          : `ACTION REQUIRED: host-native tools dominate this catalog; configure a project-appropriate lean Kimi tool allowlist, then reload or start a new session.`
+          ? `ACTION: remove or disable ${flagged.map((s) => s.server.replace('mcp:', '')).join(', ')} where Kimi registers it, then reload Kimi or start a new session. prjct cannot disable it for you — it is not in a prjct-managed config.`
+          : `ACTION: host-native tools dominate this catalog; configure a project-appropriate lean Kimi tool allowlist, then reload or start a new session.`
       checks.push({
         name: 'kimi catalog',
         status: isCritical ? 'error' : 'ok',

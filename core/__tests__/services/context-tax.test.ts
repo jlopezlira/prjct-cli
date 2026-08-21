@@ -86,7 +86,13 @@ describe('context tax collection', () => {
     const catalog = checks.find((c) => c.name === 'kimi catalog')
     expect(catalog?.status).toBe('error')
     expect(catalog?.message).toContain('heavy: mcp:heavy-mcp')
-    expect(catalog?.message).toContain('ACTION REQUIRED')
+    expect(catalog?.message).toContain('ACTION')
+    // Must NOT send the reader to `doctor --fix`: no heal action disables an
+    // MCP entry, and these servers come from Kimi's session wire log, not from
+    // a prjct-managed config. Running `--fix` changed nothing and re-printed
+    // the same line — an instruction an agent retries instead of acting on.
+    expect(catalog?.message).not.toContain('doctor --fix')
+    expect(catalog?.message).toContain('heavy-mcp')
   })
 
   it('treats marathon sessions as unhealthy and gives an exact boundary action', async () => {
