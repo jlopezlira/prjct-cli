@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-08-21
+
+### Added
+- Remove every p-term reference because the product never shipped
+
 ## [4.4.0] - 2026-08-20
 
 ### Added

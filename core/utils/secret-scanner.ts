@@ -192,6 +192,5 @@ export function hookCommandUsesFragileEnv(command: string): boolean {
   // Also flag bare ${VAR} required-env patterns that are not portable GEMINI_/PRJCT_ vars.
   if (/\$\{?PPID\}?/.test(command)) return true
   if (/\$\{SUPACODE_[A-Z0-9_]+\}/.test(command)) return true
-  if (/\$\{P_TERM_[A-Z0-9_]+\}/.test(command)) return true
   return false
 }
