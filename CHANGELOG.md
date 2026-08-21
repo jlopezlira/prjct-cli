@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-08-21
+
+### Fixed
+- `prjct doctor` no longer reports a closed cycle as active — the record it
+  reads carries no status, so it now says "last cycle" instead of asserting one
+  is open while `prjct status` / `prjct prime` correctly say otherwise.
+- The Kimi catalog check no longer tells you to run `prjct doctor --fix`. No
+  heal action disables an MCP entry, and those servers are observed from Kimi's
+  session log rather than a prjct-managed config, so running it changed nothing
+  and reprinted the same demand. It now names the real remediation.
+- CI unit shards run with a timeout matched to work that shells out to `git`
+  and `gh`, instead of flaking on the 5s default and turning `main` red.
+
 ## [4.6.0] - 2026-08-21
 
 ### Added
