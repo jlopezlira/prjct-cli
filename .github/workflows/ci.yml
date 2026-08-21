@@ -94,12 +94,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # --timeout 20000: bun's default is 5s per test. The core-c shard
+      # (commands/daemon/workflow/sync) shells out to git and gh and spawns
+      # processes, which legitimately exceeds 5s on a loaded runner — two
+      # different tests there timed out on two consecutive runs and both
+      # passed on rerun with no code change. A red main from a slow runner
+      # teaches everyone to ignore CI, so match the budget to the work.
       - name: Run unit shard
         run: |
           set -euo pipefail
           case "${{ matrix.shard }}" in
             core-a)
-              bun test --dots \
+              bun test --dots --timeout 20000 \
                 core/__tests__/domain \
                 core/__tests__/schemas \
                 core/__tests__/utils \
@@ -115,12 +121,12 @@ jobs:
                 core/__tests__/performance
               ;;
             core-b)
-              bun test --dots \
+              bun test --dots --timeout 20000 \
                 core/__tests__/services \
                 core/__tests__/storage
               ;;
             core-c)
-              bun test --dots \
+              bun test --dots --timeout 20000 \
                 core/__tests__/commands \
                 core/__tests__/daemon \
                 core/__tests__/workflow-engine \
