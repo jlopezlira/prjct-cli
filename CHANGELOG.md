@@ -4,8 +4,10 @@
 
 ## [4.5.0] - 2026-08-21
 
-### Added
-- Remove every p-term reference because the product never shipped
+### Changed
+- Subagents now inherit the model of the rig you are driving. prjct no longer
+  selects a model or a reasoning-effort level for any role, on any provider —
+  the role→model policy and the hardcoded per-provider model tables are gone.
 
 ## [4.4.0] - 2026-08-20
 
