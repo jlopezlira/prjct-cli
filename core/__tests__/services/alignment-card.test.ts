@@ -69,13 +69,25 @@ describe('buildAlignmentCard', () => {
     expect(card.markdown).toMatch(/16 turns/)
   })
 
-  it('includes quality inject under mid-cycle header', () => {
+  // A block that already carries its own `# prjct:` header must NOT get an
+  // outer "alignment" header stacked on top: that rendered a heading with
+  // nothing under it, on every turn.
+  it('includes quality inject without stacking an empty header on top', () => {
     const card = buildAlignmentCard({
       qualityInject: '# prjct: quality orchestrator\n- **kind**: `dispatch_reviewers`',
     })
     expect(card.cues).toContain('quality-ledger')
     expect(card.markdown).toMatch(/quality orchestrator/)
-    expect(card.markdown).toMatch(/alignment/)
+    expect(card.markdown).not.toMatch(/# prjct: alignment/)
+    expect(card.markdown?.trimStart().startsWith('# prjct: quality orchestrator')).toBe(true)
+  })
+
+  it('still adds the alignment header when the blocks bring none', () => {
+    const card = buildAlignmentCard({
+      loop: { stopped: true, message: '⛔ prjct hard stop: 20 turns' } as never,
+    })
+    expect(card.markdown).toMatch(/# prjct: alignment/)
+    expect(card.markdown).toMatch(/hard stop/)
   })
 
   it('combines loop + quality without dropping either', () => {

@@ -182,7 +182,9 @@ describe('ShippingCommands.ship entry-point gates', () => {
     Object.assign(
       fixture,
       await freshProject({
-        maxTurnsPerCycle: 10,
+        // Pressure is measured token spend against a configured budget —
+        // a turn count is not context and no longer raises the level.
+        maxTokensPerCycle: 100_000,
         sdd: { mode: 'off' },
         deliveryGeometry: { mode: 'off' },
         contextPressure: { hardBlockShip: true },
@@ -192,11 +194,11 @@ describe('ShippingCommands.ship entry-point gates', () => {
       id: 'task-pressure-hard',
       description: 'pressure fixture hard',
       sessionId: 'sess-pressure-hard',
-      turnCount: 9,
-      tokensIn: 0,
+      turnCount: 2,
+      tokensIn: 85_000,
       tokensOut: 0,
     })
-    await stateStorage.updateCurrentTask(fixture.projectId, { turnCount: 9 })
+    await stateStorage.updateCurrentTask(fixture.projectId, { tokensIn: 85_000 })
 
     const blocked = await ship.ship('pressure fixture hard', fixture.projectPath, {
       md: true,
@@ -204,9 +206,7 @@ describe('ShippingCommands.ship entry-point gates', () => {
       noJudgmentGate: true,
     })
     expect(blocked.success).toBe(false)
-    expect(String(blocked.error ?? '')).toMatch(
-      /density|hard-block|force-pressure|Session continues/i
-    )
+    expect(String(blocked.error ?? '')).toMatch(/token budget|hard-block|force-pressure/i)
 
     const forced = await ship.ship('pressure fixture hard', fixture.projectPath, {
       md: true,

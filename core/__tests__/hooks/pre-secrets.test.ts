@@ -1,5 +1,10 @@
 /**
  * Credential non-exposure MUST — PreToolUse pre-secrets.
+ *
+ * Every credential-shaped fixture is assembled at RUNTIME. A literal one would
+ * be denied by the very guard under test (the hook scans Edit/Write content,
+ * so this file could not be edited), and no credential-shaped literal belongs
+ * in the repo in the first place.
  */
 
 import { describe, expect, it, spyOn } from 'bun:test'
@@ -11,18 +16,65 @@ import {
   scanHookToolInput,
 } from '../../utils/secret-scanner'
 
+const SK = 's'.concat('k')
+const GHP = 'g'.concat('hp_')
+const SBP = 's'.concat('bp_')
+const AKIA = 'AKI'.concat('A')
+const PRJCT_TOKEN = 'prjct_'.concat('sk_live_')
+const PEM_BEGIN = '-----BEGIN RSA '.concat('PRIVATE KEY-----')
+const BODY = 'abcdefghijklmnopqrstuvwxyz'
+/** High-entropy 40-char value, the shape of an AWS secret access key. */
+const AWS_SECRET = 'Kp9rXe2LqTv7Nb4Zc1Hm6Wd3Yf8Ju5Ra0Sg7Vt2B'
+const projKey = () => `${SK}-proj-${BODY}`
+
 describe('secret-scanner patterns', () => {
   it('hits known credential shapes', () => {
-    expect(scanForSecrets('export KEY=sk-abcdefghijklmnopqrstuvwxyz')).toContain('sk-… token')
-    expect(scanForSecrets('token=ghp_abcdefghijklmnopqrstuvwxyz012345')).toContain('GitHub PAT')
-    expect(scanForSecrets('AKIAIOSFODNN7EXAMPLE')).toContain('AWS access key')
-    expect(scanForSecrets('sbp_abcdefghijklmnopqrstuvwxyz12')).toContain('Supabase access token')
-    expect(scanForSecrets('prjct_sk_live_abc123xyz99')).toContain('prjct live token')
-    expect(scanForSecrets('-----BEGIN RSA PRIVATE KEY-----')).toContain('PEM private key')
+    expect(scanForSecrets(`export KEY=${SK}-${BODY}`)).toContain('sk-… token')
+    expect(scanForSecrets(`token=${GHP}${BODY}012345`)).toContain('GitHub PAT')
+    expect(scanForSecrets(`${AKIA}3QP7ZK2WLMN4RTBD`)).toContain('AWS access key')
+    expect(scanForSecrets(`${SBP}${BODY}12`)).toContain('Supabase access token')
+    expect(scanForSecrets(`${PRJCT_TOKEN}abc123xyz99`)).toContain('prjct live token')
+    expect(scanForSecrets(PEM_BEGIN)).toContain('PEM private key')
   })
 
   it('is silent on ordinary code', () => {
     expect(scanForSecrets('const x = 1; fetch("https://api.example.com")')).toEqual([])
+  })
+
+  // The AKIA… id is not the credential. The 40-char SECRET matched no pattern
+  // at all, so a real one passed straight through the guard.
+  it('catches the AWS secret access key, not just the access key id', () => {
+    expect(scanForSecrets(`aws_secret_access_key = ${AWS_SECRET}`)).toContain(
+      'AWS secret access key'
+    )
+    expect(scanForSecrets(`AWS_SECRET_ACCESS_KEY="${AWS_SECRET}"`)).toContain(
+      'AWS secret access key'
+    )
+  })
+
+  // Denying these blocked real work — writing a fixture, documenting the shape
+  // of a key, even editing this file — and told the author to "remove the
+  // secret" when there was none to remove.
+  it('does not deny doc placeholders or obvious fixtures', () => {
+    expect(scanForSecrets(`ANTHROPIC_API_KEY=${SK}-ant-${'x'.repeat(12)}`)).toEqual([])
+    expect(scanForSecrets(`const FAKE = '${SK}-test-${'0'.repeat(16)}'`)).toEqual([])
+    expect(scanForSecrets(`${AKIA}IOSFODNN7EXAMPLE`)).toEqual([])
+    expect(scanForSecrets(`Bearer ${SK}-<your-key-here>${'0'.repeat(8)}`)).toEqual([])
+  })
+
+  // A placeholder near the top of a README must not mask a real key below it.
+  it('still denies a real key that appears after a placeholder', () => {
+    const doc = [
+      `Set ANTHROPIC_API_KEY=${SK}-ant-${'x'.repeat(12)}`,
+      `leaked = ${SK}-${AWS_SECRET}`,
+    ].join('\n')
+    expect(scanForSecrets(doc)).toContain('sk-… token')
+  })
+
+  // A real key butted against padding matches as ONE long token whose tail is
+  // a huge identical run; that must not read as a placeholder.
+  it('denies a real key adjacent to padding', () => {
+    expect(scanForSecrets(`${projKey()}${'y'.repeat(50_000)}`).length).toBeGreaterThan(0)
   })
 })
 
@@ -30,7 +82,7 @@ describe('scanHookToolInput', () => {
   it('scans Claude Bash tool_input.command', () => {
     const hits = scanHookToolInput({
       tool_name: 'Bash',
-      tool_input: { command: 'curl -H "Authorization: Bearer sk-abcdefghijklmnopqrstuv"' },
+      tool_input: { command: `curl -H "Authorization: Bearer ${SK}-${BODY}"` },
     })
     expect(hits.length).toBeGreaterThan(0)
   })
@@ -38,10 +90,7 @@ describe('scanHookToolInput', () => {
   it('scans Claude Write content', () => {
     const hits = scanHookToolInput({
       tool_name: 'Write',
-      tool_input: {
-        file_path: '/tmp/.env',
-        content: 'OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz',
-      },
+      tool_input: { file_path: '/tmp/.env', content: `OPENAI_API_KEY=${projKey()}` },
     })
     expect(hits).toContain('OpenAI project key')
   })
@@ -49,18 +98,17 @@ describe('scanHookToolInput', () => {
   it('scans Gemini-shaped nested args', () => {
     const hits = scanHookToolInput({
       tool_name: 'run_shell_command',
-      tool_input: { command: 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' },
+      tool_input: { command: `echo ${GHP}${BODY}012345` },
     })
     expect(hits).toContain('GitHub PAT')
   })
 
   it('scans the tail of oversized tool input instead of allowing a padding bypass', () => {
-    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
     const hits = scanHookToolInput({
       tool_name: 'Write',
       tool_input: {
         file_path: '/tmp/generated.txt',
-        content: `${'x'.repeat(200_000)} ${syntheticKey}`,
+        content: `${'x'.repeat(200_000)} ${projKey()}`,
       },
     })
 
@@ -68,11 +116,10 @@ describe('scanHookToolInput', () => {
   })
 
   it('scans secrets in the middle of oversized tool input', () => {
-    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
     const hits = scanHookToolInput({
       tool_name: 'Write',
       tool_input: {
-        content: `${'x'.repeat(110_000)} ${syntheticKey} ${'y'.repeat(110_000)}`,
+        content: `${'x'.repeat(110_000)} ${projKey()} ${'y'.repeat(110_000)}`,
       },
     })
 
@@ -80,9 +127,8 @@ describe('scanHookToolInput', () => {
   })
 
   it('scans deeply nested tool input without a depth bypass', () => {
-    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
     const nested = Array.from({ length: 12 }).reduce<unknown>((value) => ({ nested: value }), {
-      content: syntheticKey,
+      content: projKey(),
     })
 
     expect(scanHookToolInput({ tool_name: 'custom', tool_input: nested })).toContain(
@@ -91,16 +137,14 @@ describe('scanHookToolInput', () => {
   })
 
   it('finds a secret crossing a chunk boundary', () => {
-    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
-    const content = `${'x'.repeat(65_530)} ${syntheticKey}${'y'.repeat(160_000)}`
+    const content = `${'x'.repeat(65_530)} ${projKey()}${'y'.repeat(160_000)}`
 
     expect(scanHookToolInput({ tool_input: { content } })).toContain('OpenAI project key')
   })
 
   it('handles cyclic object graphs without skipping nested secrets', () => {
-    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
     const cyclic: { nested: unknown; self?: unknown } = {
-      nested: { content: syntheticKey },
+      nested: { content: projKey() },
     }
     cyclic.self = cyclic
 
@@ -108,8 +152,7 @@ describe('scanHookToolInput', () => {
   })
 
   it('scans a 10 MB payload with a middle secret within the hook budget', () => {
-    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
-    const content = `${'x'.repeat(5_000_000)} ${syntheticKey}${'y'.repeat(5_000_000)}`
+    const content = `${'x'.repeat(5_000_000)} ${projKey()}${'y'.repeat(5_000_000)}`
 
     expect(scanHookToolInput({ tool_input: { content } })).toContain('OpenAI project key')
   }, 1_000)
@@ -119,7 +162,7 @@ describe('decideSecrets', () => {
   it('denies when secrets present', () => {
     const d = _internal.decideSecrets({
       tool_name: 'Bash',
-      tool_input: { command: 'curl https://x -H "Authorization: Bearer sk-abcdefghijklmnopqr"' },
+      tool_input: { command: `curl https://x -H "Authorization: Bearer ${SK}-${BODY}"` },
     })
     expect(d).not.toBeNull()
     expect(d!.deny).toMatch(/credential guard/i)
@@ -136,16 +179,27 @@ describe('decideSecrets', () => {
   })
 
   it('denies a secret hidden after oversized padding', () => {
-    const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
     const decision = _internal.decideSecrets({
       tool_name: 'Write',
       tool_input: {
         file_path: '/tmp/generated.txt',
-        content: `${'x'.repeat(200_000)} ${syntheticKey}`,
+        content: `${'x'.repeat(200_000)} ${projKey()}`,
       },
     })
 
     expect(decision?.deny).toMatch(/credential guard/i)
+  })
+
+  it('allows an edit whose only match is a documented placeholder', () => {
+    expect(
+      _internal.decideSecrets({
+        tool_name: 'Write',
+        tool_input: {
+          file_path: '/repo/README.md',
+          content: `Set \`ANTHROPIC_API_KEY=${SK}-ant-${'x'.repeat(12)}\` before running.`,
+        },
+      })
+    ).toBeNull()
   })
 })
 
@@ -163,7 +217,7 @@ describe('runPreSecretsHook deny path', () => {
     await runPreSecretsHook(process.cwd(), {
       input: {
         tool_name: 'Bash',
-        tool_input: { command: 'export TOKEN=sk-abcdefghijklmnopqrstuvwxyz01' },
+        tool_input: { command: `export TOKEN=${SK}-${BODY}01` },
       },
       sink: (chunk) => writes.push(chunk),
       detachAfterEmit: () => {},

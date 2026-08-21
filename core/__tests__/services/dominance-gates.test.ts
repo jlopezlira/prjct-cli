@@ -61,33 +61,56 @@ describe('discuss-lock (GSD discuss-before-plan, code-enforced)', () => {
   })
 })
 
-describe('context-pressure (density guard, no session kill)', () => {
-  it('is ok at low turns', () => {
+describe('context-pressure reports MEASURED tokens, never a turn count', () => {
+  // This used to derive "context density" from turns/maxTurnsPerCycle: on turn
+  // 9 of 15 it announced "context density (~60%)" and told the model to stop
+  // searching the codebase, while the real window might be 3% full.
+  it('stays ok on turn count alone, however many turns', () => {
+    for (const turnCount of [6, 8, 14, 40, 200]) {
+      const v = contextPressureVerdict(
+        { maxTurnsPerCycle: 10 } as never,
+        { turnCount, description: 'x' } as never
+      )
+      expect(v.level).toBe('ok')
+      expect(v.cue).toBeNull()
+    }
+  })
+
+  it('stays ok when no token budget is configured — nothing is measured', () => {
     const v = contextPressureVerdict(
-      { maxTurnsPerCycle: 25 } as never,
-      { turnCount: 3, description: 'x' } as never
+      {} as never,
+      { turnCount: 50, tokensIn: 900_000, tokensOut: 100_000, description: 'x' } as never
     )
     expect(v.level).toBe('ok')
     expect(v.cue).toBeNull()
   })
 
-  it('warns near 60% of turn budget with density cue', () => {
+  it('warns at 60% of the configured TOKEN budget', () => {
     const v = contextPressureVerdict(
-      { maxTurnsPerCycle: 10 } as never,
-      { turnCount: 6, description: 'x' } as never
+      { maxTokensPerCycle: 100_000 } as never,
+      { turnCount: 2, tokensIn: 50_000, tokensOut: 15_000, description: 'x' } as never
     )
     expect(v.level).toBe('warn')
-    expect(v.cue).toMatch(/context density|Keep the chat|compact/i)
+    expect(v.cue).toContain('token budget')
+    expect(v.cue).toContain('65%')
   })
 
-  it('critical near 70% keeps session, prefers compact tools', () => {
+  it('is critical at 80% of the token budget and still never forbids reading code', () => {
     const v = contextPressureVerdict(
-      { maxTurnsPerCycle: 10 } as never,
-      { turnCount: 8, description: 'x' } as never
+      { maxTokensPerCycle: 100_000 } as never,
+      { turnCount: 2, tokensIn: 80_000, tokensOut: 5_000, description: 'x' } as never
     )
     expect(v.level).toBe('critical')
-    expect(v.cue).toMatch(/Session continues|density|compact/i)
-    expect(v.cue).not.toMatch(/HARD GATE|STOP expanding/i)
+    for (const banned of [
+      'do not re-index',
+      'no broad Grep',
+      'no re-research',
+      'high-signal tools only',
+      'context density',
+    ]) {
+      expect(v.cue?.toLowerCase()).not.toContain(banned.toLowerCase())
+    }
+    expect(v.cue).toMatch(/Read whatever the work actually requires/i)
   })
 })
 

@@ -71,7 +71,9 @@ describe('capture verb', () => {
   })
 
   test('refuses secret-like content unless --force', async () => {
-    const secret = 'note: aws key AKIAIOSFODNN7EXAMPLE rotate'
+    // Realistic id, assembled at runtime: the documented AKIAIOSFODNN7EXAMPLE value
+    // is a doc placeholder and is deliberately no longer treated as a secret.
+    const secret = `note: aws key ${'AKIA'}3QP7ZK2WLMN4RTBD rotate`
     const blocked = await fixture.cmd.capture(secret, fixture.projectPath, { md: true })
     expect(blocked.success).toBe(false)
 

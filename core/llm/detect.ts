@@ -36,7 +36,7 @@ export function detectBrainFromKey(key: string): DetectedBrain | undefined {
       wire: 'anthropic',
       baseUrl: 'https://api.anthropic.com',
       providerLabel: 'Anthropic',
-      defaultModel: 'claude-sonnet-4-20250514',
+      defaultModel: 'claude-opus-5',
     }
   }
   if (/^xai-/i.test(k)) {
@@ -88,7 +88,7 @@ export function detectBrainFromBaseUrl(baseUrl: string): DetectedBrain | undefin
       wire: 'anthropic',
       baseUrl: 'https://api.anthropic.com',
       providerLabel: 'Anthropic',
-      defaultModel: 'claude-sonnet-4-20250514',
+      defaultModel: 'claude-opus-5',
     }
   }
   if (/openrouter\.ai/i.test(u)) {

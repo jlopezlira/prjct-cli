@@ -204,7 +204,7 @@ export async function renderAuditDispatch(
   const scopePaths = parseScopePaths(content.scope)
   const scopeBlock =
     scopePaths.length > 0
-      ? `\n\n## Codebase paths to read (from spec.scope)\n${scopePaths.map((p) => `- \`${p}\``).join('\n')}\n\nEach reviewer SHOULD use the Read tool on these paths (cap 10 per reviewer) to ground the verdict in the actual code. Cite specific symbols / files / line numbers in notes when applicable.`
+      ? `\n\n## Codebase paths to read (from spec.scope)\n${scopePaths.map((p) => `- \`${p}\``).join('\n')}\n\nEach reviewer SHOULD use the Read tool on these paths — as many as its lens actually needs — to ground the verdict in the actual code. Cite specific symbols / files / line numbers in notes when applicable.`
       : '\n\n## Codebase paths\n_No path-shaped scope entries found. Reviewers judge the spec body alone._'
 
   const reviewerSections: string[] = []

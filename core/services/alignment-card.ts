@@ -87,8 +87,15 @@ export function buildAlignmentCard(input: AlignmentCardInput): AlignmentCard {
   const warn = cues.some((cue) => ['quality-ledger', 'stuck-cycle'].includes(cue))
 
   const level: AlignmentLevel = hard ? 'hard' : warn ? 'warn' : 'ok'
-  const header =
-    level === 'hard' ? '# prjct: alignment (MUST — hard gate)' : '# prjct: alignment (mid-cycle)'
+  // Every block already carries its own `# prjct:` header. Adding a wrapper
+  // header on top renders an empty section — a heading with nothing under it,
+  // on every turn. Only add one when the blocks bring no header of their own.
+  const blocksSelfHeader = blocks.every((b) => b.trimStart().startsWith('# prjct:'))
+  const header = blocksSelfHeader
+    ? null
+    : level === 'hard'
+      ? '# prjct: alignment (MUST — hard gate)'
+      : '# prjct: alignment (mid-cycle)'
 
   // Ship policy reminder only when quality is in play and not already quoted.
   const joined = blocks.join('\n\n')
@@ -100,7 +107,7 @@ export function buildAlignmentCard(input: AlignmentCardInput): AlignmentCard {
   return {
     level,
     cues,
-    markdown: `${header}\n\n${joined}${shipNote}`,
+    markdown: header ? `${header}\n\n${joined}${shipNote}` : `${joined}${shipNote}`,
   }
 }
 

@@ -13,19 +13,29 @@ import { CHARS_PER_TOKEN } from '../../constants/token'
 import type { TokenMetrics } from '../../types/context-tools'
 
 /**
- * Model pricing per 1000 tokens (January 2026)
+ * Model pricing per 1000 tokens.
+ *
+ * Keys are the REAL model ids the API accepts (`claude-opus-4-8`), not the
+ * dotted marketing names this table used to carry (`claude-opus-4.5`) — those
+ * never matched a model id reported by any rig, so every lookup silently fell
+ * through to the default and the cost report was wrong for each of them.
+ *
  * Sources:
  * - Anthropic: https://docs.anthropic.com/en/docs/about-claude/models
  * - OpenAI: https://openai.com/pricing
  * - Google: https://ai.google.dev/pricing
  */
 const MODEL_PRICING = {
-  // Anthropic Claude (2026)
-  'claude-opus-4.5': { input: 0.005, output: 0.025 }, // $5/$25 per M
-  'claude-sonnet-4.5': { input: 0.003, output: 0.015 }, // $3/$15 per M
-  'claude-haiku-4.5': { input: 0.001, output: 0.005 }, // $1/$5 per M
-  'claude-opus-4': { input: 0.015, output: 0.075 }, // $15/$75 per M (legacy)
-  'claude-opus-4-6': { input: 0.015, output: 0.075 }, // $15/$75 per M
+  // Anthropic Claude 5 family
+  'claude-fable-5': { input: 0.01, output: 0.05 }, // $10/$50 per M
+  'claude-opus-5': { input: 0.005, output: 0.025 }, // $5/$25 per M
+  'claude-sonnet-5': { input: 0.003, output: 0.015 }, // $3/$15 per M
+  'claude-haiku-4-5': { input: 0.001, output: 0.005 }, // $1/$5 per M
+  // Previous Anthropic generations
+  'claude-opus-4-8': { input: 0.005, output: 0.025 }, // $5/$25 per M
+  'claude-opus-4-7': { input: 0.005, output: 0.025 }, // $5/$25 per M
+  'claude-opus-4-6': { input: 0.005, output: 0.025 }, // $5/$25 per M
+  'claude-sonnet-4-6': { input: 0.003, output: 0.015 }, // $3/$15 per M
   // OpenAI
   'gpt-4o': { input: 0.0025, output: 0.01 }, // $2.50/$10 per M
   'gpt-4-turbo': { input: 0.01, output: 0.03 }, // $10/$30 per M
@@ -38,7 +48,7 @@ const MODEL_PRICING = {
 type ModelName = keyof typeof MODEL_PRICING
 
 // Default model for cost calculations
-const DEFAULT_MODEL: ModelName = 'claude-sonnet-4.5'
+const DEFAULT_MODEL: ModelName = 'claude-opus-5'
 
 // Core Functions
 
@@ -60,9 +70,9 @@ export function countTokens(text: string): number {
  * Models to show in cost breakdown (most popular)
  */
 const BREAKDOWN_MODELS: ModelName[] = [
-  'claude-sonnet-4.5',
-  'claude-opus-4.5',
-  'claude-opus-4-6',
+  'claude-opus-5',
+  'claude-sonnet-5',
+  'claude-haiku-4-5',
   'gpt-4o',
   'gemini-1.5-pro',
 ]
