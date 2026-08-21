@@ -395,10 +395,16 @@ class DoctorService {
       const state = await stateStorage.read(this.projectId)
 
       if (state.currentTask) {
+        // Say "last cycle", not "active". `currentTask` is the most recent
+        // cycle whatever its status, and this record carries no status field —
+        // so "active" was an assertion doctor could not make. It reported a
+        // cycle as open minutes after `prjct status done` closed it, while
+        // `prjct prime` correctly said "No open cycle". Whether a cycle is
+        // open is `prjct status` / `prjct prime`'s answer, not this check's.
         return {
           name: 'task state',
           status: 'ok',
-          message: `active: ${state.currentTask.description?.slice(0, 30)}...`,
+          message: `last cycle: ${state.currentTask.description?.slice(0, 30)}...`,
         }
       }
 
