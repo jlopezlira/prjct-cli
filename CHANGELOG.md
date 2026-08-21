@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-08-20
+
+### Added
+- make doctor fix agentically repair every
+
 ## [4.3.0] - 2026-08-20
 
 ### Added

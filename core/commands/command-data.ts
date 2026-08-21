@@ -1588,7 +1588,12 @@ export const COMMANDS: CommandMeta[] = [
         'harness',
         'Harness scorecard, instruction observability/disposition, and Body/rig adoption (score · instructions · learn-from · list · use)',
       ],
-      ['doctor', 'Diagnose the local prjct installation', undefined, '[--fix|--heal]'],
+      [
+        'doctor',
+        'Diagnose local health; --fix safely repairs known issues and verifies again',
+        undefined,
+        '[--fix|--heal]',
+      ],
       [
         'watch',
         'Watch project files and react to changes',

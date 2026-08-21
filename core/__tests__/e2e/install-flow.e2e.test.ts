@@ -127,6 +127,17 @@ describe('e2e: install/upgrade onboarding contract', () => {
     expect([0, 1]).toContain(r.code) // may warn, must not crash
     expect(r.stdout + r.stderr).not.toMatch(/Cannot read|TypeError|unhandled|is not a function/i)
   })
+
+  test('`prjct doctor --fix` runs the diagnose-repair-verify loop', async () => {
+    const r = await fixture.sb.cli(['doctor', '--fix'], { timeoutMs: 90_000 })
+    const output = r.stdout + r.stderr
+
+    expect(r.code).toBe(0)
+    expect(output).toContain('diagnose → repair → verify')
+    expect(output).toContain('Check-driven repair:')
+    expect(output).toContain('Context repair:')
+    expect(output).not.toMatch(/Cannot read|TypeError|unhandled|is not a function/i)
+  })
 })
 
 describe('e2e: `prjct upgrade` is an alias of `prjct update` (WS5)', () => {
