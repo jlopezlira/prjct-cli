@@ -1,4 +1,3 @@
-import type { AgentCapabilityClass } from '../schemas/model'
 import type { DomainDefinition } from '../types/storage/extended'
 
 /**
@@ -22,13 +21,6 @@ export interface LensSpec {
    * "first read the spec from prjct" line and appends the verdict ask.
    */
   rubric: string
-  /**
-   * Optional model-class override for THIS specialist. Unset → the reviewer
-   * class (balanced) like every lens today. A genuinely narrow lens can opt
-   * down to `fast` (a small, cheap model) — the "137x cheaper" lever — without
-   * touching any other lens.
-   */
-  capabilityClass?: AgentCapabilityClass
 }
 
 export const LENS_CATALOG: Record<string, LensSpec> = {
@@ -46,8 +38,6 @@ export const LENS_CATALOG: Record<string, LensSpec> = {
     label: 'UX/DX',
     rubric:
       'Rate 0-10 across {clarity, ergonomics, consistency, accessibility} for the user-facing or developer-facing surface. If scope touches existing UI/CLI patterns (read the listed paths), consistency must be judged against those — not against your priors. Pass only if all dimensions ≥6; include the four scores in notes.',
-    // Checklist rubric, not open judgment — cheap model is enough here.
-    capabilityClass: 'fast',
   },
   security: {
     label: 'threat surface',

@@ -137,53 +137,29 @@ describe('reviewsGatePassedRelational — gate over the selected set (C6)', () =
   })
 })
 
-describe('renderAuditDispatch — per-lens model routing (GAP 2)', () => {
-  it('runs a capabilityClass:fast lens on the cheap model; the rest stay review-tier', async () => {
-    // Inject a narrow opt-in lens; clean up after so the catalog is unchanged.
-    LENS_CATALOG['narrow-lint'] = {
-      label: 'cheap lint',
-      rubric: 'Lint the spec for trivial issues.',
-      capabilityClass: 'fast',
-    }
-    try {
-      const out = await renderAuditDispatch(
-        'spec_1',
-        'T',
-        emptySpecContent('x'),
-        ['architecture', 'narrow-lint'],
-        'claude'
-      )
-      // The narrow lens names the fast model inline...
-      expect(out).toContain('model: "haiku"')
-      // ...while the global review-tier directive stays on the balanced model.
-      expect(out).toContain('model: "sonnet"')
-    } finally {
-      delete LENS_CATALOG['narrow-lint']
-    }
-  })
+describe('renderAuditDispatch — never names a model', () => {
+  // Lenses used to opt down to a cheaper model class ("capabilityClass: fast"),
+  // and the dispatch carried a global review-tier directive. Both capped the
+  // reviewer below the model the user chose to run. Neither may come back.
+  const FORBIDDEN = ['model: "haiku"', 'model: "sonnet"', 'model: "opus"', 'over-deliberate']
 
-  it('with no opt-in lens, every reviewer stays on the review tier (behavior-preserving)', async () => {
+  it('emits no model directive for any lens', async () => {
     const out = await renderAuditDispatch(
-      'spec_2',
+      'spec_1',
       'T',
       emptySpecContent('x'),
-      ['architecture', 'security'],
-      'claude'
-    )
-    expect(out).not.toContain('model: "haiku"')
-  })
-
-  it('the real `design` catalog lens dispatches on the fast model (not just an injected test lens)', async () => {
-    expect(LENS_CATALOG.design.capabilityClass).toBe('fast')
-    const out = await renderAuditDispatch(
-      'spec_3',
-      'T',
-      emptySpecContent('x'),
-      ['architecture', 'design'],
+      ['architecture', 'design', 'security'],
       'claude'
     )
     expect(out).toContain('## Reviewer B — design (UX/DX)')
-    expect(out).toContain('model: "haiku"')
+    for (const needle of FORBIDDEN) expect(out).not.toContain(needle)
+    expect(out).toContain('Do not set `model:` on any reviewer')
+  })
+
+  it('no catalog lens carries a capability-class override', () => {
+    for (const spec of Object.values(LENS_CATALOG)) {
+      expect('capabilityClass' in spec).toBe(false)
+    }
   })
 })
 

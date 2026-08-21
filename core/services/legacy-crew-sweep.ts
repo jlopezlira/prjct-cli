@@ -26,7 +26,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getTemplateContent } from '../agentic/template-loader'
-import { type AgentRole, getAgentModelPolicy } from '../schemas/model'
+import type { AgentRole } from '../schemas/model'
 import checkpointsStorage from '../storage/checkpoints-storage'
 import prjctDb from '../storage/database'
 import teamEnrollmentStorage, { type TeamEnrollment } from '../storage/team-enrollment-storage'
@@ -204,13 +204,17 @@ export function containsForbiddenWriteInstruction(content: string): boolean {
   return FORBIDDEN_WORKTREE_WRITE_PATTERNS.some((re) => re.test(content))
 }
 
-function stampCrewModelPolicy(content: string, destRelative: string): string {
+/**
+ * Strip a legacy `model:` pin from an installed crew agent so it inherits the
+ * user's model. Old installs stamped opus/sonnet/haiku per role; that policy
+ * is gone (see `core/schemas/model.ts`) and the sweep un-stamps it.
+ */
+function stripCrewModelPin(content: string, destRelative: string): string {
   const roleName = CREW_ROLES.find((r) => `.claude/agents/${r.name}.md` === destRelative)?.role as
     | AgentRole
     | undefined
   if (!roleName) return content
-  const { model } = getAgentModelPolicy(roleName)
-  return content.replace(/^model:[ \t].*$/m, `model: ${model}`)
+  return content.replace(/^model:[ \t].*(?:\r?\n)?/m, '')
 }
 
 function spliceCheckpoints(reviewerTemplate: string, checkpointsContent: string): string {
@@ -576,7 +580,7 @@ async function repairCrewDiskWriteInstructions(
       continue
     }
     try {
-      const next = stampCrewModelPolicy(
+      const next = stripCrewModelPin(
         agent.destRelative === '.claude/agents/reviewer.md'
           ? spliceCheckpoints(
               template,

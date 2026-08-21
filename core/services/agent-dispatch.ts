@@ -5,18 +5,14 @@
  * instructions; the host executes them. Claude Code has a native subagent tool,
  * so it dispatches real parallel subagents. Other rigs (Gemini, Codex, …) have
  * no subagent tool, so the same fan-out is EMULATED on a single agent: run each
- * unit as a fresh, isolated pass. Either way the per-role model comes from the
- * sovereignty policy via the live-rig bridge — so the architecture, not just
- * the prose, is portable across brains.
+ * unit as a fresh, isolated pass.
+ *
+ * No dispatch names a model. Subagents inherit the model of the rig the user is
+ * driving — see `core/schemas/model.ts` for why prjct has no role→model policy.
  */
 
 import { getActiveProvider } from '../infrastructure/ai-provider'
-import {
-  type AgentCapabilityClass,
-  type AgentRole,
-  renderModelDirective,
-  renderModelDirectiveForProvider,
-} from '../schemas/model'
+import type { AgentRole } from '../schemas/model'
 import type { AIProviderName } from '../types/provider'
 import { FLOOR_LENS, reviewLensMenu } from './review-lenses'
 
@@ -26,12 +22,6 @@ export interface DispatchMechanism {
   native: boolean
   /** How to run `count` reviewers/workers concurrently (or emulated). */
   runLine(count: number): string
-  /**
-   * The model directive for a role on this rig. `classOverride` lets a narrow
-   * specialist opt down to a cheaper capability class than its role implies
-   * (the per-lens routing); unset → the role's policy (unchanged).
-   */
-  modelDirective(role: AgentRole, classOverride?: AgentCapabilityClass): string
 }
 
 /** A stage of the multi-agent flow — what the role does in the dispatch. */
@@ -40,15 +30,14 @@ export type RoleKind = 'orchestrate' | 'implement' | 'review' | 'explore'
 export interface CrewRole {
   /** Agent file/display name (leader/implementer/reviewer). */
   name: string
-  /** The model-policy role this maps to (drives the per-role model). */
+  /** The responsibility this agent plays in the flow. Carries no model. */
   role: AgentRole
   kind: RoleKind
 }
 
 /**
  * The crew roster — ONE source. crew install derives its `.claude/agents/`
- * files + their model policy from this; the emulated protocol plays these same
- * roles. (Review specialists are composed per task from the lens catalog, not
+ * files from this; the emulated protocol plays these same roles. (Review specialists are composed per task from the lens catalog, not
  * fixed here — see review-lenses.ts.)
  */
 export const CREW_ROLES: readonly CrewRole[] = [
@@ -60,7 +49,6 @@ export const CREW_ROLES: readonly CrewRole[] = [
 function claudeMechanism(): Omit<DispatchMechanism, 'provider'> {
   return {
     native: true,
-    modelDirective: (role, classOverride) => renderModelDirective(role, undefined, classOverride),
     runLine: (count) =>
       count === 1
         ? 'Run this review subagent via the Agent tool. It reads the spec FROM prjct (command below), reads the relevant codebase paths, applies its rubric, then returns a structured verdict.'
@@ -71,8 +59,6 @@ function claudeMechanism(): Omit<DispatchMechanism, 'provider'> {
 function emulatedMechanism(provider: AIProviderName): Omit<DispatchMechanism, 'provider'> {
   return {
     native: false,
-    modelDirective: (role, classOverride) =>
-      renderModelDirectiveForProvider(role, provider, undefined, classOverride),
     runLine: (count) =>
       count === 1
         ? `This rig (${provider}) has no native subagent tool. Run this review as ONE focused, fresh pass: read the spec FROM prjct (command below) and the relevant codebase paths, apply the rubric, return a structured verdict — do not carry over assumptions from the planning context.`
@@ -96,8 +82,8 @@ export async function resolveDispatchMechanism(
 
 /**
  * The crew EMULATED for a rig with no native subagent tool: one agent plays the
- * roles the work needs IN SEQUENCE, each a fresh isolated pass, with the
- * per-role model from the policy. The roster is COMPOSED per task — NOT a fixed
+ * roles the work needs IN SEQUENCE, each a fresh isolated pass. The roster is
+ * COMPOSED per task — NOT a fixed
  * leader/implementer/reviewer trio: the leader decides how many implementers
  * (by disjoint scope) and which review specialists the change actually raises,
  * drawing from the same lens catalog `prjct spec audit` uses. The native Claude
@@ -115,10 +101,10 @@ export function buildEmulatedCrewProtocol(m: DispatchMechanism, checkpoints: str
     '',
     '## Roles (run in order)',
     '',
-    `1. **Leader — orchestrate, do not write code.** Run \`prjct work --md\` for the cycle + related context. Decompose into slices with DISJOINT file scope, and decide the roster: how many implementers, which review specialists the change raises, and whether investigation is needed first. ${m.modelDirective('orchestrator')}`,
-    `2. **Explore — only if investigation is needed.** One fresh, read-only pass per narrow question; persist findings with \`prjct remember learning\`. ${m.modelDirective('orchestrator')}`,
-    `3. **Implementer(s) — one per disjoint slice.** Implement the slice + its tests and self-verify (run the project's test command) before handing off. Fan out only over non-overlapping file scopes. ${m.modelDirective('implementer')}`,
-    `4. **Review specialists — compose, do NOT default to one generic reviewer.** Always include \`${FLOOR_LENS}\`; add the specialists the diff raises — ${reviewLensMenu()} — and invent one the change demands (open vocabulary). Run ONE fresh pass per specialist over the combined diff; each replies \`VERDICT: APPROVED\` or \`VERDICT: CHANGES_REQUESTED\` with notes. (Same catalog \`prjct spec audit\` selects from.) ${m.modelDirective('reviewer')}`,
+    `1. **Leader — orchestrate, do not write code.** Run \`prjct work --md\` for the cycle + related context. Decompose into slices with DISJOINT file scope, and decide the roster: how many implementers, which review specialists the change raises, and whether investigation is needed first.`,
+    `2. **Explore — only if investigation is needed.** One fresh, read-only pass per narrow question; persist findings with \`prjct remember learning\`.`,
+    `3. **Implementer(s) — one per disjoint slice.** Implement the slice + its tests and self-verify (run the project's test command) before handing off. Fan out only over non-overlapping file scopes.`,
+    `4. **Review specialists — compose, do NOT default to one generic reviewer.** Always include \`${FLOOR_LENS}\`; add the specialists the diff raises — ${reviewLensMenu()} — and invent one the change demands (open vocabulary). Run ONE fresh pass per specialist over the combined diff; each replies \`VERDICT: APPROVED\` or \`VERDICT: CHANGES_REQUESTED\` with notes. (Same catalog \`prjct spec audit\` selects from.)`,
     '',
     '## Checkpoints every review specialist applies',
     '',

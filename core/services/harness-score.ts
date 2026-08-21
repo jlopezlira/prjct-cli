@@ -6,7 +6,7 @@
 
 import { Buffer } from 'node:buffer'
 import { createServer, DEFAULT_MCP_TOOL_TIER, resolveTier } from '../mcp/server'
-import { PROVIDER_CAPABILITY_MODELS } from '../schemas/model'
+import { SUPPORTED_PROVIDERS } from '../schemas/model'
 import { countTokens } from '../tools/context/token-counter'
 import {
   CONTEXT_TIERS,
@@ -107,14 +107,15 @@ export function computeHarnessScore(
   const skill = buildPrjctSkill()
   const skillTokens = countTokens(skill)
   const routingBytes = Buffer.byteLength(MINIMAL_ROUTING_BODY, 'utf-8')
-  const providerNames = Object.keys(PROVIDER_CAPABILITY_MODELS)
+  const providerNames = [...SUPPORTED_PROVIDERS]
   const providerCount = providerNames.length
   const mcpTier = resolveTier(undefined)
   const mcpTools = countDefaultTools()
   const hasWorkflowsPointer = skill.includes('workflows.md')
   const multiProvider =
     providerCount >= WORLD_CLASS.providerMapsMin &&
-    Boolean(PROVIDER_CAPABILITY_MODELS.claude && PROVIDER_CAPABILITY_MODELS.gemini)
+    SUPPORTED_PROVIDERS.includes('claude') &&
+    SUPPORTED_PROVIDERS.includes('gemini')
 
   const criteria: HarnessCriterion[] = [
     criterion(
@@ -179,7 +180,7 @@ export function computeHarnessScore(
     criterion(
       'model-ssot',
       'Model policy SSOT',
-      multiProvider ? 5 : PROVIDER_CAPABILITY_MODELS.claude ? 3 : 1,
+      multiProvider ? 5 : SUPPORTED_PROVIDERS.includes('claude') ? 3 : 1,
       'capability classes across ≥6 providers',
       multiProvider ? 'multi-provider SSOT' : 'partial maps'
     ),

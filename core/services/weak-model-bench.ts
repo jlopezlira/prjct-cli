@@ -13,7 +13,7 @@
 import { Buffer } from 'node:buffer'
 import { getHarnessSurface, listHarnessSurfaces } from '../infrastructure/harness-surfaces'
 import { DEFAULT_MCP_TOOL_TIER, resolveTier } from '../mcp/server'
-import { PROVIDER_CAPABILITY_MODELS } from '../schemas/model'
+import { SUPPORTED_PROVIDERS } from '../schemas/model'
 import { countTokens } from '../tools/context/token-counter'
 import { contentBoundDriftVerdict, stampFromContents } from './content-bound-stamp'
 import { buildCycleBudgetCard } from './cycle-budget-card'
@@ -100,7 +100,7 @@ export function runWeakModelBench(): WeakBenchReport {
     `tier=${resolveTier(undefined)}`
   )
 
-  const providers = Object.keys(PROVIDER_CAPABILITY_MODELS).length
+  const providers = SUPPORTED_PROVIDERS.length
   push(
     'provider maps',
     providers >= WORLD_CLASS.providerMapsMin,

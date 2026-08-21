@@ -2,12 +2,10 @@
  * Model Schema Tests
  *
  * Tests for:
- * - Provider model validation
  * - Semver comparison
  * - Minimum CLI version enforcement
- * - Model mismatch detection
- * - Default model resolution
- * - Backwards compatibility (missing model field)
+ * - Model mismatch detection (provenance stamp, not policy)
+ * - The absence of any role→model/effort policy
  *
  * @see PRJ-265
  */
@@ -16,121 +14,33 @@ import { describe, expect, it } from 'bun:test'
 import {
   ClaudeProvider,
   CursorProvider,
-  GeminiProvider,
   validateCliVersion,
 } from '../../infrastructure/ai-provider'
+import * as modelSchema from '../../schemas/model'
 import {
-  AGENT_MODEL_POLICY,
-  type AgentRole,
   checkModelMismatch,
   compareSemver,
-  getAgentModelPolicy,
-  getDefaultModel,
-  getSupportedModels,
-  isValidModelForProvider,
   type ModelMetadata,
   meetsMinVersion,
-  renderModelDirective,
-  renderModelDirectiveForProvider,
+  SUPPORTED_PROVIDERS,
 } from '../../schemas/model'
 
-// Provider Model Configuration
+// Provider registry — names only, no model lists
 
-describe('Provider model configuration', () => {
-  it('should have model fields on Claude provider', () => {
-    expect(ClaudeProvider.defaultModel).toBe('sonnet')
-    expect(ClaudeProvider.supportedModels).toEqual(['opus', 'sonnet', 'haiku'])
+describe('provider registry', () => {
+  it('lists the rigs prjct can drive', () => {
+    expect(SUPPORTED_PROVIDERS).toContain('claude')
+    expect(SUPPORTED_PROVIDERS).toContain('gemini')
+    expect(SUPPORTED_PROVIDERS).toContain('codex')
+  })
+
+  it('publishes no model list or default model per provider', () => {
+    // prjct does not track which models a rig offers, because it never picks one.
+    expect('defaultModel' in ClaudeProvider).toBe(false)
+    expect('supportedModels' in ClaudeProvider).toBe(false)
+    expect('defaultModel' in CursorProvider).toBe(false)
     expect(ClaudeProvider.minCliVersion).toBe('1.0.0')
-  })
-
-  it('should have model fields on Gemini provider', () => {
-    expect(GeminiProvider.defaultModel).toBe('2.5-flash')
-    // 2026-07: include Gemini 3.1 Pro in the supported set (frontier).
-    expect(GeminiProvider.supportedModels).toContain('3.1-pro')
-    expect(GeminiProvider.supportedModels).toContain('2.5-pro')
-    expect(GeminiProvider.supportedModels).toContain('2.5-flash')
-    expect(GeminiProvider.minCliVersion).toBe('1.0.0')
-  })
-
-  it('should have null model fields on multi-model IDEs', () => {
-    expect(CursorProvider.defaultModel).toBeNull()
-    expect(CursorProvider.supportedModels).toEqual([])
     expect(CursorProvider.minCliVersion).toBeNull()
-  })
-})
-
-// Model Validation
-
-describe('isValidModelForProvider', () => {
-  it('should accept valid Claude models', () => {
-    expect(isValidModelForProvider('claude', 'opus')).toBe(true)
-    expect(isValidModelForProvider('claude', 'sonnet')).toBe(true)
-    expect(isValidModelForProvider('claude', 'haiku')).toBe(true)
-  })
-
-  it('should reject invalid Claude models', () => {
-    expect(isValidModelForProvider('claude', 'gpt-4')).toBe(false)
-    expect(isValidModelForProvider('claude', 'unknown')).toBe(false)
-  })
-
-  it('should accept valid Gemini models', () => {
-    expect(isValidModelForProvider('gemini', '3.1-pro')).toBe(true)
-    expect(isValidModelForProvider('gemini', '2.5-pro')).toBe(true)
-    expect(isValidModelForProvider('gemini', '2.5-flash')).toBe(true)
-    expect(isValidModelForProvider('gemini', '2.0-flash')).toBe(true)
-  })
-
-  it('should accept 2026-07 benchmark Codex / OpenAI models', () => {
-    expect(isValidModelForProvider('codex', 'gpt-5.5')).toBe(true)
-    expect(isValidModelForProvider('openai', 'gpt-5.5')).toBe(true)
-    expect(isValidModelForProvider('codex', 'o3')).toBe(true)
-  })
-
-  it('should reject invalid Gemini models', () => {
-    expect(isValidModelForProvider('gemini', 'sonnet')).toBe(false)
-  })
-
-  it('should accept any model for multi-model IDEs (empty supportedModels)', () => {
-    expect(isValidModelForProvider('cursor', 'gpt-4')).toBe(true)
-    expect(isValidModelForProvider('cursor', 'anything')).toBe(true)
-    expect(isValidModelForProvider('antigravity', 'claude-sonnet')).toBe(true)
-  })
-
-  it('should accept any model for unknown providers', () => {
-    expect(isValidModelForProvider('future-provider', 'some-model')).toBe(true)
-  })
-})
-
-// Default Model Resolution
-
-describe('getDefaultModel', () => {
-  it('should return sonnet for Claude', () => {
-    expect(getDefaultModel('claude')).toBe('sonnet')
-  })
-
-  it('should return 2.5-flash for Gemini', () => {
-    expect(getDefaultModel('gemini')).toBe('2.5-flash')
-  })
-
-  it('should return null for providers without defaults', () => {
-    expect(getDefaultModel('cursor')).toBeNull()
-    expect(getDefaultModel('unknown')).toBeNull()
-  })
-})
-
-// Supported Models
-
-describe('getSupportedModels', () => {
-  it('should return Claude models', () => {
-    expect(getSupportedModels('claude')).toEqual(['opus', 'sonnet', 'haiku'])
-  })
-
-  it('should return empty for multi-model IDEs', () => {
-    expect(getSupportedModels('cursor')).toEqual([])
-  })
-
-  it('should return empty for unknown providers', () => {
-    expect(getSupportedModels('unknown')).toEqual([])
   })
 })
 
@@ -199,7 +109,7 @@ describe('validateCliVersion', () => {
   })
 })
 
-// Model Mismatch Detection
+// Model Mismatch Detection — provenance only
 
 describe('checkModelMismatch', () => {
   const claudeOpus: ModelMetadata = {
@@ -248,92 +158,28 @@ describe('checkModelMismatch', () => {
   })
 })
 
-// Backwards Compatibility
+// The regression this module exists to prevent
 
-describe('backwards compatibility', () => {
-  it('should handle configs without model field gracefully', () => {
-    // Simulates loading an old config without model fields
-    const oldProviderConfig = {
-      name: 'claude' as const,
-      displayName: 'Claude Code',
-      cliCommand: 'claude',
-    }
-    // getDefaultModel should work even if provider config has no model field
-    expect(getDefaultModel(oldProviderConfig.name)).toBe('sonnet')
-  })
+describe('no role→model/effort policy exists', () => {
+  // prjct used to cap 10 of 11 roles below the user's model and ship
+  // "apply decent, not exhaustive, effort" into every non-implementer
+  // dispatch. Nothing may bring that back — on ANY provider.
+  const FORBIDDEN_EXPORTS = [
+    'AGENT_MODEL_POLICY',
+    'getAgentModelPolicy',
+    'resolveAgentModel',
+    'resolveProviderModel',
+    'renderModelDirective',
+    'renderModelDirectiveForProvider',
+    'capabilityClassForRole',
+    'PROVIDER_CAPABILITY_MODELS',
+    'MODEL_TIER_FALLBACK',
+    'getDefaultModel',
+    'getSupportedModels',
+    'isValidModelForProvider',
+  ]
 
-  it('should resolve default model when preferredModel is not set', () => {
-    const preferredModel: string | undefined = undefined
-    const provider = 'claude'
-    const resolved = preferredModel ?? getDefaultModel(provider)
-    expect(resolved).toBe('sonnet')
-  })
-})
-
-describe('AGENT_MODEL_POLICY — per-role model + effort for subagent dispatch', () => {
-  it('gives ONLY the implementer the max model + max effort', () => {
-    expect(AGENT_MODEL_POLICY.implementer).toEqual({ model: 'opus', effort: 'max' })
-    // No other role may be opus/max — that is the regression being fixed.
-    for (const [role, policy] of Object.entries(AGENT_MODEL_POLICY)) {
-      if (role === 'implementer') continue
-      expect(policy.model).not.toBe('opus')
-      expect(policy.effort).not.toBe('max')
-    }
-  })
-
-  it('routes pure orchestration to haiku + decent', () => {
-    expect(AGENT_MODEL_POLICY.orchestrator).toEqual({ model: 'haiku', effort: 'decent' })
-  })
-
-  it('routes every judgment/review role to sonnet + decent', () => {
-    const reviewerRoles: AgentRole[] = [
-      'strategic-review',
-      'architecture-review',
-      'design-review',
-      'review',
-      'security',
-      'investigate',
-      'reviewer',
-    ]
-    for (const role of reviewerRoles) {
-      expect(getAgentModelPolicy(role)).toEqual({ model: 'sonnet', effort: 'decent' })
-    }
-  })
-
-  it('falls back to the reviewer tier for an unknown role — never to implementer/max', () => {
-    const policy = getAgentModelPolicy('totally-unknown-role' as AgentRole)
-    expect(policy).toEqual({ model: 'sonnet', effort: 'decent' })
-    expect(policy.model).not.toBe('opus')
-  })
-
-  it('renderModelDirective: implementer keeps full effort + opus', () => {
-    const d = renderModelDirective('implementer')
-    expect(d).toContain('model: "opus"')
-    expect(d).toContain('full reasoning effort')
-    expect(d).toContain('IMPLEMENTER')
-  })
-
-  it('renderModelDirective: non-implementer is told to drop off the parent max model', () => {
-    const d = renderModelDirective('security')
-    expect(d).toContain('model: "sonnet"')
-    expect(d).toContain("NOT the parent's max model")
-    expect(d).toContain('decent')
-    expect(d).not.toContain('model: "opus"')
-  })
-
-  it('renderModelDirective: a classOverride routes a narrow specialist to the cheap model', () => {
-    // Default review-tier (no override) → sonnet; opting down to `fast` → haiku.
-    expect(renderModelDirective('spec-review')).toContain('model: "sonnet"')
-    const fast = renderModelDirective('spec-review', undefined, 'fast')
-    expect(fast).toContain('model: "haiku"')
-    expect(fast).not.toContain('model: "sonnet"')
-  })
-
-  it('renderModelDirectiveForProvider: classOverride picks the rig-correct cheap model', () => {
-    // Behavior-preserving default for gemini review-tier → 2.5-flash (balanced).
-    expect(renderModelDirectiveForProvider('spec-review', 'gemini')).toContain('2.5-flash')
-    // Opting down to `fast` on gemini → the fast-class model.
-    const fast = renderModelDirectiveForProvider('spec-review', 'gemini', undefined, 'fast')
-    expect(fast).toContain('2.0-flash')
+  it.each(FORBIDDEN_EXPORTS)('does not export %s', (name) => {
+    expect(Object.hasOwn(modelSchema, name)).toBe(false)
   })
 })

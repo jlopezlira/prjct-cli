@@ -1,15 +1,17 @@
 /**
- * Regression guards for the per-role subagent model policy (PR #364).
+ * Regression guards: prjct must NEVER pick a model for a subagent.
  *
- * Two silent-drift hazards surfaced by the post-ship sync analysis:
- *  1. A crew agent .md shipping without a `model:` frontmatter key →
- *     it inherits the parent's max model and the agent fan-out crawls.
- *  2. prjct-skill-body.ts losing the model-policy / point-dont-carry
- *     prose → the generated SKILL.md twin ships without the guidance.
+ * This file used to enforce the opposite (PR #364): every crew role pinned a
+ * `model:` and the skill reference shipped an opus/sonnet/haiku tier policy.
+ * That capped 10 of 11 roles below the model the user chose to run and told
+ * every non-implementer to "apply decent, not exhaustive, effort" — making the
+ * harness systematically dumber than the brain being paid for, on every rig.
  *
- * These are pure, deterministic checks (no build step required): the
- * generated SKILL.md is always derived from buildPrjctSkill(), so
- * protecting that function's output protects the on-disk twin.
+ * The policy is gone (see `core/schemas/model.ts`). These guards keep it gone.
+ *
+ * Pure, deterministic checks (no build step): the generated SKILL.md is always
+ * derived from buildPrjctSkill(), so protecting that function's output protects
+ * the on-disk twin.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -30,7 +32,7 @@ function frontmatterModel(md: string): string | null {
   return line ? line[1] : null
 }
 
-describe('crew agent frontmatter — every role pins a model (no parent-max inheritance)', () => {
+describe("crew agent frontmatter — no role pins a model (inherit the user's)", () => {
   const files = fs
     .readdirSync(CREW_AGENTS_DIR)
     .filter((f) => f.endsWith('.md'))
@@ -41,27 +43,18 @@ describe('crew agent frontmatter — every role pins a model (no parent-max inhe
   })
 
   for (const file of files) {
-    it(`${file} declares an explicit, valid model:`, () => {
+    it(`${file} declares no model:`, () => {
       const md = fs.readFileSync(path.join(CREW_AGENTS_DIR, file), 'utf-8')
-      const model = frontmatterModel(md)
-      expect(model).not.toBeNull()
-      expect(['opus', 'sonnet', 'haiku']).toContain(model as string)
+      expect(frontmatterModel(md)).toBeNull()
     })
   }
 
-  it('pins the exact policy: implementer=opus, leader=haiku, reviewer=sonnet', () => {
-    const modelOf = (f: string) =>
-      frontmatterModel(fs.readFileSync(path.join(CREW_AGENTS_DIR, f), 'utf-8'))
-    expect(modelOf('implementer.md')).toBe('opus')
-    expect(modelOf('leader.md')).toBe('haiku')
-    expect(modelOf('reviewer.md')).toBe('sonnet')
-  })
-
-  it('only the implementer may run on the max model', () => {
+  it('no role template names a tier anywhere in its body', () => {
     for (const file of files) {
-      if (file === 'implementer.md') continue
-      const model = frontmatterModel(fs.readFileSync(path.join(CREW_AGENTS_DIR, file), 'utf-8'))
-      expect(model).not.toBe('opus')
+      const md = fs.readFileSync(path.join(CREW_AGENTS_DIR, file), 'utf-8')
+      expect(md).not.toContain('model: "opus"')
+      expect(md).not.toContain('model: "sonnet"')
+      expect(md).not.toContain('model: "haiku"')
     }
   })
 })
@@ -72,17 +65,29 @@ describe('skill generation invariants — the SSOT the SKILL.md twin is built fr
     expect(buildPrjctSkillReference()).toBe(buildPrjctSkillReference())
   })
 
-  // The heavy methodology (model policy, point-don't-carry, fan-out, crew
-  // reconciliation) moved out of the always-in-context SKILL.md body into
-  // the pulled-on-demand `workflows.md` reference (2.37 context-efficiency
-  // pivot). It still ships on disk next to SKILL.md, so these guards now
-  // protect the reference twin.
-  it('reference carries the per-role model policy and all three tiers', () => {
-    const ref = buildPrjctSkillReference()
-    expect(ref).toContain('Model policy (perf')
-    expect(ref).toContain('model: "opus"')
-    expect(ref).toContain('model: "sonnet"')
-    expect(ref).toContain('model: "haiku"')
+  // The heavy methodology (point-don't-carry, fan-out, crew reconciliation)
+  // moved out of the always-in-context SKILL.md body into the pulled-on-demand
+  // `workflows.md` reference (2.37 context-efficiency pivot). It still ships on
+  // disk next to SKILL.md, so these guards now protect the reference twin.
+  it('neither the skill nor its reference names a model or caps effort', () => {
+    const forbidden = [
+      'model: "opus"',
+      'model: "sonnet"',
+      'model: "haiku"',
+      'Model policy',
+      'max-tier',
+      'mid-tier',
+      'fast tier',
+      'over-deliberate',
+      'not exhaustive',
+    ]
+    for (const text of [buildPrjctSkill(), buildPrjctSkillReference()]) {
+      for (const needle of forbidden) expect(text).not.toContain(needle)
+    }
+  })
+
+  it('reference tells the reader to inherit the session model', () => {
+    expect(buildPrjctSkillReference()).toContain('Do not pick models for subagents')
   })
 
   it('reference carries the point-dont-carry persistence MUST', () => {
@@ -110,7 +115,7 @@ describe('skill generation invariants — the SSOT the SKILL.md twin is built fr
     const skill = buildPrjctSkill()
     expect(skill).toContain('workflows.md')
     // The heavy methodology must NOT sit in the always-in-context body.
-    expect(skill).not.toContain('Model policy (perf')
+    expect(skill).not.toContain('Crew mode reconciliation')
   })
 })
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { DEFAULT_MCP_TOOL_TIER } from '../../mcp/server'
-import { PROVIDER_CAPABILITY_MODELS } from '../../schemas/model'
+import { SUPPORTED_PROVIDERS } from '../../schemas/model'
 import {
   computeHarnessScore,
   renderHarnessScoreMd,
@@ -25,10 +25,8 @@ describe('harness score', () => {
     )
   })
 
-  it('exposes at least 6 provider capability maps', () => {
-    expect(Object.keys(PROVIDER_CAPABILITY_MODELS).length).toBeGreaterThanOrEqual(
-      WORLD_CLASS.providerMapsMin
-    )
+  it('supports at least 6 provider rigs', () => {
+    expect(SUPPORTED_PROVIDERS.length).toBeGreaterThanOrEqual(WORLD_CLASS.providerMapsMin)
   })
 
   it('scores green on structural criteria', () => {

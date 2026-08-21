@@ -794,7 +794,7 @@ export function buildNextAction(
               'prjct judgment next',
             ]
           : [
-              'Spawn one fresh-context reviewer (model: sonnet)',
+              'Spawn one fresh-context reviewer',
               'prjct judgment add --severity … --title … --file … --line …',
               'prjct judgment challenge --verdicts …',
             ],

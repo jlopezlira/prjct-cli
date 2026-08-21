@@ -11,7 +11,7 @@ import { describe, expect, it } from 'bun:test'
 import { buildEmulatedCrewProtocol, resolveDispatchMechanism } from '../../services/agent-dispatch'
 
 describe('emulated crew protocol', () => {
-  it('composes specialists (not a fixed trio) with the rig per-role models + checkpoints', async () => {
+  it('composes specialists (not a fixed trio) with checkpoints, naming no model', async () => {
     const m = await resolveDispatchMechanism('gemini')
     const proto = buildEmulatedCrewProtocol(m, 'Tests must pass; no stray console.log.')
 
@@ -25,19 +25,20 @@ describe('emulated crew protocol', () => {
     for (const lens of ['security', 'data', 'performance', 'design', 'strategic']) {
       expect(proto).toContain(lens)
     }
-    // Per-role rig models resolved from the policy via the bridge.
-    expect(proto).toContain('3.1-pro') // implementer → frontier
-    expect(proto).toContain('2.0-flash') // leader → fast
-    expect(proto).toContain('2.5-flash') // reviewer → balanced
+    // No role is routed to a model — every one inherits the user's.
+    for (const model of ['3.1-pro', '2.0-flash', '2.5-flash']) {
+      expect(proto).not.toContain(model)
+    }
     expect(proto).toContain('Tests must pass') // checkpoints embedded
     expect(proto).toContain('prjct crew record-run')
     expect(proto).toContain('VERDICT: APPROVED')
   })
 
-  it('hints when no checkpoints are set, and defers model choice on multi-model rigs', async () => {
+  it('hints when no checkpoints are set, and never prescribes a model', async () => {
     const m = await resolveDispatchMechanism('cursor')
     const proto = buildEmulatedCrewProtocol(m, '   ')
     expect(proto).toContain('No project checkpoints set')
-    expect(proto).toContain('select your strongest model') // implementer on a multi-model rig
+    expect(proto).not.toContain('select your strongest model')
+    expect(proto).not.toContain('model:')
   })
 })

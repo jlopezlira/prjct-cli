@@ -2,7 +2,6 @@
 name: implementer
 description: "Implementer (Worker, purple). Implements exactly ONE prjct work cycle end-to-end. Writes code, writes tests, self-verifies. Never approves its own work."
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: opus
 color: purple
 ---
 

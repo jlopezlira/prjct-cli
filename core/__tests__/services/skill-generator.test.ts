@@ -153,7 +153,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(content).not.toContain('Trivial work proceeds directly')
     })
 
-    it('keeps loop-discipline triggers + model quick-ref in the pulled reference', async () => {
+    it('keeps loop-discipline triggers in the pulled reference, and names no model', async () => {
       const result = await fixture.generator.generateAndInstall()
       const claude = result.generated.find((g) => g.path.includes('.claude/skills/prjct/SKILL.md'))
       const content = await fs.readFile(claude!.path, 'utf-8')
@@ -172,8 +172,9 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(ref).toContain('Touching **2+ non-trivial files**')
       expect(ref).toContain('commit / push / open a PR')
       expect(ref).toContain('worktree/git accident')
-      expect(ref).toContain('`model: "sonnet"`')
-      expect(ref).toMatch(/capability class|host vocabulary|Claude Code/i)
+      // The reference must never name a model or cap effort for a subagent.
+      expect(ref).not.toContain('model: "sonnet"')
+      expect(ref).toContain('Do not pick models for subagents')
     })
 
     it('states the portable agent contract for Claude and GPT', async () => {
