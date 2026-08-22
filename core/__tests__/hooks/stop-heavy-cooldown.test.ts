@@ -72,7 +72,11 @@ describe('Stop heavy-step cooldown — stamp file', () => {
     const before = Date.now()
     expect(await heavyStepsDue(projectId)).toBe(true)
     const stat = await fs.stat(stamp)
-    expect(stat.mtimeMs).toBeGreaterThanOrEqual(before)
+    // `Date.now()` truncates to whole milliseconds while `mtimeMs` carries the
+    // filesystem's sub-millisecond precision, so a file written AFTER `before`
+    // can legitimately report a fraction below it (seen in CI:
+    // 1787363047309.9077 vs 1787363047310). Compare on the millisecond.
+    expect(Math.ceil(stat.mtimeMs)).toBeGreaterThanOrEqual(before)
   })
 
   test('stamp is per project, not global', async () => {
