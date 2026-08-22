@@ -16,6 +16,7 @@
 import { readSync } from 'node:fs'
 import { isatty } from 'node:tty'
 import { deburr } from '../utils/deburr'
+import { clipHead, clipTail } from '../utils/text-summary'
 
 interface HookOutput {
   /** Top-level informational message. Accepted by every Claude Code hook
@@ -446,8 +447,8 @@ export function stripLoneSurrogates(s: string): string {
 }
 
 /**
- * Truncate `s` to at most `max` UTF-16 units, WITHOUT ever splitting a
- * surrogate pair.
+ * Truncate `s` to at most `max` UTF-16 units on CLAUSE boundaries — never
+ * inside a word, never across a surrogate pair.
  *
  * With `tailChars > 0` the result is head + marker + tail instead of head +
  * marker. In guidance text the action usually sits at the END, so a head-only
@@ -469,24 +470,9 @@ export function safeTruncate(
   if (s.length <= max) return s
   const budget = Math.max(0, max - marker.length)
   const tail = Math.min(Math.max(0, tailChars), Math.max(0, budget - 1))
-  const headEnd = endOnCodePoint(s, budget - tail)
-  if (tail <= 0) return s.slice(0, headEnd) + marker
-  const tailStart = startOnCodePoint(s, s.length - tail)
-  return s.slice(0, headEnd) + marker + s.slice(tailStart)
-}
-
-/** Back off one unit when the cut would leave a lone high surrogate. */
-function endOnCodePoint(s: string, end: number): number {
-  const at = Math.max(0, Math.min(end, s.length))
-  const last = s.charCodeAt(at - 1)
-  return last >= 0xd800 && last <= 0xdbff ? Math.max(0, at - 1) : at
-}
-
-/** Move forward one unit when the cut would start on a lone low surrogate. */
-function startOnCodePoint(s: string, start: number): number {
-  const at = Math.max(0, Math.min(start, s.length))
-  const first = s.charCodeAt(at)
-  return first >= 0xdc00 && first <= 0xdfff ? Math.min(s.length, at + 1) : at
+  const head = clipHead(s, budget - tail)
+  if (tail <= 0) return head + marker
+  return head + marker + clipTail(s, tail)
 }
 
 export function buildHookOutput(event: string, context: string | null): HookOutput {

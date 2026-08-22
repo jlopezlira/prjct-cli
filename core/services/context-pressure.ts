@@ -44,6 +44,16 @@ export interface ContextPressureVerdict {
   ratio: number
   /** Where `limit` came from — a configured budget, or one derived from the model. */
   limitSource: 'configured' | 'model' | 'none'
+  /**
+   * Model that ran the cycle but whose context window prjct does not know, so
+   * no budget could be derived. Set only in that case.
+   *
+   * Silence here is how a measurement feature goes dark: the window table
+   * cannot know every model, and a table that quietly stops resolving is
+   * exactly the failure this whole change set exists to remove. Callers gate
+   * this to one mention.
+   */
+  unknownModel?: string
 }
 
 /**
@@ -63,11 +73,15 @@ export function contextPressureVerdict(
   // configured it, which is nearly everyone. `CAPACITY_RATIO` mirrors the
   // threshold a compaction engine uses before it acts, so the cue lands while
   // there is still room to act on it rather than at the wall.
+  const observedModel = task?.modelMetadata?.model?.trim() || ''
   const derived = (() => {
     if (configured > 0) return 0
-    const window = contextWindowFor(task?.modelMetadata?.model)
+    const window = contextWindowFor(observedModel)
     return window ? Math.floor(window * CAPACITY_RATIO) : 0
   })()
+  // A model we ran on but cannot size is worth saying once — never silently.
+  const unknownModel =
+    configured <= 0 && derived <= 0 && observedModel ? { unknownModel: observedModel } : {}
   const limit = configured > 0 ? configured : derived
   const limitSource: ContextPressureVerdict['limitSource'] =
     configured > 0 ? 'configured' : derived > 0 ? 'model' : 'none'
@@ -75,7 +89,7 @@ export function contextPressureVerdict(
   const ratio = limit > 0 ? spent / limit : 0
 
   if (!task || limit <= 0 || spent <= 0) {
-    return { level: 'ok', cue: null, turns, limit, ratio: 0, limitSource }
+    return { level: 'ok', cue: null, turns, limit, ratio: 0, limitSource, ...unknownModel }
   }
 
   const pct = Math.round(ratio * 100)
@@ -110,7 +124,7 @@ ${limitSource === 'model' ? 'Derived from the context window of the model this c
     }
   }
 
-  return { level: 'ok', cue: null, turns, limit, ratio, limitSource }
+  return { level: 'ok', cue: null, turns, limit, ratio, limitSource, ...unknownModel }
 }
 
 /**

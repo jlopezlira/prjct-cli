@@ -123,3 +123,49 @@ describe('safeTruncate keeps the tail when asked', () => {
     expect(safeTruncate('short', 200, '…', 50)).toBe('short')
   })
 })
+
+describe('better than the source it was adapted from', () => {
+  // deepseek's pruner is code-point budgeted and its docs accept that a cut
+  // "can split a multi-code-point grapheme cluster". The budget is a ceiling,
+  // not a target, so landing on a boundary is free — and a tail that opens
+  // mid-word ("he queue") reads as corruption.
+  const body =
+    'Guard core/daemon/request-loop.ts before editing because the dispatcher assumes a single writer thread and concurrent edits corrupt the queue. ACTION: run prjct guard first.'
+
+  it('cuts on word boundaries at BOTH ends, not mid-word', () => {
+    const out = safeTruncate(body, 120, '\n… [truncated]', 40)
+    const [head, tail] = out.split('\n… [truncated]')
+    expect(head).toBeTruthy()
+    expect(tail).toBeTruthy()
+    // Every retained word must be a real word from the source.
+    for (const word of `${head} ${tail}`.split(/\s+/).filter(Boolean)) {
+      expect(body).toContain(word)
+    }
+  })
+
+  it('is idempotent — a second pass changes nothing', () => {
+    const once = safeTruncate(body, 120, '\n… [truncated]', 40)
+    expect(safeTruncate(once, 120, '\n… [truncated]', 40)).toBe(once)
+  })
+
+  it('still respects the ceiling', () => {
+    expect(safeTruncate(body, 120, '\n… [truncated]', 40).length).toBeLessThanOrEqual(120)
+  })
+
+  // Silence is how a measurement feature goes dark. deepseek warns once per
+  // target; so must we.
+  it('names a model it cannot size instead of going quiet', () => {
+    const v = contextPressureVerdict({} as never, task(500_000, 'some-new-model-9'))
+    expect(v.limitSource).toBe('none')
+    expect(v.unknownModel).toBe('some-new-model-9')
+  })
+
+  it('reports no unknown model when one was configured or resolved', () => {
+    expect(
+      contextPressureVerdict({} as never, task(10, 'claude-opus-5')).unknownModel
+    ).toBeUndefined()
+    expect(
+      contextPressureVerdict({ maxTokensPerCycle: 1000 } as never, task(10, 'weird')).unknownModel
+    ).toBeUndefined()
+  })
+})
