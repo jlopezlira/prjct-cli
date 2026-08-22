@@ -10,6 +10,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import chalk from 'chalk'
 import { verifyCodexPRouterReady } from '../infrastructure/codex-skill'
@@ -331,6 +332,28 @@ class DoctorService {
     const configPath = path.join(this.projectPath, '.prjct', 'prjct.config.json')
 
     if (await fileExists(configPath)) {
+      // A key prjct does not recognise is silently ignored, so a typo looks
+      // exactly like a feature that does not work. Report it where the author
+      // will actually see it.
+      const unknown = await (async () => {
+        try {
+          const { unknownConfigKeys } = await import('./config-validation')
+          const raw = await fs.readFile(configPath, 'utf-8')
+          return unknownConfigKeys(JSON.parse(raw))
+        } catch {
+          return []
+        }
+      })()
+      if (unknown.length > 0) {
+        const detail = unknown
+          .map((u) => (u.didYouMean ? `${u.key} (did you mean ${u.didYouMean}?)` : u.key))
+          .join(', ')
+        return {
+          name: 'prjct config',
+          status: 'error',
+          message: `${unknown.length} ignored key(s): ${detail} — an ignored key looks like a broken feature. Fix or remove it in .prjct/prjct.config.json`,
+        }
+      }
       return {
         name: 'prjct config',
         status: 'ok',

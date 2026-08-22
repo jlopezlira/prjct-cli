@@ -488,6 +488,26 @@ export const projectMemory = {
         /* fall through — never block a capture on the dedup check */
       }
 
+      // Contradiction gate: refuse a claim that reverses one already in force.
+      //
+      // Dedup drops a restatement; nothing stopped the OPPOSITE — the same
+      // claim with the polarity flipped. Both stayed live and whichever
+      // reached L0 first was served as authoritative, so a corrected fact
+      // could be re-asserted in its old form and believed. Always throws,
+      // never drops silently: an author asserting something is worth
+      // contradicting deserves to be told, and `supersedes:<id>` is the way
+      // through.
+      try {
+        const { findContradiction, supersedesId } = await import('../services/memory-contradiction')
+        if (!supersedesId(tags)) {
+          const conflict = findContradiction(args.content, type, this.allEntriesForIndex(projectId))
+          if (conflict) throw new Error(conflict.message)
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('prjct: refused')) throw err
+        /* gate unavailable — never block a write on the check itself */
+      }
+
       // Rho capture gate: low-excess noise (near-dup of reference model R) is
       // rejected for low-stakes types. Judgment types always pass. Best-effort
       // — never drop a capture because the gate failed to load.
