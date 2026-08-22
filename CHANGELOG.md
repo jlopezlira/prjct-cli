@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-08-21
+
+### Added
+- Refuse to silently accept something already known to be wrong
+
 ## [4.7.0] - 2026-08-21
 
 ### Added
