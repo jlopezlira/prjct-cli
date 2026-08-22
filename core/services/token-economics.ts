@@ -4,6 +4,7 @@
  */
 
 import { prjctDb } from '../storage/database'
+import { contextWindowFor } from '../tools/context/token-counter'
 
 export interface TokenEconomics {
   /** Tokens attributed to tasks updated in the last 24h (in+out). */
@@ -26,6 +27,8 @@ export function buildTokenEconomics(
     cycleTokensIn?: number
     cycleTokensOut?: number
     maxTokensPerCycle?: number | null
+    /** Model this cycle ran on; sizes the budget when none is configured. */
+    model?: string | null
   } = {}
 ): TokenEconomics {
   const since = Date.now() - 24 * 60 * 60 * 1000
@@ -51,7 +54,11 @@ export function buildTokenEconomics(
   })()
 
   const cycleTokens = (opts.cycleTokensIn ?? 0) + (opts.cycleTokensOut ?? 0)
-  const cycleBudget = opts.maxTokensPerCycle ?? null
+  // Fall back to a budget derived from the cycle's model, matching
+  // `contextPressureVerdict`. Reading only the configured value meant this
+  // surface reported "no cycle budget set" while pressure was already scoring
+  // against a derived one — two prjct surfaces disagreeing about the same fact.
+  const cycleBudget = opts.maxTokensPerCycle ?? (opts.model ? deriveCycleBudget(opts.model) : null)
 
   // Budget adherence — ONLY meaningful against a budget the project set.
   //
@@ -81,4 +88,10 @@ export function buildTokenEconomics(
       : `Token economics: 24h≈${tokens24h} · ${budgetBit} · budget adherence=${score}/100`
 
   return { tokens24h, cycleTokens, cycleBudget, score, line }
+}
+
+/** Same 80% share of the model's context window that context-pressure uses. */
+function deriveCycleBudget(model: string): number | null {
+  const window = contextWindowFor(model)
+  return window ? Math.floor(window * 0.8) : null
 }

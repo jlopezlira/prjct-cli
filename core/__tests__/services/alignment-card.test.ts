@@ -35,6 +35,7 @@ describe('buildAlignmentCard', () => {
         turns: 12,
         limit: 15,
         ratio: 0.85,
+        limitSource: 'configured',
         cue: '# prjct: CONTEXT PRESSURE (critical ~85%) — HARD GATE\nSession is full.',
       },
     })
@@ -50,6 +51,7 @@ describe('buildAlignmentCard', () => {
         turns: 9,
         limit: 15,
         ratio: 0.6,
+        limitSource: 'configured',
         cue: '# prjct: context pressure (~60%) — compact path\nMandatory close plan.',
       },
     })

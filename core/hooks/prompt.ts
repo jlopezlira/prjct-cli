@@ -48,7 +48,7 @@ import { buildTaskHarness } from '../services/task-harness'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
-import { recordHookEmissionChars } from '../services/work-cost-service'
+import { dominantModelForTask, recordHookEmissionChars } from '../services/work-cost-service'
 import { prjctDb } from '../storage/database'
 import { instructionFailureStorage } from '../storage/instruction-failure-storage'
 import { queueStorage } from '../storage/queue-storage'
@@ -259,7 +259,17 @@ export async function buildProjectStateParts(
       }
 
       try {
-        const pressure = contextPressureVerdict(config, currentTask)
+        // Give the verdict the cycle's model so a budget can be derived from
+        // its context window when the project configured none. Without this
+        // the token-pressure signal never fires: `maxTokensPerCycle` is opt-in
+        // and almost nobody sets it.
+        const cycleModel = currentTask
+          ? dominantModelForTask(config.projectId, overview.current.id)
+          : null
+        const pressure = contextPressureVerdict(
+          config,
+          currentTask ? { ...currentTask, modelMetadata: { model: cycleModel ?? '' } } : currentTask
+        )
         const qualityInject = qualityInjectForProject(config.projectId)
         const card = buildAlignmentCard({
           loop: loopVerdict,
@@ -270,6 +280,14 @@ export async function buildProjectStateParts(
         })
         if (card.markdown)
           events.push({ key: `alignment:${overview.current.id}`, text: card.markdown })
+        // One mention per model: a budget that cannot be derived must not be
+        // indistinguishable from one that is simply healthy.
+        if (pressure.unknownModel) {
+          events.push({
+            key: `budget-unknown-model:${pressure.unknownModel}`,
+            text: `# prjct: token budget unavailable\nThis cycle ran on \`${pressure.unknownModel}\`, whose context window prjct does not know, so no budget is being tracked. Set \`maxTokensPerCycle\` in \`.prjct/prjct.config.json\` to track one, or upgrade prjct if this model is newer than your install.`,
+          })
+        }
       } catch {
         /* advisory */
       }

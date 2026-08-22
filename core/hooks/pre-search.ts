@@ -16,6 +16,9 @@ import { type HookIo, runHook } from './_runner'
 import { safeTruncate } from './_shared'
 
 const MAX_CHARS = 900
+/** Tail budget for guidance blocks — the closing action must survive the cut. */
+const TAIL_CHARS = Math.floor(MAX_CHARS / 4)
+
 const HARD_CAP_MS = 80
 const MAX_HITS = 8
 /** Sessionless dedupe window: symbol hits are static between syncs, so a
@@ -109,7 +112,7 @@ async function buildSearchAugment(projectPath: string, input: HookInput): Promis
     lines.push(
       `> Expand: \`prjct code trace ${token}\` or MCP \`prjct_trace_path\`. This inject never blocks the tool.`
     )
-    const augment = safeTruncate(lines.join('\n'), MAX_CHARS)
+    const augment = safeTruncate(lines.join('\n'), MAX_CHARS, undefined, TAIL_CHARS)
     // Same token → same hits until the next sync: inject ONCE per session
     // (durable stamp), not on every Grep/Glob of the same identifier.
     const gate = await gateDelivery({

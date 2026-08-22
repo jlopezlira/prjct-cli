@@ -343,6 +343,34 @@ function measuredCyclesFromTokenUsage(projectId: string, since: string): Map<str
   return byCycle
 }
 
+/**
+ * The model that did most of the work on a cycle, or null.
+ *
+ * `recordTaskTokenUsage` already writes a per-model row per task, so the route
+ * is in the database — it just had no reader. Callers use it to size a cycle
+ * budget from the model's real context window instead of demanding the project
+ * configure one. Heaviest by tokens, not most recent: a single cheap probe on
+ * another model must not resize the budget.
+ */
+export function dominantModelForTask(projectId: string, taskId: string): string | null {
+  try {
+    const rows = query<{ model_id: string | null; total: number | null }>(
+      projectId,
+      `SELECT model_id, SUM(COALESCE(input_tokens,0) + COALESCE(output_tokens,0)) AS total
+       FROM token_usage
+       WHERE work_cycle_id = ? AND model_id IS NOT NULL AND model_id != ''
+       GROUP BY model_id
+       ORDER BY total DESC
+       LIMIT 1`,
+      taskId
+    )
+    const model = rows[0]?.model_id
+    return typeof model === 'string' && model.trim() ? model.trim() : null
+  } catch {
+    return null
+  }
+}
+
 export function buildWorkCostSnapshot(projectId: string, days: number): WorkCostSnapshot {
   const since = sinceIso(days)
   const now = new Date().toISOString()

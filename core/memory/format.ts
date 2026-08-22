@@ -7,6 +7,7 @@
  */
 
 import { escapeMarkdownInline } from '../utils/prompt-injection'
+import { clipToBoundary } from '../utils/text-summary'
 import type { MemoryEntry, MemoryProvenance, MemoryType } from './entries'
 import { collapseEntriesForSurface } from './semantic-cluster'
 import { formatCoverageFooter } from './substrate-health'
@@ -236,31 +237,7 @@ export function formatMemoryDigestLine(
     .replace(/^[\s.:;—-]+/, '')
     .trim()
   if (after.length < opts.minTeaser) return `${title}  \`${e.id}\``
-  return `${title} — ${clipTeaser(after, opts.maxTeaser)}  \`${e.id}\``
-}
-
-/**
- * Clip to a whole clause, never mid-word.
- *
- * A hard `slice(0, 89)` cut every L0 line at a character boundary, so the
- * operative half of a rule was routinely the half that got dropped — "Node
- * exec() pipes stdin, so bun test …". A rule truncated before its verb is
- * worse than no rule: it still spends the reader's attention but carries no
- * instruction. Prefer the last sentence end, else the last word boundary.
- */
-function clipTeaser(text: string, max: number): string {
-  if (text.length <= max) return text
-  const window = text.slice(0, max - 1)
-  const sentenceEnd = Math.max(
-    window.lastIndexOf('. '),
-    window.lastIndexOf('; '),
-    window.lastIndexOf('! '),
-    window.lastIndexOf('? ')
-  )
-  // Only honour a sentence end that leaves a useful amount of text.
-  if (sentenceEnd > max * 0.5) return window.slice(0, sentenceEnd + 1)
-  const wordEnd = window.lastIndexOf(' ')
-  return `${(wordEnd > max * 0.5 ? window.slice(0, wordEnd) : window).trimEnd()}…`
+  return `${title} — ${clipToBoundary(after, opts.maxTeaser)}  \`${e.id}\``
 }
 
 /**

@@ -15,10 +15,13 @@
  * long" is a separate, honest signal already carried by the loop guard.
  */
 
+import { contextWindowFor } from '../tools/context/token-counter'
 import type { LocalConfig } from '../types/config'
 
 const WARN_RATIO = 0.6
 const CRITICAL_RATIO = 0.8
+/** Share of a model's context window treated as one cycle's budget. */
+const CAPACITY_RATIO = 0.8
 
 export type ContextPressureLevel = 'ok' | 'warn' | 'critical'
 
@@ -28,6 +31,8 @@ export interface ContextPressureTask {
   tokensIn?: number
   tokensOut?: number
   description?: string
+  /** Model this cycle ran on, used to derive a budget when none is configured. */
+  modelMetadata?: { model?: string } | null
 }
 
 export interface ContextPressureVerdict {
@@ -37,6 +42,18 @@ export interface ContextPressureVerdict {
   turns: number
   limit: number
   ratio: number
+  /** Where `limit` came from — a configured budget, or one derived from the model. */
+  limitSource: 'configured' | 'model' | 'none'
+  /**
+   * Model that ran the cycle but whose context window prjct does not know, so
+   * no budget could be derived. Set only in that case.
+   *
+   * Silence here is how a measurement feature goes dark: the window table
+   * cannot know every model, and a table that quietly stops resolving is
+   * exactly the failure this whole change set exists to remove. Callers gate
+   * this to one mention.
+   */
+  unknownModel?: string
 }
 
 /**
@@ -49,12 +66,30 @@ export function contextPressureVerdict(
   task: ContextPressureTask | null | undefined
 ): ContextPressureVerdict {
   const turns = task?.turnCount ?? 0
-  const limit = config?.maxTokensPerCycle ?? 0
+  const configured = config?.maxTokensPerCycle ?? 0
+  // Derive a budget from the model's context window when the project set none.
+  // Measuring real tokens is only useful against a real capacity; requiring
+  // `maxTokensPerCycle` meant the signal never fired for anyone who had not
+  // configured it, which is nearly everyone. `CAPACITY_RATIO` mirrors the
+  // threshold a compaction engine uses before it acts, so the cue lands while
+  // there is still room to act on it rather than at the wall.
+  const observedModel = task?.modelMetadata?.model?.trim() || ''
+  const derived = (() => {
+    if (configured > 0) return 0
+    const window = contextWindowFor(observedModel)
+    return window ? Math.floor(window * CAPACITY_RATIO) : 0
+  })()
+  // A model we ran on but cannot size is worth saying once — never silently.
+  const unknownModel =
+    configured <= 0 && derived <= 0 && observedModel ? { unknownModel: observedModel } : {}
+  const limit = configured > 0 ? configured : derived
+  const limitSource: ContextPressureVerdict['limitSource'] =
+    configured > 0 ? 'configured' : derived > 0 ? 'model' : 'none'
   const spent = (task?.tokensIn ?? 0) + (task?.tokensOut ?? 0)
   const ratio = limit > 0 ? spent / limit : 0
 
   if (!task || limit <= 0 || spent <= 0) {
-    return { level: 'ok', cue: null, turns, limit, ratio: 0 }
+    return { level: 'ok', cue: null, turns, limit, ratio: 0, limitSource, ...unknownModel }
   }
 
   const pct = Math.round(ratio * 100)
@@ -69,8 +104,9 @@ export function contextPressureVerdict(
       turns,
       limit,
       ratio,
+      limitSource,
       cue: `# prjct: token budget (${pct}% — ${spentK}k of ${limitK}k this cycle)
-This is the budget YOU configured for a cycle, not the host context window — the host shows that separately, and the session continues either way.
+${limitSource === 'model' ? 'Derived from the context window of the model this cycle ran on' : 'The budget you configured'} for one cycle, not the host context window — the host shows that separately, and the session continues either way.
 Cheaper routes when they answer the same question: \`prjct context memory mem_N\` (pull by id), \`prjct code trace <symbol>\`, \`prjct search\`.
 Read whatever the work actually requires; a wrong answer costs more than the tokens saved.`,
     }
@@ -82,12 +118,13 @@ Read whatever the work actually requires; a wrong answer costs more than the tok
       turns,
       limit,
       ratio,
+      limitSource,
       cue: `# prjct: token budget (${pct}% — ${spentK}k of ${limitK}k this cycle)
-Informational. Cheaper routes when they answer the same question: \`prjct context memory mem_N\`, \`prjct code trace <symbol>\`, \`prjct search\`. Not a reason to stop reading code.`,
+${limitSource === 'model' ? 'Derived from the context window of the model this cycle ran on' : 'The budget you configured'}. Informational — cheaper routes when they answer the same question: \`prjct context memory mem_N\`, \`prjct code trace <symbol>\`, \`prjct search\`. Not a reason to stop reading code.`,
     }
   }
 
-  return { level: 'ok', cue: null, turns, limit, ratio }
+  return { level: 'ok', cue: null, turns, limit, ratio, limitSource, ...unknownModel }
 }
 
 /**

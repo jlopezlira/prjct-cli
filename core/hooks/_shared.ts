@@ -16,6 +16,7 @@
 import { readSync } from 'node:fs'
 import { isatty } from 'node:tty'
 import { deburr } from '../utils/deburr'
+import { clipHead, clipTail } from '../utils/text-summary'
 
 interface HookOutput {
   /** Top-level informational message. Accepted by every Claude Code hook
@@ -446,19 +447,32 @@ export function stripLoneSurrogates(s: string): string {
 }
 
 /**
- * Truncate `s` to at most `max` UTF-16 units, appending `marker`, WITHOUT
- * ever splitting a surrogate pair. A naive `s.slice(0, n)` can land
+ * Truncate `s` to at most `max` UTF-16 units on CLAUSE boundaries — never
+ * inside a word, never across a surrogate pair.
+ *
+ * With `tailChars > 0` the result is head + marker + tail instead of head +
+ * marker. In guidance text the action usually sits at the END, so a head-only
+ * cut keeps the preamble and drops the instruction. `flattenToolInputText`
+ * (core/utils/secret-scanner.ts) already retains both ends for the same
+ * reason: keeping only the prefix lets padding hide what matters. Default 0,
+ * so every existing caller is unchanged until it opts in. A naive `s.slice(0, n)` can land
  * between a high and low surrogate, leaving a trailing lone high
  * surrogate that makes the API request body invalid JSON (see
  * `stripLoneSurrogates`). If the last retained unit is a high surrogate
  * we drop it, so the cut always lands on a code-point boundary.
  */
-export function safeTruncate(s: string, max: number, marker = '\n… [truncated]'): string {
+export function safeTruncate(
+  s: string,
+  max: number,
+  marker = '\n… [truncated]',
+  tailChars = 0
+): string {
   if (s.length <= max) return s
-  const candidateEnd = Math.max(0, max - marker.length)
-  const last = s.charCodeAt(candidateEnd - 1)
-  const end = last >= 0xd800 && last <= 0xdbff ? candidateEnd - 1 : candidateEnd
-  return s.slice(0, Math.max(0, end)) + marker
+  const budget = Math.max(0, max - marker.length)
+  const tail = Math.min(Math.max(0, tailChars), Math.max(0, budget - 1))
+  const head = clipHead(s, budget - tail)
+  if (tail <= 0) return head + marker
+  return head + marker + clipTail(s, tail)
 }
 
 export function buildHookOutput(event: string, context: string | null): HookOutput {

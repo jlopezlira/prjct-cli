@@ -13,12 +13,15 @@ import { CHARS_PER_TOKEN } from '../../constants/token'
 import type { TokenMetrics } from '../../types/context-tools'
 
 /**
- * Model pricing per 1000 tokens.
+ * Model pricing per 1000 tokens, plus each model's context window.
  *
  * Keys are the REAL model ids the API accepts (`claude-opus-4-8`), not the
  * dotted marketing names this table used to carry (`claude-opus-4.5`) — those
  * never matched a model id reported by any rig, so every lookup silently fell
  * through to the default and the cost report was wrong for each of them.
+ *
+ * `contextWindow` is what lets a cycle budget be derived instead of
+ * configured — see `contextWindowFor`.
  *
  * Sources:
  * - Anthropic: https://docs.anthropic.com/en/docs/about-claude/models
@@ -27,25 +30,47 @@ import type { TokenMetrics } from '../../types/context-tools'
  */
 const MODEL_PRICING = {
   // Anthropic Claude 5 family
-  'claude-fable-5': { input: 0.01, output: 0.05 }, // $10/$50 per M
-  'claude-opus-5': { input: 0.005, output: 0.025 }, // $5/$25 per M
-  'claude-sonnet-5': { input: 0.003, output: 0.015 }, // $3/$15 per M
-  'claude-haiku-4-5': { input: 0.001, output: 0.005 }, // $1/$5 per M
+  'claude-fable-5': { input: 0.01, output: 0.05, contextWindow: 1_000_000 }, // $10/$50 per M
+  'claude-opus-5': { input: 0.005, output: 0.025, contextWindow: 1_000_000 }, // $5/$25 per M
+  'claude-sonnet-5': { input: 0.003, output: 0.015, contextWindow: 1_000_000 }, // $3/$15 per M
+  'claude-haiku-4-5': { input: 0.001, output: 0.005, contextWindow: 200_000 }, // $1/$5 per M
   // Previous Anthropic generations
-  'claude-opus-4-8': { input: 0.005, output: 0.025 }, // $5/$25 per M
-  'claude-opus-4-7': { input: 0.005, output: 0.025 }, // $5/$25 per M
-  'claude-opus-4-6': { input: 0.005, output: 0.025 }, // $5/$25 per M
-  'claude-sonnet-4-6': { input: 0.003, output: 0.015 }, // $3/$15 per M
+  'claude-opus-4-8': { input: 0.005, output: 0.025, contextWindow: 1_000_000 }, // $5/$25 per M
+  'claude-opus-4-7': { input: 0.005, output: 0.025, contextWindow: 1_000_000 }, // $5/$25 per M
+  'claude-opus-4-6': { input: 0.005, output: 0.025, contextWindow: 1_000_000 }, // $5/$25 per M
+  'claude-sonnet-4-6': { input: 0.003, output: 0.015, contextWindow: 1_000_000 }, // $3/$15 per M
   // OpenAI
-  'gpt-4o': { input: 0.0025, output: 0.01 }, // $2.50/$10 per M
-  'gpt-4-turbo': { input: 0.01, output: 0.03 }, // $10/$30 per M
-  'gpt-4o-mini': { input: 0.00015, output: 0.0006 }, // $0.15/$0.60 per M
+  'gpt-4o': { input: 0.0025, output: 0.01, contextWindow: 128_000 }, // $2.50/$10 per M
+  'gpt-4-turbo': { input: 0.01, output: 0.03, contextWindow: 128_000 }, // $10/$30 per M
+  'gpt-4o-mini': { input: 0.00015, output: 0.0006, contextWindow: 128_000 }, // $0.15/$0.60 per M
   // Google
-  'gemini-1.5-pro': { input: 0.00125, output: 0.005 }, // $1.25/$5 per M
-  'gemini-1.5-flash': { input: 0.000075, output: 0.0003 }, // $0.075/$0.30 per M
+  'gemini-1.5-pro': { input: 0.00125, output: 0.005, contextWindow: 2_000_000 }, // $1.25/$5 per M
+  'gemini-1.5-flash': { input: 0.000075, output: 0.0003, contextWindow: 1_000_000 }, // $0.075/$0.30 per M
 } as const
 
 type ModelName = keyof typeof MODEL_PRICING
+
+/**
+ * Context window for a model id, or null when unknown.
+ *
+ * Rigs report ids inconsistently — dated snapshots (`claude-opus-5-20260114`),
+ * platform prefixes (`anthropic.claude-opus-5`), Vertex `@`-versions. An exact
+ * hit wins; otherwise the longest known id contained in the string wins, so a
+ * decorated id still resolves while an unrelated model stays null. Returning
+ * null is meaningful: callers must treat "unknown model" as "no budget", never
+ * as zero.
+ */
+export function contextWindowFor(model: string | null | undefined): number | null {
+  const id = (model ?? '').trim().toLowerCase()
+  if (!id) return null
+  const exact = (MODEL_PRICING as Record<string, { contextWindow?: number }>)[id]
+  if (exact?.contextWindow) return exact.contextWindow
+  const match = Object.keys(MODEL_PRICING)
+    .filter((known) => id.includes(known))
+    .sort((a, b) => b.length - a.length)[0]
+  if (!match) return null
+  return (MODEL_PRICING as Record<string, { contextWindow?: number }>)[match]?.contextWindow ?? null
+}
 
 // Default model for cost calculations
 const DEFAULT_MODEL: ModelName = 'claude-opus-5'
