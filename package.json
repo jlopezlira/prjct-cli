@@ -1,7 +1,7 @@
 {
   "name": "prjct-cli",
-  "version": "4.6.1",
-  "description": "The agentic harness for AI coding agents \u2014 work cycles, bounded RAG context, persistent memory, guardrails, and performance evals.",
+  "version": "4.7.0",
+  "description": "The agentic harness for AI coding agents — work cycles, bounded RAG context, persistent memory, guardrails, and performance evals.",
   "main": "dist/bin/prjct.mjs",
   "bin": {
     "prjct": "bin/prjct.cjs"
@@ -58,7 +58,7 @@
     "coding-agents"
   ],
   "author": {
-    "name": "Juan Jos\u00e9 L\u00f3pez Lira",
+    "name": "Juan José López Lira",
     "email": "jlopezlira@gmail.com",
     "url": "https://prjct.app"
   },

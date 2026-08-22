@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-08-21
+
+### Added
+- Size the token budget from your model, not your config
+
 ## [4.6.1] - 2026-08-21
 
 ### Fixed
