@@ -446,19 +446,47 @@ export function stripLoneSurrogates(s: string): string {
 }
 
 /**
- * Truncate `s` to at most `max` UTF-16 units, appending `marker`, WITHOUT
- * ever splitting a surrogate pair. A naive `s.slice(0, n)` can land
+ * Truncate `s` to at most `max` UTF-16 units, WITHOUT ever splitting a
+ * surrogate pair.
+ *
+ * With `tailChars > 0` the result is head + marker + tail instead of head +
+ * marker. In guidance text the action usually sits at the END, so a head-only
+ * cut keeps the preamble and drops the instruction. `flattenToolInputText`
+ * (core/utils/secret-scanner.ts) already retains both ends for the same
+ * reason: keeping only the prefix lets padding hide what matters. Default 0,
+ * so every existing caller is unchanged until it opts in. A naive `s.slice(0, n)` can land
  * between a high and low surrogate, leaving a trailing lone high
  * surrogate that makes the API request body invalid JSON (see
  * `stripLoneSurrogates`). If the last retained unit is a high surrogate
  * we drop it, so the cut always lands on a code-point boundary.
  */
-export function safeTruncate(s: string, max: number, marker = '\n… [truncated]'): string {
+export function safeTruncate(
+  s: string,
+  max: number,
+  marker = '\n… [truncated]',
+  tailChars = 0
+): string {
   if (s.length <= max) return s
-  const candidateEnd = Math.max(0, max - marker.length)
-  const last = s.charCodeAt(candidateEnd - 1)
-  const end = last >= 0xd800 && last <= 0xdbff ? candidateEnd - 1 : candidateEnd
-  return s.slice(0, Math.max(0, end)) + marker
+  const budget = Math.max(0, max - marker.length)
+  const tail = Math.min(Math.max(0, tailChars), Math.max(0, budget - 1))
+  const headEnd = endOnCodePoint(s, budget - tail)
+  if (tail <= 0) return s.slice(0, headEnd) + marker
+  const tailStart = startOnCodePoint(s, s.length - tail)
+  return s.slice(0, headEnd) + marker + s.slice(tailStart)
+}
+
+/** Back off one unit when the cut would leave a lone high surrogate. */
+function endOnCodePoint(s: string, end: number): number {
+  const at = Math.max(0, Math.min(end, s.length))
+  const last = s.charCodeAt(at - 1)
+  return last >= 0xd800 && last <= 0xdbff ? Math.max(0, at - 1) : at
+}
+
+/** Move forward one unit when the cut would start on a lone low surrogate. */
+function startOnCodePoint(s: string, start: number): number {
+  const at = Math.max(0, Math.min(start, s.length))
+  const first = s.charCodeAt(at)
+  return first >= 0xdc00 && first <= 0xdfff ? Math.min(s.length, at + 1) : at
 }
 
 export function buildHookOutput(event: string, context: string | null): HookOutput {

@@ -21,6 +21,9 @@ import { type HookIo, runHook } from './_runner'
 import { safeTruncate } from './_shared'
 
 const MAX_CHARS = 1200
+/** Tail budget for guidance blocks — the closing action must survive the cut. */
+const TAIL_CHARS = Math.floor(MAX_CHARS / 4)
+
 const MAX_ENTRIES = 3
 
 export interface CommitHookInput {
@@ -105,7 +108,7 @@ export async function buildPreCommitContext(projectPath: string): Promise<string
   lines.push('')
   lines.push('> Nudge, not block. Proceed if you think it still applies.')
   const body = lines.join('\n')
-  return safeTruncate(body, MAX_CHARS)
+  return safeTruncate(body, MAX_CHARS, undefined, TAIL_CHARS)
 }
 
 export function runPreCommitHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {

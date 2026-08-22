@@ -7,6 +7,7 @@ import { prjctDb } from '../storage/database'
 import { buildClosedLoopHealth, type ClosedLoopHealth } from './closed-loop-health'
 import { type VaultHealth, vaultHealth } from './retention/purge'
 import { buildTokenEconomics, type TokenEconomics } from './token-economics'
+import { dominantModelForTask } from './work-cost-service'
 
 export interface DynastyOutcomes {
   closedLoop: ClosedLoopHealth
@@ -39,7 +40,7 @@ function sumTokensSaved(projectId: string): number {
 export function buildDynastyOutcomes(projectId: string): DynastyOutcomes {
   const closedLoop = buildClosedLoopHealth(projectId)
   const vault = vaultHealth(projectId)
-  const tokens = buildTokenEconomics(projectId)
+  const tokens = buildTokenEconomics(projectId, activeCycleUsage(projectId))
   const tokensSavedTotal = sumTokensSaved(projectId)
 
   const mass = vault.live + vault.softDeleted + vault.archives
@@ -114,4 +115,39 @@ export function renderDynastyOutcomesMd(outcomes: DynastyOutcomes): string {
     `**${outcomes.line}**`,
     '',
   ].join('\n')
+}
+
+/**
+ * Spend and model for the newest cycle, so the budget can be derived rather
+ * than demanded from config.
+ *
+ * `tasks` carries no token columns and no `updated_at` — spend lives in
+ * `token_usage`, keyed by `work_cycle_id`. Best-effort: any failure reports no
+ * budget rather than a wrong one.
+ */
+function activeCycleUsage(projectId: string): {
+  cycleTokensIn?: number
+  cycleTokensOut?: number
+  model?: string | null
+} {
+  try {
+    const task = prjctDb.get<{ id: string }>(
+      projectId,
+      'SELECT id FROM tasks ORDER BY started_at DESC LIMIT 1'
+    )
+    if (!task?.id) return {}
+    const spend = prjctDb.get<{ tin: number | null; tout: number | null }>(
+      projectId,
+      `SELECT SUM(COALESCE(input_tokens,0)) AS tin, SUM(COALESCE(output_tokens,0)) AS tout
+       FROM token_usage WHERE work_cycle_id = ?`,
+      task.id
+    )
+    return {
+      cycleTokensIn: spend?.tin ?? 0,
+      cycleTokensOut: spend?.tout ?? 0,
+      model: dominantModelForTask(projectId, task.id),
+    }
+  } catch {
+    return {}
+  }
 }

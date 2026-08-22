@@ -10,7 +10,31 @@
  *  a clean single-line summary regardless of source formatting. */
 export function truncate(value: string, max: number): string {
   const collapsed = value.replace(/\s+/g, ' ').trim()
-  return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed
+  return collapsed.length > max ? clipToBoundary(collapsed, max) : collapsed
+}
+
+/**
+ * Clip to a whole clause, never mid-word.
+ *
+ * A hard `slice(0, max - 1)` cut every fragment at a character boundary, and
+ * `land-synthesis` builds the session hand-off out of these — so the sentence
+ * `prjct prime` shows at the start of the next session routinely stopped in
+ * the middle of the operative clause. Prefer the last sentence end, else the
+ * last word boundary; fall back to a hard cut only when neither leaves a
+ * useful amount of text.
+ */
+export function clipToBoundary(text: string, max: number): string {
+  if (text.length <= max) return text
+  const window = text.slice(0, max - 1)
+  const sentenceEnd = Math.max(
+    window.lastIndexOf('. '),
+    window.lastIndexOf('; '),
+    window.lastIndexOf('! '),
+    window.lastIndexOf('? ')
+  )
+  if (sentenceEnd > max * 0.5) return window.slice(0, sentenceEnd + 1)
+  const wordEnd = window.lastIndexOf(' ')
+  return `${(wordEnd > max * 0.5 ? window.slice(0, wordEnd) : window).trimEnd()}…`
 }
 
 /**

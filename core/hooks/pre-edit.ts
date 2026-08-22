@@ -32,6 +32,8 @@ import { safeTruncate } from './_shared'
 import { decideSecrets, type SecretHookInput } from './pre-secrets'
 
 const MAX_CHARS = 1200
+/** Tail budget for guidance blocks — the closing action must survive the cut. */
+const TAIL_CHARS = Math.floor(MAX_CHARS / 4)
 
 /** Per-invocation cache so decide + build share one recall (P0-3). */
 const preventiveRecallCache = new Map<string, MemoryEntry[]>()
@@ -82,7 +84,7 @@ function headsUpMessage(hits: MemoryEntry[], base: string): string {
       title: `${deriveTitle(e)} — ${flatDetail(e.content)}`,
     }))
   )
-  if (trapFmt) return safeTruncate(trapFmt, MAX_CHARS)
+  if (trapFmt) return safeTruncate(trapFmt, MAX_CHARS, undefined, TAIL_CHARS)
   const lines = [`# prjct: heads-up before editing \`${base}\``, '']
   lines.push(
     `${hits.length} preventive memory entr${hits.length === 1 ? 'y' : 'ies'} recorded against this file:`
@@ -95,7 +97,7 @@ function headsUpMessage(hits: MemoryEntry[], base: string): string {
   }
   lines.push('')
   lines.push('> Nudge, not block. Apply if it still holds; proceed if not.')
-  return safeTruncate(lines.join('\n'), MAX_CHARS)
+  return safeTruncate(lines.join('\n'), MAX_CHARS, undefined, TAIL_CHARS)
 }
 
 async function buildPreEditContext(
@@ -140,7 +142,7 @@ async function buildPreEditContext(
       fileLabel: base,
     })
     if (sot.action === 'warn' && sot.message) {
-      return safeTruncate(sot.message, MAX_CHARS)
+      return safeTruncate(sot.message, MAX_CHARS, undefined, TAIL_CHARS)
     }
   } catch {
     /* best-effort */
@@ -155,7 +157,7 @@ async function buildPreEditContext(
       verdict.memoryIds,
       verdict.reason
     )
-    return safeTruncate(verdict.message, MAX_CHARS)
+    return safeTruncate(verdict.message, MAX_CHARS, undefined, TAIL_CHARS)
   }
 
   // mode=off or gate none: classic heads-up (deny already handled in decide)
