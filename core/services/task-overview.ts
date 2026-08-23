@@ -9,6 +9,7 @@
  */
 
 import type { CurrentTask, TaskHarness, WorkspaceTask } from '../schemas/state'
+import { prjctDb } from '../storage/database'
 import { stateStorage } from '../storage/state-storage'
 import { getTaskPipelineState, type TaskPipelineState } from '../storage/task-pipeline-storage'
 import { runGit } from '../utils/exec'
@@ -96,6 +97,35 @@ async function pruneOrphanedWorkspaceTasks(
  * workspaceId from `projectPath`; the main worktree maps onto the singular
  * currentTask, child worktrees onto their activeTasks[] slot.
  */
+/** Task statuses that mean the cycle is over. */
+const TERMINAL_STATUS = new Set(['completed', 'done', 'shipped', 'cancelled', 'archived'])
+
+/**
+ * True when the stored `currentTask` pointer names a cycle that has already
+ * finished.
+ *
+ * `currentTask` is a pointer with no status of its own, and closing a cycle
+ * does not clear it — so every consumer kept announcing "Active work cycle:
+ * <finished cycle>" while `prjct prime`, which reads the real status, said
+ * "No open cycle". The tasks row is authoritative; check it before surfacing
+ * the pointer as live. Any read failure surfaces the task, matching the old
+ * behaviour rather than hiding real work.
+ */
+function isFinished(projectId: string, taskId: string | undefined): boolean {
+  if (!taskId) return false
+  try {
+    const row = prjctDb.get<{ status: string | null; completed_at: string | null }>(
+      projectId,
+      'SELECT status, completed_at FROM tasks WHERE id = ? LIMIT 1',
+      taskId
+    )
+    if (!row) return false
+    return Boolean(row.completed_at) || TERMINAL_STATUS.has((row.status ?? '').toLowerCase())
+  } catch {
+    return false
+  }
+}
+
 export async function collectActiveTasks(
   projectId: string,
   projectPath: string
@@ -109,8 +139,11 @@ export async function collectActiveTasks(
   const snapshot = await stateStorage.getTaskSnapshot(projectId)
 
   // Main worktree task (singular currentTask), surfaced as the `main` workspace.
+  // A finished cycle is not an active one, however long its pointer lingers.
   const mainTask = snapshot.currentTask
-  if (mainTask) {
+  // `mainTaskRaw` still exposes the pointer for callers that want it; only the
+  // ACTIVE view is filtered, because a finished cycle is not active work.
+  if (mainTask && !isFinished(projectId, mainTask.id)) {
     const { shortId, label } = labelFor(MAIN_WORKSPACE_ID, mainTask.branch)
     views.push({
       id: mainTask.id,

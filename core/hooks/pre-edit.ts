@@ -13,9 +13,9 @@ import { deriveTitle, flatDetail, preventiveLabel } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
 import {
   budgetExceeded,
-  CONFLICT_HARD_CAP_MS,
   CONFLICT_RECALL_LIMIT,
   candidatesFromPreventive,
+  conflictHardCapMs,
   decisionConflictVerdict,
   loadConflictOverrides,
   recordConflictEvent,
@@ -110,7 +110,15 @@ async function buildPreEditContext(
   if (!config?.projectId) return null
 
   const hits = recallPreventiveOnce(config.projectId, filePath)
-  if (budgetExceeded(started)) return null
+  // Fail-open is correct; failing open SILENTLY is not. Someone who chose
+  // conflictMode 'strict' asked for a hard gate, and a quiet pass lets them
+  // edit over a decision in force believing the gate cleared them. Say the
+  // gate did not run — as context, never as a deny.
+  if (budgetExceeded(started)) {
+    return conflictModeWithWeakModel(config) === 'strict'
+      ? `# prjct: conflict gate skipped\nPreventive recall on \`${filePath}\` exceeded its ${conflictHardCapMs()}ms budget, so this edit was NOT checked against decisions in force. The edit is not blocked. Re-run it to retry the check, or raise \`PRJCT_CONFLICT_HARD_CAP_MS\` if this machine is consistently slower than the budget.`
+      : null
+  }
   if (hits.length === 0) return null
 
   void recordSurfacedForActiveTask(
@@ -200,11 +208,15 @@ async function decideHardStop(
     }
 
     if (!filePath) return null
-    if (budgetExceeded(started, CONFLICT_HARD_CAP_MS)) return null
+    // Budget exhaustion NEVER denies — an edit must not be blocked because
+    // recall was slow. The skip is reported through context instead
+    // (`buildPreEditContext`), so the author learns the gate did not run
+    // without being stopped from working.
+    if (budgetExceeded(started)) return null
 
     const hits = recallPreventiveOnce(config.projectId, filePath)
     if (hits.length === 0) return null
-    if (budgetExceeded(started, CONFLICT_HARD_CAP_MS)) return null
+    if (budgetExceeded(started)) return null
 
     const overrides = loadConflictOverrides(config.projectId)
     const base = filePath.split('/').pop() ?? filePath
