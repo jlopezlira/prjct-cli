@@ -53,7 +53,24 @@ async function runWith(toolInput: Record<string, unknown>, sessionId?: string): 
   return chunks.join('')
 }
 
+/**
+ * The gate fails open past its budget (300ms by default). Under a loaded
+ * full-suite run this recall took 852ms, so the deny never fired — the test
+ * was measuring the machine, not the contract. Give it room, and RESTORE the
+ * original afterwards: bun shares one process across files, so leaving the
+ * variable set silently rewrites the budget for every later suite.
+ */
+const ROOMY_BUDGET = '30000'
+const ORIGINAL_BUDGET = process.env.PRJCT_CONFLICT_HARD_CAP_MS
+
 beforeEach(freshProject)
+beforeEach(() => {
+  process.env.PRJCT_CONFLICT_HARD_CAP_MS = ROOMY_BUDGET
+})
+afterEach(() => {
+  if (ORIGINAL_BUDGET === undefined) delete process.env.PRJCT_CONFLICT_HARD_CAP_MS
+  else process.env.PRJCT_CONFLICT_HARD_CAP_MS = ORIGINAL_BUDGET
+})
 afterEach(async () => {
   if (fixture.projectPath) {
     await fs.rm(fixture.projectPath, { recursive: true, force: true })
@@ -137,6 +154,53 @@ describe('pre-edit hook', () => {
     expect(out).toContain('deny')
     expect(out).toContain('conflict deny')
     expect(out).toContain('clone before writing')
+  })
+
+  // Fail-open is correct — a slow recall must never block an edit. Fail-open
+  // SILENTLY is not: someone who chose 'strict' asked for a hard gate, and a
+  // quiet pass lets them edit over a decision in force believing it cleared.
+  test('conflictMode strict: reports a skipped gate as context, never a deny', async () => {
+    process.env.PRJCT_CONFLICT_HARD_CAP_MS = '0'
+    try {
+      await configManager.writeConfig(fixture.projectPath, {
+        projectId: fixture.projectId,
+        dataPath: path.join(fixture.projectPath, '.prjct-data'),
+        judgment: { conflictMode: 'strict' },
+      } as Parameters<typeof configManager.writeConfig>[1])
+      await projectMemory.remember(fixture.projectPath, {
+        type: 'gotcha',
+        content: 'this module mutates shared state — clone before writing',
+        tags: { file: 'core/state.ts' },
+      })
+      const out = await runWith({ file_path: '/abs/repo/core/state.ts' })
+      expect(out).toContain('conflict gate skipped')
+      expect(out).toContain('NOT checked against decisions in force')
+      expect(out).toContain('PRJCT_CONFLICT_HARD_CAP_MS')
+      // Slowness must never block an edit.
+      expect(out).not.toContain('permissionDecision')
+    } finally {
+      process.env.PRJCT_CONFLICT_HARD_CAP_MS = ROOMY_BUDGET
+    }
+  })
+
+  test('a non-strict mode still passes quietly when the budget runs out', async () => {
+    process.env.PRJCT_CONFLICT_HARD_CAP_MS = '0'
+    try {
+      await configManager.writeConfig(fixture.projectPath, {
+        projectId: fixture.projectId,
+        dataPath: path.join(fixture.projectPath, '.prjct-data'),
+        judgment: { conflictMode: 'advisory' },
+      } as Parameters<typeof configManager.writeConfig>[1])
+      await projectMemory.remember(fixture.projectPath, {
+        type: 'gotcha',
+        content: 'this module mutates shared state — clone before writing',
+        tags: { file: 'core/state.ts' },
+      })
+      const out = await runWith({ file_path: '/abs/repo/core/state.ts' })
+      expect(out).not.toContain('conflict gate skipped')
+    } finally {
+      process.env.PRJCT_CONFLICT_HARD_CAP_MS = ROOMY_BUDGET
+    }
   })
 
   test('matches by basename when the tagged path is relative', async () => {

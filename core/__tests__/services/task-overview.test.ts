@@ -153,3 +153,54 @@ describe('zombie workspace-task sweep', () => {
     expect(archiveStorage.getArchived(fixture.projectId, 'workspace_task')).toHaveLength(0)
   })
 })
+
+describe('a finished cycle is not an active one', () => {
+  // `currentTask` is a pointer with no status of its own, and closing a cycle
+  // does not clear it — so every consumer kept announcing
+  // "Active work cycle: <finished cycle>" while `prjct prime`, reading the
+  // real status, said "No open cycle". Two prjct surfaces disagreeing about
+  // whether the user has work in flight.
+  const startMain = async (id: string) =>
+    stateStorage.startTask(fixture.projectId, {
+      id,
+      description: 'closed work',
+      sessionId: 's-done',
+    } as Parameters<typeof stateStorage.startTask>[1])
+
+  it('drops the main cycle from the active view once its row is completed', async () => {
+    await startMain('done-1')
+    expect((await collectActiveTasks(fixture.projectId, fixture.projectPath)).current?.id).toBe(
+      'done-1'
+    )
+
+    prjctDb.run(
+      fixture.projectId,
+      "UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
+      new Date().toISOString(),
+      'done-1'
+    )
+
+    const ov = await collectActiveTasks(fixture.projectId, fixture.projectPath)
+    expect(ov.current).toBeNull()
+    expect(ov.all).toHaveLength(0)
+    expect(formatActiveTaskList(ov)).toBe('No active work cycle.')
+  })
+
+  it('still exposes the raw pointer, which callers use for turn counters', async () => {
+    await startMain('done-2')
+    prjctDb.run(
+      fixture.projectId,
+      "UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ?",
+      new Date().toISOString(),
+      'done-2'
+    )
+    const ov = await collectActiveTasks(fixture.projectId, fixture.projectPath)
+    expect(ov.mainTaskRaw?.id).toBe('done-2')
+  })
+
+  it('keeps an in-progress cycle visible', async () => {
+    await startMain('live-1')
+    const ov = await collectActiveTasks(fixture.projectId, fixture.projectPath)
+    expect(ov.current?.id).toBe('live-1')
+  })
+})

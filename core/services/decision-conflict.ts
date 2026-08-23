@@ -18,8 +18,30 @@ export type ConflictMode = 'off' | 'advisory' | 'strict'
 export type ConflictAction = 'none' | 'warn' | 'deny'
 export type ConflictConfidence = 'high' | 'low'
 
-/** Hard wall-clock cap for pre-edit conflict/preventive path (ms). */
-export const CONFLICT_HARD_CAP_MS = 300
+/**
+ * Hard wall-clock cap for the pre-edit conflict/preventive path (ms).
+ *
+ * Overridable via `PRJCT_CONFLICT_HARD_CAP_MS`. A fixed 300ms decides, at
+ * runtime and invisibly, whether a strict gate fires at all: on a loaded
+ * machine, a cold disk, or a large store the recall overruns it and the deny
+ * never happens. That is a threshold silently changing behaviour — the thing
+ * a user cannot see, reproduce, or tune. Making it settable also lets the
+ * test that asserts the deny be deterministic instead of load-dependent.
+ */
+export const DEFAULT_CONFLICT_HARD_CAP_MS = 300
+
+export function conflictHardCapMs(): number {
+  const raw = Number(process.env.PRJCT_CONFLICT_HARD_CAP_MS)
+  // 0 is valid and means 'treat the budget as already spent' — the only
+  // way to exercise the fail-open path deterministically, since the work
+  // itself is sub-millisecond.
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_CONFLICT_HARD_CAP_MS
+}
+
+/** @deprecated Read `conflictHardCapMs()` — a constant captured at import time
+ *  cannot be changed without restarting, which matters for the long-lived
+ *  daemon and makes the budget untestable. */
+export const CONFLICT_HARD_CAP_MS = DEFAULT_CONFLICT_HARD_CAP_MS
 /** Max preventive entries on the hot path. */
 export const CONFLICT_RECALL_LIMIT = 3
 
@@ -273,8 +295,8 @@ export function candidatesFromPreventive(
 /**
  * Fail-open timer: if elapsed since `startedAt` exceeds hard cap, treat as timeout.
  */
-export function budgetExceeded(startedAt: number, hardCapMs = CONFLICT_HARD_CAP_MS): boolean {
-  return Date.now() - startedAt > hardCapMs
+export function budgetExceeded(startedAt: number, hardCapMs = conflictHardCapMs()): boolean {
+  return Date.now() - startedAt >= hardCapMs
 }
 
 function truncate(s: string, n: number): string {
