@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.8.1] - 2026-08-22
+
+### Added
+- fix: stop reporting a finished cycle as active and a skipped gate as clean
+
 ## [4.8.0] - 2026-08-21
 
 ### Added
