@@ -4,8 +4,16 @@
 
 ## [4.8.1] - 2026-08-22
 
-### Added
-- fix: stop reporting a finished cycle as active and a skipped gate as clean
+### Fixed
+- A completed work cycle no longer shows as the active one. `currentTask` is a
+  pointer with no status and closing a cycle did not clear it, so every surface
+  announced "Active work cycle: <finished cycle>" while `prjct prime` correctly
+  reported none.
+- `conflictMode: strict` no longer stops enforcing in silence. Past its 300ms
+  budget the pre-edit gate fails open — correct, an edit must never be blocked
+  because recall was slow — but it now says the edit was NOT checked against
+  decisions in force instead of passing quietly. The budget is settable via
+  `PRJCT_CONFLICT_HARD_CAP_MS`.
 
 ## [4.8.0] - 2026-08-21
 
