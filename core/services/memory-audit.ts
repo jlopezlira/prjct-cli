@@ -17,6 +17,7 @@ import { isModelMemory } from '../memory/entries'
 import { projectMemory } from '../memory/project-memory'
 import { computeSubstrateHealth } from '../memory/substrate-health'
 import prjctDb from '../storage/database'
+import { findRepeatMissedEntries } from './memory-index'
 import { evaluateRetentionShared } from './retention'
 import { DEFAULT_ARCHIVE_PRUNE_DAYS } from './retention/purge'
 
@@ -45,6 +46,9 @@ export interface MemoryAudit {
   wouldDelete: number
   /** Mean retention confidence (0–1) across the evaluated corpus. */
   avgConfidence: number
+  /** Repeat-missed traps that should become mechanical constraints, not reminders. */
+  escalation: Array<{ id: string; count: number; cue: string }>
+
   signalRatio: number
   slopPct: number
   gated: boolean
@@ -98,6 +102,14 @@ export function buildMemoryAudit(
       ? 1
       : Math.round((scores.reduce((s, x) => s + x, 0) / scores.length / 100) * 100) / 100
 
+  // Uncle Bob escalation: a trap missed repeatedly is a signal to change the
+  // SYSTEM (lint/test/CI or architecture), not to remember harder.
+  const escalation = findRepeatMissedEntries(projectId, new Set(), 5).map(({ entry, count }) => ({
+    id: entry.id,
+    count,
+    cue: entry.content.replace(/\s+/g, ' ').trim().slice(0, 90),
+  }))
+
   const sets = engagementSets(projectId)
   const engagedCount = entries.filter((e) => sets.engaged.has(e.id)).length
   const citedCount = entries.filter((e) => sets.cited.has(e.id)).length
@@ -138,6 +150,7 @@ export function buildMemoryAudit(
     wouldArchive: retention.archive,
     wouldDelete: retention.delete,
     avgConfidence,
+    escalation,
     signalRatio: health.signalRatio,
     slopPct,
     gated,
@@ -164,6 +177,16 @@ export function renderMemoryAuditMd(audit: MemoryAudit): string {
     `- **confidence:** avg ${audit.avgConfidence} (persisted per-entry; drives archive → ${DEFAULT_ARCHIVE_PRUNE_DAYS}d TTL → delete)`,
     `- **auto-cleanup would remove next:** ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
     '',
+    ...(audit.escalation.length > 0
+      ? [
+          '### Constraint candidates — enforce mechanically, then retire the memory',
+          ...audit.escalation.map(
+            (e) =>
+              `- ${e.id} · missed ${e.count}× · "${e.cue}" → add a lint/test/CI guard, then \`prjct remember decision "…enforced by <check>" --tags supersedes:${e.id}\``
+          ),
+          '',
+        ]
+      : []),
     `**Verdict: ${verdictLine(audit)}**`,
     '',
     audit.passed

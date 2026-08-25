@@ -73,6 +73,8 @@ interface ShipOptions {
   geometry?: 'direct' | 'single' | 'split'
   /** Skip precision-judgment ledger gate (explicit consent — not --no-spec-gate) */
   noJudgmentGate?: boolean
+  /** Skip the machine gauntlet gate (explicit consent — the override is recorded) */
+  noGauntlet?: boolean
 }
 
 export class ShippingCommands extends PrjctCommandsBase {
@@ -364,6 +366,38 @@ export class ShippingCommands extends PrjctCommandsBase {
           }
         }
         /* judgment gate is best-effort — never crash ship on lookup */
+      }
+
+      // Machine gauntlet (Uncle Bob): the work counts when the machine says
+      // so. A fresh RED receipt always blocks; missing/stale blocks under
+      // code-strict and warns otherwise; --no-gauntlet overrides, recorded.
+      try {
+        const {
+          gauntletShipVerdict,
+          projectHasGauntletCommands,
+          readGauntletReceipt,
+          recordGauntletOverride,
+        } = await import('../services/gauntlet')
+        const { gitStdout } = await import('../utils/exec')
+        const headNow = await gitStdout(projectPath, ['rev-parse', 'HEAD'])
+          .then((s) => s?.trim() || null)
+          .catch(() => null)
+        const stamped = readGauntletReceipt(projectId)
+        const verdict = gauntletShipVerdict({
+          receipt: stamped?.data ?? null,
+          nowMs: Date.now(),
+          headSha: headNow,
+          hasCommands: await projectHasGauntletCommands(projectPath),
+          strict: isCodeStrictPack,
+          override: options.noGauntlet === true,
+        })
+        if (options.noGauntlet === true) recordGauntletOverride(projectId)
+        if (verdict.blocked) {
+          return { success: false, error: verdict.message ?? 'Machine gauntlet gate blocked.' }
+        }
+        if (verdict.message) console.log(verdict.message)
+      } catch {
+        /* gauntlet gate is best-effort — never crash ship on lookup */
       }
 
       // Gates passed — complete the task for THIS worktree (main → currentTask,

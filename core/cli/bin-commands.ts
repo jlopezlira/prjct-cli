@@ -302,6 +302,15 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const cmd = new HealthCommands()
     const result = await cmd.health(null, process.cwd(), { md: mdMode })
     process.exitCode = result.success ? 0 : 1
+  } else if (args[0] === 'gauntlet') {
+    // `prjct gauntlet [--md]` — run the project's registered verify commands
+    // (typecheck · lint · test) as a recorded machine gate: receipt bound to
+    // git HEAD in SQLite; `ship` demands it fresh and green.
+    const mdMode = args.includes('--md')
+    const { GauntletCommands } = await import('../commands/gauntlet')
+    const cmd = new GauntletCommands()
+    const result = await cmd.run(process.cwd(), { md: mdMode })
+    process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'retro') {
     // `prjct retro [window]` — gstack-style weekly engineering retro.
     // Window defaults to 7d; accepts NNh / NNd up to 365d.
