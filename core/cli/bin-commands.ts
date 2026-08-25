@@ -309,7 +309,11 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const mdMode = args.includes('--md')
     const { GauntletCommands } = await import('../commands/gauntlet')
     const cmd = new GauntletCommands()
-    const result = await cmd.run(process.cwd(), { md: mdMode })
+    const result =
+      args[1] === 'set'
+        ? await cmd.set(args[2] ?? null, args.slice(3).join(' ').trim() || null, process.cwd())
+        : await cmd.run(process.cwd(), { md: mdMode })
+    if (!result.success && result.error) console.error(result.error)
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'retro') {
     // `prjct retro [window]` — gstack-style weekly engineering retro.

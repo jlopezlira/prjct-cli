@@ -141,6 +141,28 @@ describe('runGauntlet', () => {
     expect(result.vacuous).toBe(true)
   })
 
+  it('gates a language with ZERO hardcoded support, straight from its CI', async () => {
+    // A Swift package: no manifest support, no config, nobody taught prjct the
+    // language. Its own CI names the verify step, so the gate is real anyway.
+    // (The command is a harmless stand-in for `swift test` so the assertion
+    // does not depend on a Swift toolchain being installed on the runner.)
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'Package.swift'),
+      '// swift-tools-version:5.9\n'
+    )
+    await fs.mkdir(path.join(fixture.projectDir, '.github', 'workflows'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectDir, '.github', 'workflows', 'ci.yml'),
+      ['jobs:', '  ci:', '    steps:', '      - name: Test', '        run: /bin/echo ok'].join('\n')
+    )
+
+    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+
+    expect(result.vacuous).toBe(false) // the gate is NOT hollow for an unknown language
+    expect(result.checks.map((c) => c.command)).toEqual(['/bin/echo ok'])
+    expect(result.passed).toBe(true)
+  })
+
   it('really EXECUTES a non-Node ecosystem end to end (make)', async () => {
     // The detection matrix only proves the right strings come back. This proves
     // the whole path — detect → run → receipt — works outside package.json,
@@ -255,7 +277,9 @@ describe('gauntletShipVerdict', () => {
       override: false,
     })
     expect(vacuous.blocked).toBe(false)
-    expect(vacuous.message).toContain('vacuous')
+    expect(vacuous.message).toMatch(/vacuous/i)
+    // …and it tells the AGENT how to make the gate real for any language.
+    expect(vacuous.message).toContain('prjct gauntlet set')
   })
 })
 

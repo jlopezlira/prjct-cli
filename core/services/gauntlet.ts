@@ -51,6 +51,18 @@ export interface GauntletCheck {
   unavailable?: boolean
 }
 
+/**
+ * Addressed to the AGENT, not the human: when neither the manifest nor CI
+ * names a verify command, the agent reading the repo is the one thing that
+ * always knows the language, so it registers the command itself. That is what
+ * makes the gate real for an ecosystem nobody hardcoded, without anyone having
+ * to remember a config file.
+ */
+const VACUOUS_BOOTSTRAP =
+  'Gauntlet is VACUOUS: no verify commands found in the manifest or CI — NOTHING machine-checked this work. ' +
+  'AGENT: identify how this project verifies itself (its test/lint/typecheck command, whatever the language) ' +
+  'and register it now — `prjct gauntlet set test "<command>"` — then re-run `prjct gauntlet`.'
+
 /** POSIX "command not found"; the shell reports it for any missing binary. */
 const EXIT_COMMAND_NOT_FOUND = 127
 /** Toolchain present but the subcommand/component is not (e.g. clippy, a missing gem). */
@@ -88,13 +100,32 @@ async function gauntletCommands(
     return declared.map(({ kind, command }) => ({ kind, command: command.trim() }))
   }
 
-  const facts = await detectVerifiedCommands(projectPath)
   const byKind = new Map<string, string>()
+
+  // Fast path: ecosystems with a manifest whose toolchain we know.
+  const facts = await detectVerifiedCommands(projectPath)
   for (const cmd of facts.commands) {
     if (cmd.mutating) continue
     if (!GAUNTLET_KINDS.includes(cmd.kind as (typeof GAUNTLET_KINDS)[number])) continue
     if (!byKind.has(cmd.kind)) byKind.set(cmd.kind, cmd.command)
   }
+
+  // General path: the repo's OWN CI already names the commands it gates on, in
+  // whatever language it is written in. This is what keeps the gate real for
+  // ecosystems no table will ever enumerate — it fills only the kinds the
+  // manifest could not supply, so a Node repo keeps its clean package scripts.
+  const missing = GAUNTLET_KINDS.filter((kind) => !byKind.has(kind))
+  if (missing.length > 0) {
+    try {
+      const { detectCiVerifyCommands } = await import('./ci-verify-commands')
+      for (const ci of await detectCiVerifyCommands(projectPath)) {
+        if (!byKind.has(ci.kind)) byKind.set(ci.kind, ci.command)
+      }
+    } catch {
+      /* no CI, unreadable CI — the gate degrades to whatever the manifest gave */
+    }
+  }
+
   return GAUNTLET_KINDS.flatMap((kind) => {
     const command = byKind.get(kind)
     return command ? [{ kind, command }] : []
@@ -230,6 +261,43 @@ export function readGauntletReceipt(
   }
 }
 
+/**
+ * Persist a verify command for this project — how the AGENT teaches the gate a
+ * language nobody hardcoded. The agent is already reading the repo, so it can
+ * name the command (`swift test`, `stack test`, `zig build test`) and register
+ * it here; no human has to hand-edit JSON or remember anything.
+ */
+export async function setGauntletCommand(
+  projectPath: string,
+  kind: string,
+  command: string
+): Promise<{ ok: boolean; error?: string }> {
+  const normalizedKind = kind.trim().toLowerCase()
+  if (!GAUNTLET_KINDS.includes(normalizedKind as (typeof GAUNTLET_KINDS)[number])) {
+    return { ok: false, error: `kind must be one of: ${GAUNTLET_KINDS.join(', ')}` }
+  }
+  const normalizedCommand = command.trim()
+  if (!normalizedCommand) return { ok: false, error: 'command is empty' }
+  try {
+    const config = await configManager.readConfig(projectPath)
+    if (!config) return { ok: false, error: 'No prjct project here — run `prjct init` first.' }
+    const existing = (config.gauntlet?.commands ?? []).filter((c) => c.kind !== normalizedKind)
+    await configManager.writeConfig(projectPath, {
+      ...config,
+      gauntlet: {
+        ...config.gauntlet,
+        commands: [
+          ...existing,
+          { kind: normalizedKind as 'typecheck' | 'lint' | 'test', command: normalizedCommand },
+        ],
+      },
+    })
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export function recordGauntletOverride(projectId: string): void {
   try {
     prjctDb.appendEvent(projectId, GAUNTLET_OVERRIDE_EVENT, { at: new Date().toISOString() })
@@ -278,10 +346,7 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
   if (!input.hasCommands) {
     return {
       blocked: false,
-      message:
-        'Gauntlet is vacuous: no verify commands detected — NOTHING machine-checked this ship. ' +
-        'Declare them for any language in .prjct/prjct.config.json: ' +
-        '"gauntlet": { "commands": [{ "kind": "test", "command": "<your test command>" }] }',
+      message: VACUOUS_BOOTSTRAP,
     }
   }
   const fresh = receiptFresh(input)
@@ -432,7 +497,7 @@ export function renderGauntletMd(receipt: GauntletReceipt): string {
         ]
       : []),
     receipt.vacuous
-      ? '_No verify commands detected — this pass proves NOTHING. Declare them for any language in `.prjct/prjct.config.json`: `"gauntlet": { "commands": [{ "kind": "test", "command": "…" }] }`._'
+      ? `_${VACUOUS_BOOTSTRAP}_`
       : receipt.passed
         ? '_Machine-verified. The receipt gates `prjct ship` for this HEAD (30min)._'
         : '_RED — the work does not count yet. Fix and re-run._',
