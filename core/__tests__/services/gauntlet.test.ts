@@ -9,6 +9,7 @@ import {
   gauntletDoneWarning,
   gauntletShipVerdict,
   readGauntletReceipt,
+  renderGauntletMd,
   runGauntlet,
   warmGauntletInBackground,
 } from '../../services/gauntlet'
@@ -57,6 +58,114 @@ describe('runGauntlet', () => {
     // Receipt persisted and readable.
     const stored = readGauntletReceipt(fixture.projectId)
     expect(stored?.data.vacuous).toBe(true)
+  })
+
+  it('runs DECLARED commands for a language it cannot detect — the agnosticism guarantee', async () => {
+    // Swift: zero detection support today. Declaring commands must still make
+    // the gate real, or "language-agnostic" is a promise instead of a mechanism.
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'Package.swift'),
+      '// swift-tools-version:5.9\n'
+    )
+    await fs.mkdir(path.join(fixture.projectDir, '.prjct'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectDir, '.prjct', 'prjct.config.json'),
+      JSON.stringify({
+        gauntlet: { commands: [{ kind: 'test', command: 'true' }] },
+      })
+    )
+
+    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+
+    expect(result.vacuous).toBe(false)
+    expect(result.passed).toBe(true)
+    expect(result.checks.map((c) => c.command)).toEqual(['true'])
+  })
+
+  it('declared commands REPLACE detection, and a red declared check blocks', async () => {
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'package.json'),
+      JSON.stringify({ name: 'fixture', scripts: { test: 'true' } })
+    )
+    await fs.mkdir(path.join(fixture.projectDir, '.prjct'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectDir, '.prjct', 'prjct.config.json'),
+      JSON.stringify({ gauntlet: { commands: [{ kind: 'test', command: 'false' }] } })
+    )
+
+    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+
+    // The declared `false` ran, not the detected `true`.
+    expect(result.checks.map((c) => c.command)).toEqual(['false'])
+    expect(result.passed).toBe(false)
+  })
+
+  it('a tool that is not installed NEVER fails the gate (client environments differ)', async () => {
+    // The client-hostile bug this guards: a Rust repo without `clippy`, a Java
+    // repo without `mvn` on PATH, a Ruby repo before `bundle install` — the
+    // command cannot RUN, which is an environment gap, not a code defect. A
+    // ship must not be blocked by it, and it must never be reported as verified.
+    await fs.mkdir(path.join(fixture.projectDir, '.prjct'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectDir, '.prjct', 'prjct.config.json'),
+      JSON.stringify({
+        gauntlet: {
+          commands: [
+            { kind: 'test', command: 'true' },
+            { kind: 'lint', command: 'prjct-no-such-binary-xyz' },
+          ],
+        },
+      })
+    )
+
+    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+
+    const lint = result.checks.find((c) => c.kind === 'lint')
+    expect(lint?.unavailable).toBe(true)
+    expect(lint?.outcome).toBe('unavailable')
+    expect(result.passed).toBe(true) // not blocked by a missing tool
+    expect(result.vacuous).toBe(false) // the `true` test really ran
+    // …and the receipt says so out loud rather than faking a clean green.
+    expect(renderGauntletMd(result)).toContain('could not run here')
+  })
+
+  it('is vacuous — never green — when NOTHING could run', async () => {
+    await fs.mkdir(path.join(fixture.projectDir, '.prjct'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectDir, '.prjct', 'prjct.config.json'),
+      JSON.stringify({
+        gauntlet: { commands: [{ kind: 'test', command: 'prjct-no-such-binary-xyz' }] },
+      })
+    )
+    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+    expect(result.vacuous).toBe(true)
+  })
+
+  it('really EXECUTES a non-Node ecosystem end to end (make)', async () => {
+    // The detection matrix only proves the right strings come back. This proves
+    // the whole path — detect → run → receipt — works outside package.json,
+    // using a toolchain every POSIX box has.
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'Makefile'),
+      'test:\n\t@echo running real make target\n'
+    )
+
+    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+
+    expect(result.vacuous).toBe(false)
+    expect(result.checks.map((c) => c.command)).toEqual(['make test'])
+    expect(result.checks[0].unavailable).toBeFalsy()
+    expect(result.passed).toBe(true)
+
+    // And a red make target really blocks.
+    await fs.writeFile(path.join(fixture.projectDir, 'Makefile'), 'test:\n\t@exit 3\n')
+    const red = await runGauntlet(fixture.projectDir, fixture.projectId)
+    expect(red.passed).toBe(false)
+    // make reports its OWN failure code (2) when a recipe fails, not the
+    // recipe's — the point is a real non-zero exit, classified as a defect
+    // (not as an absent tool).
+    expect(red.checks[0].outcome).toMatch(/^exit:/)
+    expect(red.checks[0].unavailable).toBeFalsy()
   })
 
   it('runs detected commands and goes RED on a failing check', async () => {

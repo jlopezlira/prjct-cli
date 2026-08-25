@@ -171,6 +171,15 @@ export interface LocalConfig {
    * Unset / `apply` runs archive+delete on sync (capped). `dry-run` only
    * reports. `off` skips the retention phase entirely.
    */
+  /**
+   * Machine gauntlet. Detection covers the common ecosystems; declaring
+   * commands here is the universal escape hatch — ANY language, any runner,
+   * including one prjct has never heard of. Declared commands REPLACE
+   * detection, so the project owns its own definition of "verified".
+   */
+  gauntlet?: {
+    commands?: Array<{ kind: 'typecheck' | 'lint' | 'test'; command: string }>
+  }
   retention?: {
     mode?: 'off' | 'dry-run' | 'apply'
     /** Max archive actions per full sync (default 100). */

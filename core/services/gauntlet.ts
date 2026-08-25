@@ -11,6 +11,7 @@
  * said loudly — never a fake green.
  */
 
+import configManager from '../infrastructure/config-manager'
 import prjctDb from '../storage/database'
 import { gitStdout, listChangedFiles, matchProc, runProc } from '../utils/exec'
 import { detectVerifiedCommands } from './project-command-facts'
@@ -40,7 +41,21 @@ export interface GauntletCheck {
   durationMs: number
   /** Output tail on failure — enough to see why, never the full log. */
   detail?: string
+  /**
+   * The command could not RUN here (binary absent, toolchain component not
+   * installed, deps not fetched) — an environment gap, never a code defect.
+   * A ship must not be blocked because `cargo clippy` or `mvn` is missing on
+   * this machine, so these do not fail the gate — but they are reported
+   * loudly, because a receipt that hides what it skipped is a fake green.
+   */
+  unavailable?: boolean
 }
+
+/** POSIX "command not found"; the shell reports it for any missing binary. */
+const EXIT_COMMAND_NOT_FOUND = 127
+/** Toolchain present but the subcommand/component is not (e.g. clippy, a missing gem). */
+const UNAVAILABLE_OUTPUT =
+  /command not found|no such (?:sub)?command|not installed|couldn't find|could not find command|is not recognized/i
 
 export interface GauntletReceipt {
   version: 1
@@ -56,6 +71,23 @@ export interface GauntletReceipt {
 async function gauntletCommands(
   projectPath: string
 ): Promise<Array<{ kind: string; command: string }>> {
+  // Declared commands win outright: detection can only cover ecosystems prjct
+  // knows, while `gauntlet.commands` makes the gate work for ANY language —
+  // including one nobody has taught it yet.
+  const declared = await (async () => {
+    try {
+      const config = await configManager.readConfig(projectPath)
+      return (config?.gauntlet?.commands ?? []).filter(
+        (entry) => typeof entry?.command === 'string' && entry.command.trim().length > 0
+      )
+    } catch {
+      return []
+    }
+  })()
+  if (declared.length > 0) {
+    return declared.map(({ kind, command }) => ({ kind, command: command.trim() }))
+  }
+
   const facts = await detectVerifiedCommands(projectPath)
   const byKind = new Map<string, string>()
   for (const cmd of facts.commands) {
@@ -107,14 +139,19 @@ async function runCheck(
   })
   return matchProc<GauntletCheck>(result, {
     ok: (r) => ({ kind, command, ok: true, outcome: 'ok', durationMs: r.durationMs }),
-    exit: (r) => ({
-      kind,
-      command,
-      ok: false,
-      outcome: `exit:${r.code ?? 'signal'}`,
-      durationMs: r.durationMs,
-      detail: `${r.stdout}\n${r.stderr}`.trim().slice(-OUTPUT_TAIL_CHARS),
-    }),
+    exit: (r) => {
+      const output = `${r.stdout}\n${r.stderr}`.trim()
+      const unavailable = r.code === EXIT_COMMAND_NOT_FOUND || UNAVAILABLE_OUTPUT.test(output)
+      return {
+        kind,
+        command,
+        ok: false,
+        unavailable,
+        outcome: unavailable ? 'unavailable' : `exit:${r.code ?? 'signal'}`,
+        durationMs: r.durationMs,
+        detail: output.slice(-OUTPUT_TAIL_CHARS),
+      }
+    },
     timeout: (r) => ({
       kind,
       command,
@@ -127,7 +164,8 @@ async function runCheck(
       kind,
       command,
       ok: false,
-      outcome: 'spawn',
+      unavailable: true, // the shell itself could not start it
+      outcome: 'unavailable',
       durationMs: r.durationMs,
       detail: r.cause.message,
     }),
@@ -159,8 +197,10 @@ export async function runGauntlet(
     ranAt: new Date().toISOString(),
     headSha: binding.headSha,
     dirty: binding.dirty,
-    passed: checks.every((c) => c.ok),
-    vacuous: commands.length === 0,
+    // An absent tool never fails the gate; it also never counts as verified —
+    // if NOTHING could run, the receipt is vacuous, not green.
+    passed: checks.every((c) => c.ok || c.unavailable),
+    vacuous: commands.length === 0 || checks.every((c) => c.unavailable),
     checks,
   }
 
@@ -239,7 +279,9 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
     return {
       blocked: false,
       message:
-        'Gauntlet is vacuous: no verify commands registered (typecheck/lint/test) — nothing machine-checked this ship.',
+        'Gauntlet is vacuous: no verify commands detected — NOTHING machine-checked this ship. ' +
+        'Declare them for any language in .prjct/prjct.config.json: ' +
+        '"gauntlet": { "commands": [{ "kind": "test", "command": "<your test command>" }] }',
     }
   }
   const fresh = receiptFresh(input)
@@ -367,8 +409,10 @@ export function renderGauntletMd(receipt: GauntletReceipt): string {
     ? `${receipt.headSha.slice(0, 8)}${receipt.dirty ? ' (dirty)' : ' (clean)'}`
     : 'no git'
   const rows = receipt.checks.map(
-    (c) => `| ${c.kind} | ${c.ok ? '✓' : `✗ ${c.outcome}`} | ${secs(c.durationMs)} |`
+    (c) =>
+      `| ${c.kind} | ${c.ok ? '✓' : c.unavailable ? '⊘ not installed here' : `✗ ${c.outcome}`} | ${secs(c.durationMs)} |`
   )
+  const unavailable = receipt.checks.filter((c) => c.unavailable)
   const failures = receipt.checks
     .filter((c) => !c.ok && c.detail)
     .map((c) => `**${c.kind}**\n\`\`\`\n${c.detail}\n\`\`\``)
@@ -381,8 +425,14 @@ export function renderGauntletMd(receipt: GauntletReceipt): string {
       ? ['| check | result | time |', '|---|---|---|', ...rows, '']
       : []),
     ...(failures.length > 0 ? [...failures, ''] : []),
+    ...(unavailable.length > 0
+      ? [
+          `⊘ **${unavailable.length} check(s) could not run here** (${unavailable.map((c) => c.kind).join(', ')}) — an absent tool is not a code defect, so the gate is not failed by it, but ${unavailable.length === receipt.checks.length ? 'NOTHING was verified' : 'those dimensions are unverified'}. Install the tool, or point the gate at what you do run via \`gauntlet.commands\`.`,
+          '',
+        ]
+      : []),
     receipt.vacuous
-      ? '_No verify commands registered — this pass proves nothing. Add typecheck/lint/test scripts._'
+      ? '_No verify commands detected — this pass proves NOTHING. Declare them for any language in `.prjct/prjct.config.json`: `"gauntlet": { "commands": [{ "kind": "test", "command": "…" }] }`._'
       : receipt.passed
         ? '_Machine-verified. The receipt gates `prjct ship` for this HEAD (30min)._'
         : '_RED — the work does not count yet. Fix and re-run._',
@@ -395,10 +445,12 @@ export function renderGauntletText(receipt: GauntletReceipt): string {
   const head = receipt.headSha ? receipt.headSha.slice(0, 8) : 'no-git'
   const lines = [`Gauntlet ${state} · HEAD ${head}${receipt.dirty ? ' (dirty)' : ''}`]
   for (const c of receipt.checks) {
-    lines.push(
-      `  ${c.ok ? '✓' : '✗'} ${c.kind.padEnd(9)} ${c.ok ? '' : c.outcome} ${secs(c.durationMs)}`
-    )
-    if (!c.ok && c.detail) lines.push(`      ${c.detail.split('\n').slice(-3).join('\n      ')}`)
+    const mark = c.ok ? '✓' : c.unavailable ? '⊘' : '✗'
+    const note = c.ok ? '' : c.unavailable ? 'not installed here (not a defect)' : c.outcome
+    lines.push(`  ${mark} ${c.kind.padEnd(9)} ${note} ${secs(c.durationMs)}`)
+    if (!c.ok && !c.unavailable && c.detail) {
+      lines.push(`      ${c.detail.split('\n').slice(-3).join('\n      ')}`)
+    }
   }
   if (receipt.vacuous) lines.push('  (no verify commands registered — nothing was checked)')
   return lines.join('\n')
