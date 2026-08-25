@@ -506,7 +506,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     })()
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'harness') {
-    // score | retrieval | instructions [window|set <id> <disposition>] | learn-from | list | use <rig>
+    // score | retrieval | audit | instructions [window|set <id> <disposition>] | learn-from | list | use <rig>
     const subcommand = args[1] ?? 'list'
     const { HarnessCommands } = await import('../commands/harness')
     const cmd = new HarnessCommands()
@@ -514,6 +514,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const result: { success: boolean; error?: string } = await (async () => {
       if (subcommand === 'score') return cmd.score(process.cwd(), { md: mdMode })
       if (subcommand === 'retrieval') return cmd.retrieval(process.cwd(), { md: mdMode })
+      if (subcommand === 'audit') return cmd.audit(process.cwd(), { md: mdMode })
       if (subcommand === 'instructions') {
         if (args[2] === 'set') {
           return cmd.instructionDisposition(args[3] ?? null, args[4] ?? null, process.cwd())
@@ -525,7 +526,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
       if (subcommand === 'list') return cmd.list({ md: mdMode })
       if (subcommand === 'use') return cmd.use(args[2] ?? null, process.cwd(), { md: mdMode })
       console.error(
-        `Unknown harness subcommand: ${subcommand}. Use: score, retrieval, instructions [24h|7d|14d|30d|set <id> <open|resolved|false-positive>], learn-from, list, use <rig>.`
+        `Unknown harness subcommand: ${subcommand}. Use: score, retrieval, audit, instructions [24h|7d|14d|30d|set <id> <open|resolved|false-positive>], learn-from, list, use <rig>.`
       )
       return { success: false, error: `unknown subcommand: ${subcommand}` }
     })()

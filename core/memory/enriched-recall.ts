@@ -145,21 +145,23 @@ export async function enrichedRecall(
       : []
   const entries = linked.length > 0 ? rerankedEntries.concat(linked) : rerankedEntries
 
-  // Attribution: surface for ship-credit; fetch for immediate usefulness
-  // (a deliberate recall is already proof of use).
+  // Attribution: record which entries were surfaced for the active task so a
+  // successful ship credits them (+SHIP). Deliberately NO per-entry fetch
+  // credit here — a broad recall returns many entries the agent never uses, so
+  // crediting all of them inflates the very "useful" signal retention consumes
+  // to decide what to keep. Usefulness is earned by a later citation (+REF) or
+  // a ship, not by the act of being surfaced by a query.
   try {
     const task = await stateStorage.getCurrentTask(projectId)
-    const now = new Date().toISOString()
     if (task?.id) {
       usefulnessService.recordSurfaced(
         projectId,
         entries.map((e) => e.id),
         task.id,
-        now,
+        new Date().toISOString(),
         { queryText: topic, surface: 'context-memory' }
       )
     }
-    for (const e of entries) usefulnessService.recordFetch(projectId, e.id, now)
   } catch {
     /* best-effort — attribution telemetry must never break a recall */
   }

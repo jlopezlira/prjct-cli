@@ -120,6 +120,26 @@ export class HarnessCommands extends PrjctCommandsBase {
     }
   }
 
+  /** `prjct harness audit` — the visible, fail-able memory relevance check. */
+  async audit(projectPath: string = process.cwd(), options: MdOption = {}): Promise<CommandResult> {
+    try {
+      const projectId = await configManager.getProjectId(projectPath)
+      if (!projectId) {
+        return { success: false, error: 'No prjct project found in the current directory.' }
+      }
+      const { buildMemoryAudit, renderMemoryAuditMd, renderMemoryAuditText } = await import(
+        '../services/memory-audit'
+      )
+      const report = buildMemoryAudit(projectId)
+      console.log(options.md ? renderMemoryAuditMd(report) : renderMemoryAuditText(report))
+      // success = threshold passed, so the dispatch exits non-zero on a failing
+      // audit and it works as a CI/lint gate. The report is already printed.
+      return { success: report.passed, ...report }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  }
+
   async score(projectPath: string = process.cwd(), options: MdOption = {}): Promise<CommandResult> {
     try {
       // Structural grade is machine-independent (CI/release). Live organic board
