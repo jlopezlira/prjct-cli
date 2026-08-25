@@ -2,7 +2,7 @@
   "url": "https://context7.com/prjct-app/cli",
   "public_key": "pk_SC4Izw8T9pMEgouCFeFWY",
   "projectTitle": "prjct-cli",
-  "description": "Open-source, local-first project memory and custom AI workflows for the coding agent you already use. Keeps decisions, gotchas, handoffs, and guardrails portable across Claude, Codex, OpenCode, Cursor, and more.",
+  "description": "Open-source, local-first agentic harness for the coding agent you already use: machine-verified ships (verify commands run as a recorded gate), preventive edit guards, and ranked project lookup with measured retrieval quality — portable across Claude, Codex, OpenCode, Cursor, and more.",
   "folders": ["docs"],
   "excludeFolders": [
     "output",

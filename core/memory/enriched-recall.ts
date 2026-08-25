@@ -19,6 +19,7 @@ import { stateStorage } from '../storage/state-storage'
 import type { MemoryEntry, MemoryType } from './entries'
 import { isModelMemory, matchesTags } from './entries'
 import { projectMemory } from './project-memory'
+import { rrfFuse } from './rank-fusion'
 
 /** Judgment types never dropped from inject solely for verdict=delete. */
 const PROTECTED_INJECT = new Set(['decision', 'gotcha', 'learning', 'fact', 'feedback', 'spec'])
@@ -68,24 +69,39 @@ export async function enrichedRecall(
       ? lexicalEntries
       : projectMemory.recall(projectId, { topic, types, tags, limit }).slice(0, limit)
 
-  // Semantic layer (opt-in): blend cosine-ranked matches AHEAD of lexical
-  // results so a cross-vocabulary hit ("oauth" → an entry about
-  // "authentication") surfaces. Best-effort: failures leave BM25 standing.
+  // Semantic layer (opt-in), fused by RANK not by prepending: a cross-vocabulary
+  // hit ("oauth" → an entry about "authentication") must be able to surface,
+  // but the old behavior put EVERY semantic hit ahead of BM25, so a weak
+  // semantic match outranked a strong lexical one. RRF makes an entry both legs
+  // rank decently beat one leg's lone favourite. Measured on this project's
+  // 1400 labeled pairs, held-out: nDCG 17.4% (BM25) / 23.2% (semantic alone) →
+  // 24.3% fused, MRR 13.5% / 16.3% → 18.3% (`prjct harness retrieval`).
+  // Best-effort: any failure leaves the lexical result standing.
   const semanticEntries = topic
     ? await (async () => {
         try {
           const config = await configManager.readConfig(projectPath)
           if (config && embeddingService.isEnabled(config)) {
             const semantic = await embeddingService.semanticSearch(projectId, topic, config, 10)
-            if (semantic.length > 0) {
-              const seen = new Set(backfilledEntries.map((entry) => entry.id))
-              const fresh = semantic.filter(
-                (entry) =>
-                  !seen.has(entry.id) &&
-                  (!types || types.includes(entry.type as MemoryType)) &&
-                  (!tags || matchesTags(entry, tags))
-              )
-              return [...fresh, ...backfilledEntries].slice(0, limit)
+            const eligible = semantic.filter(
+              (entry) =>
+                (!types || types.includes(entry.type as MemoryType)) &&
+                (!tags || matchesTags(entry, tags))
+            )
+            if (eligible.length > 0) {
+              const byId = new Map(backfilledEntries.map((entry) => [entry.id, entry]))
+              for (const entry of eligible) {
+                if (!byId.has(entry.id)) byId.set(entry.id, entry)
+              }
+              return rrfFuse([
+                backfilledEntries.map((entry) => entry.id),
+                eligible.map((entry) => entry.id),
+              ])
+                .flatMap((id) => {
+                  const entry = byId.get(id)
+                  return entry ? [entry] : []
+                })
+                .slice(0, limit)
             }
           }
           return backfilledEntries
