@@ -11,17 +11,17 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { getErrorMessage, isNotFoundError } from '../types/fs'
 import { fileExists } from '../utils/file-helper'
+import { resolveUserPath } from './user-home'
 
 class TemplateGenerator {
   private commandsPath: string
 
   constructor() {
     // Templates are installed in ~/.claude/commands/p/
-    this.commandsPath = path.join(os.homedir(), '.claude', 'commands', 'p')
+    this.commandsPath = resolveUserPath('.claude', 'commands', 'p')
   }
 
   /**

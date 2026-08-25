@@ -258,12 +258,12 @@ async function buildStalenessNotice(
     // SUPERIOR: stamp schedule/apply so we don't warn forever after refresh.
     try {
       const path = await import('node:path')
-      const os = await import('node:os')
+      const { resolveUserPath } = await import('../infrastructure/user-home')
       const { maybeDetachDriftRefresh, readDriftStamp, formatDriftNotice, driftStaleResolved } =
         await import('../services/drift-refresh')
       const cliHome = process.env.PRJCT_CLI_HOME
         ? path.resolve(process.env.PRJCT_CLI_HOME)
-        : path.join(os.homedir(), '.prjct-cli')
+        : resolveUserPath('.prjct-cli')
       const initialStamp = readDriftStamp(cliHome)
       // If a recent apply already cleared staleness presentation, say so once.
       if (driftStaleResolved(initialStamp)) {

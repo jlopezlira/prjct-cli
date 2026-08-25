@@ -1,75 +1,31 @@
 /**
  * Global test isolation preload (wired via `bunfig.toml` → [test].preload).
  *
- * The codebase has module-level singletons whose state leaks across test
- * files when the whole suite runs in one process. The worst offender is the
- * circuit-breaker registry in `core/utils/retry.ts`: it is shared across
- * every RetryPolicy instance, so when `agent-initialization` fails enough
- * times in one suite (common on a CI runner with no agent installed) the
- * breaker opens and every later test that initializes a project fails fast
- * with "circuit breaker is open" — a cascade of 30+ failures that has
- * nothing to do with the code under test, and that flips on/off purely with
- * test ordering and timing.
+ * Resets module-level singletons that leak across test files in a single
+ * process. The worst offender is the circuit-breaker registry in
+ * `core/utils/retry.ts`: shared across every RetryPolicy, so once
+ * `agent-initialization` fails enough times in one suite the breaker opens and
+ * every later test fails fast with "circuit breaker is open" — a cascade
+ * unrelated to the code under test. Clearing it before each test makes the
+ * suite order-independent.
  *
- * Clearing the breaker before each test makes the suite order-independent
- * and the cascade impossible. Hooks declared in a preload apply globally to
- * every test file.
+ * (The HOME / PRJCT_CLI_HOME / PRJCT_TEST_MODE sandbox lives in the FIRST
+ * preload, `isolate-cli-home.ts`, so it is in effect before any prjct module
+ * import — including the imports this file pulls in.)
  */
 
 import { beforeEach } from 'bun:test'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import { resetCircuitBreakers } from '../../utils/retry'
 
-// Sandbox the interactive user's HOME for the ENTIRE test process.
-//
-// The global agent-config writer (`installGlobalConfig`) resolves its
-// destination via `resolveUserHome()` → `~/.claude/CLAUDE.md`, honoring
-// `process.env.HOME`. Many tests transitively trigger it (sync-service, setup,
-// self-heal, install-flow, …), so on a dev machine the suite would OVERWRITE
-// the user's real `~/.claude/CLAUDE.md`. Redirecting HOME to a throwaway dir
-// keeps every home-relative write (agent config, `~/.prjct-cli` fallback) out
-// of the real home. Git-using tests set their identity locally per repo
-// (`git config user.email …`), so they don't depend on the real `~/.gitconfig`.
-// Set before any test imports the path manager so it's in effect process-wide.
-if (!process.env.PRJCT_TEST_HOME) {
-  const homeSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-test-home-'))
-  process.env.PRJCT_TEST_HOME = homeSandbox
-  process.env.HOME = homeSandbox
-  process.env.USERPROFILE = homeSandbox
-  const cleanupHome = () => {
-    try {
-      fs.rmSync(homeSandbox, { recursive: true, force: true })
-    } catch {
-      /* best-effort */
-    }
-  }
-  process.on('exit', cleanupHome)
-  process.on('SIGINT', () => {
-    cleanupHome()
-    process.exit(130)
-  })
-}
-
-// Deterministic agent detection for the whole test process.
-//
-// `agentService` only accepts agent type `claude` (VALID_AGENT_TYPES), but
-// `agentDetector.detect()` falls back to `terminal` when it can't prove a
-// Claude environment — which it proves via CLAUDE_AGENT/ANTHROPIC_CLAUDE
-// env, MCP, a CLAUDE.md in cwd, or ~/.claude in HOME. On a dev machine
-// ~/.claude almost always exists, so init succeeds. On a CI runner none of
-// those hold, so detection returns `terminal` → "Unsupported agent type:
-// terminal" → every test that initializes a project fails — but only when
-// test ordering hasn't already cached a `claude` agent on the singleton.
-// That made the suite pass on main by luck and fail here once new test
-// files shifted ordering. Pinning the env makes detection deterministic
-// everywhere, exactly as if running under Claude.
+// Deterministic agent detection for the whole test process. agentDetector
+// falls back to `terminal` when it can't prove a Claude environment (env, MCP,
+// a CLAUDE.md in cwd, or ~/.claude in HOME); on a CI runner none hold, so init
+// would fail with "Unsupported agent type: terminal". Pinning the env makes
+// detection deterministic everywhere, exactly as if running under Claude.
 process.env.CLAUDE_AGENT = '1'
 
-// Reset the module-level circuit-breaker registry (see core/utils/retry.ts)
-// before every test so one suite's failures can't open the shared breaker
-// and cascade "circuit breaker is open" into every later test.
+// Reset the module-level circuit-breaker registry before every test so one
+// suite's failures can't open the shared breaker and cascade into later tests.
 beforeEach(() => {
   resetCircuitBreakers()
 })

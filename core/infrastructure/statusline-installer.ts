@@ -7,13 +7,13 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { getErrorMessage, isNotFoundError } from '../types/fs'
 import { fileExists, readJson, writeJson } from '../utils/file-helper'
 import log from '../utils/logger'
 import { PACKAGE_ROOT, VERSION } from '../utils/version'
 import pathManager from './path-manager'
+import { resolveUserPath } from './user-home'
 
 /**
  * Ensure settings.json has statusLine configured
@@ -41,7 +41,7 @@ async function ensureStatusLineSettings(
  */
 export async function installStatusLine(): Promise<void> {
   try {
-    const claudeDir = path.join(os.homedir(), '.claude')
+    const claudeDir = resolveUserPath('.claude')
     const settingsPath = path.join(claudeDir, 'settings.json')
     const claudeStatusLinePath = path.join(claudeDir, 'prjct-statusline.sh')
 

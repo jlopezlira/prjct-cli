@@ -13,8 +13,8 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
+import { resolveUserPath } from '../infrastructure/user-home'
 import { prjctDb } from '../storage/database'
 
 export interface IndexedSkill {
@@ -29,7 +29,7 @@ function skillRoots(projectPath: string): Array<{ dir: string; scope: 'project' 
   return [
     { dir: path.join(projectPath, '.claude', 'skills'), scope: 'project' },
     { dir: path.join(projectPath, 'skills'), scope: 'project' },
-    { dir: path.join(os.homedir(), '.claude', 'skills'), scope: 'global' },
+    { dir: resolveUserPath('.claude', 'skills'), scope: 'global' },
   ]
 }
 

@@ -7,9 +7,9 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { getErrorMessage } from '../errors'
+import { resolveUserHome } from '../infrastructure/user-home'
 import type { SkillGenerationResult } from '../types/services.js'
 import log from '../utils/logger'
 import { buildCompactSkill } from './skill-generator/editor-surfaces'
@@ -47,7 +47,7 @@ function buildSkillContent(def: SkillDefinition): string {
 }
 
 function homeDir(): string {
-  return process.env.HOME || os.homedir()
+  return resolveUserHome()
 }
 
 function claudeSkillsRoot(): string {

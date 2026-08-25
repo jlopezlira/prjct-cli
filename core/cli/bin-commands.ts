@@ -576,7 +576,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     console.log(getHelp(topic))
     process.exitCode = 0
   } else if (args[0] === 'version' || args[0] === '-v' || args[0] === '--version') {
-    const os = await import('node:os')
+    const { resolveUserHome } = await import('../infrastructure/user-home')
     const path = await import('node:path')
     const chalk = (await import('chalk')).default
     const { detectAllProviders, detectAntigravity, detectCodex } = await import(
@@ -586,7 +586,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const { fileExists } = await import('../utils/file-helper')
     const { VERSION } = await import('../utils/version')
     const detection = await detectAllProviders(ctx.isRefresh)
-    const home = os.homedir()
+    const home = resolveUserHome()
     const cwd = process.cwd()
     const [
       claudeConfigured,

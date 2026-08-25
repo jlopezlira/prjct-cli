@@ -5,11 +5,11 @@
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import { CommandInstaller } from '../../infrastructure/command-installer'
 import pathManager from '../../infrastructure/path-manager'
+import { resolveUserHome } from '../../infrastructure/user-home'
 import type { UninstallOptions } from '../../types/commands'
 import { getErrorMessage } from '../../types/fs'
 import { fileExists } from '../../utils/file-helper'
@@ -33,7 +33,7 @@ async function copyDirectory(src: string, dest: string): Promise<void> {
 }
 
 export async function createBackup(): Promise<string | null> {
-  const homeDir = os.homedir()
+  const homeDir = resolveUserHome()
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)
   const backupDir = path.join(homeDir, `.prjct-backup-${timestamp}`)
 

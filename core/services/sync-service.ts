@@ -607,11 +607,11 @@ class SyncService {
         process.env.PRJCT_DRIFT_REFRESH === '1'
       ) {
         try {
-          const os = await import('node:os')
+          const { resolveUserPath } = await import('../infrastructure/user-home')
           const { markDriftRefreshApplied } = await import('./drift-refresh')
           const cliHome = process.env.PRJCT_CLI_HOME
             ? path.resolve(process.env.PRJCT_CLI_HOME)
-            : path.join(os.homedir(), '.prjct-cli')
+            : resolveUserPath('.prjct-cli')
           markDriftRefreshApplied(cliHome)
         } catch {
           /* best-effort */

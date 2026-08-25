@@ -2,6 +2,7 @@ import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { resolveUserHome, resolveUserPath } from '../infrastructure/user-home'
 import { getErrorMessage } from '../types/fs'
 import type { MCPServerConfig } from '../types/utils.js'
 import { writeJson } from './file-helper'
@@ -70,7 +71,7 @@ function resolvePublishedPrjctMcpConfig(): MCPServerConfig | null {
     /* not resolvable from this process */
   }
   // Common npm global layouts (nvm + homebrew node)
-  const home = os.homedir()
+  const home = resolveUserHome()
   for (const prefix of [
     process.env.NVM_BIN ? path.resolve(process.env.NVM_BIN, '..') : '',
     path.join(home, '.nvm', 'versions', 'node', process.version, 'lib'),
@@ -182,7 +183,7 @@ export function getClaudeMcpConfigPath(): string {
   if (process.env.PRJCT_TEST_MODE === '1') {
     return path.join(os.tmpdir(), 'prjct-context7-test', 'mcp.json')
   }
-  return path.join(os.homedir(), '.claude', 'mcp.json')
+  return resolveUserPath('.claude', 'mcp.json')
 }
 
 async function readMcpConfig(configPath = getClaudeMcpConfigPath()): Promise<MCPConfig> {

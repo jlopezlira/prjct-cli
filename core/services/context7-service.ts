@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { CONTEXT7_VERIFY_TTL_MS } from '../constants/timings'
 import { resolveCliHome } from '../infrastructure/cli-home'
+import { resolveUserHome, resolveUserPath } from '../infrastructure/user-home'
 import { getErrorMessage, isNotFoundError } from '../types/fs'
 import type { Context7Status } from '../types/services.js'
 import {
@@ -101,7 +102,7 @@ async function discoverNodeManagerBinDirs(homeDir: string): Promise<string[]> {
 
 export async function buildContext7SmokePath(
   basePath: string = process.env.PATH || '',
-  homeDir: string = os.homedir()
+  homeDir: string = resolveUserHome()
 ): Promise<string> {
   const seen = new Set<string>()
   const dirs: string[] = []
@@ -156,7 +157,7 @@ function getConfigPath(): string {
   if (process.env.NODE_ENV === 'test') {
     return path.join(os.tmpdir(), 'prjct-context7-test', 'mcp.json')
   }
-  return path.join(os.homedir(), '.claude', 'mcp.json')
+  return resolveUserPath('.claude', 'mcp.json')
 }
 
 async function readConfig(filePath: string): Promise<Record<string, unknown>> {
