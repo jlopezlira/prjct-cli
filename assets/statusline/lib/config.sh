@@ -39,7 +39,9 @@ load_config() {
 
   # Default component configuration
   COMPONENT_ENABLED["prjct_icon"]="true"
-  COMPONENT_ENABLED["task"]="true"
+  # task reads pre-SQLite state.json (gone since v1.24) — dead until it gets a
+  # live data source; default off matches default-config.json.
+  COMPONENT_ENABLED["task"]="false"
   COMPONENT_ENABLED["linear"]="true"
   COMPONENT_ENABLED["jira"]="false"
   COMPONENT_ENABLED["dir"]="true"

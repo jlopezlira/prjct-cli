@@ -22,10 +22,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { DAEMON_PATHS } from '../daemon/protocol'
 
-/** Stamp filename prefix — also listed in session-cleanup's STAMP_PREFIXES,
- *  which owns run-dir GC (the Stop-hook sweep); no purge logic lives here. */
-const STAMP_PREFIX = 'prompt-scc-'
-
 export function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex')
 }
@@ -42,26 +38,6 @@ export function sessionStampKey(
     .digest('hex')
     .slice(0, 12)
   return `${projectId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${cwd}-${session}`
-}
-
-function stampPath(key: string): string {
-  return path.join(DAEMON_PATHS.runDir(), `${STAMP_PREFIX}${key}.hash`)
-}
-
-export async function readSessionStamp(key: string): Promise<string | null> {
-  try {
-    return (await fs.readFile(stampPath(key), 'utf-8')).trim()
-  } catch {
-    return null
-  }
-}
-
-export async function writeSessionStamp(key: string, value: string): Promise<void> {
-  const target = stampPath(key)
-  await fs
-    .mkdir(path.dirname(target), { recursive: true })
-    .then(() => fs.writeFile(target, value))
-    .catch(() => undefined)
 }
 
 /**

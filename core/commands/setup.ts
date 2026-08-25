@@ -771,20 +771,6 @@ if [[ -f "$CONFIG" ]]; then
       exit 0
     fi
 
-    # Show current task if exists
-    STATE="$HOME/.prjct-cli/projects/$PROJECT_ID/storage/state.json"
-    if [[ -f "$STATE" ]]; then
-      TASK=$(grep -o '"description"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATE" | head -1 | sed 's/.*"description"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/')
-      STATUS=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATE" | head -1 | sed 's/.*"status"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/')
-
-      if [[ -n "$TASK" ]] && [[ "$STATUS" == "active" ]]; then
-        # Truncate task to 40 chars
-        TASK_SHORT="\${TASK:0:40}"
-        [[ \${#TASK} -gt 40 ]] && TASK_SHORT="$TASK_SHORT..."
-        echo "🎯 $TASK_SHORT"
-        exit 0
-      fi
-    fi
   fi
 fi
 

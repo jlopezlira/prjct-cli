@@ -111,14 +111,14 @@ export async function getDaemonStatus(): Promise<DaemonStatus> {
 export interface SendRequestOptions {
   /**
    * Override the default timeout. Defaults come from
-   * `commandRequestTimeoutMs(command)` (hooks 5s, long verbs 10min, else 30s).
+   * `commandRequestTimeoutMs(command)` (hooks 800ms, long verbs 10min, else 30s).
    */
   timeoutMs?: number
 }
 
 /**
  * Send a command to the daemon and return the response.
- * Default budget: hooks 5s, ship/sync/dream… 10min, everything else 30s.
+ * Default budget: hooks 800ms, ship/sync/dream… 10min, everything else 30s.
  * Callers can still override with `timeoutMs`.
  */
 export function sendRequest(
