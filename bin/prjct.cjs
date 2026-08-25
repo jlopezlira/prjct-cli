@@ -361,9 +361,32 @@ function runWithBun(args) {
   return true
 }
 
+// Native verb fast path: for a daemon-served READ verb, hand off to the native
+// client (no setup, no shim import, no in-process boot) — it talks to the warm
+// daemon and exits with its code. Exit 89 (or any spawn failure / down daemon)
+// = punt → return so main() continues on the normal path. Purely additive.
+const NATIVE_VERBS = new Set(['work', 'search', 'guard', 'status', 'prime'])
+function tryNativeVerb(args) {
+  if (process.platform === 'win32' || process.env.PRJCT_NO_DAEMON === '1') return
+  const cmd = args.find((a) => !a.startsWith('-'))
+  if (!cmd || !NATIVE_VERBS.has(cmd)) return
+  const native = path.join(ROOT_DIR, 'dist', 'bin', `hook-fast-${process.platform}-${process.arch}`)
+  if (!fs.existsSync(native)) return
+  try {
+    const result = childProcess.spawnSync(native, ['verb', ...args], { stdio: 'inherit' })
+    if (result.error || result.status === null || result.status === 89) return
+    process.exit(result.status)
+  } catch {
+    /* fall through to the normal path */
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2)
   if (args[0] === 'mcp-server') runMcpServer(args)
+
+  // Exits the process if the native client handled the verb; returns otherwise.
+  tryNativeVerb(args)
 
   const setupSkipCommands = new Set([
     '-v',
