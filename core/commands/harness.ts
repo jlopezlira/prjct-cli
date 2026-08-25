@@ -95,6 +95,31 @@ export class HarnessCommands extends PrjctCommandsBase {
     }
   }
 
+  /** `prjct harness retrieval` — measured Recall@k/MRR/nDCG for this project's recall pipeline. */
+  async retrieval(
+    projectPath: string = process.cwd(),
+    options: MdOption = {}
+  ): Promise<CommandResult> {
+    try {
+      const projectId = await configManager.getProjectId(projectPath)
+      if (!projectId) {
+        return { success: false, error: 'No prjct project found in the current directory.' }
+      }
+      const { buildRetrievalReport, renderRetrievalReportMd, renderRetrievalReportText } =
+        await import('../eval/report')
+      const report = await buildRetrievalReport(projectId)
+      console.log(options.md ? renderRetrievalReportMd(report) : renderRetrievalReportText(report))
+      return {
+        success: true,
+        pairCount: report.pairCount,
+        corpusSize: report.corpusSize,
+        heldOut: report.heldOut,
+      }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  }
+
   async score(projectPath: string = process.cwd(), options: MdOption = {}): Promise<CommandResult> {
     try {
       // Structural grade is machine-independent (CI/release). Live organic board
