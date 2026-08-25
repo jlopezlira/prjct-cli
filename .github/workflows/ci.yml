@@ -233,8 +233,10 @@ jobs:
       # runner-hardware numbers; once we have them, drop --no-fail (or set
       # PRJCT_HOOK_COLD_P50_MS/_P95_MS with headroom) to make it release-blocking.
       # Phase 1 (native daemon-first client) adds the warm verb-latency gate.
+      # --iterations 5 keeps the advisory pass ~20s (default 20 iters × 11
+      # events would add ~75s of runner time for no extra signal at this stage).
       - name: Hook cold-path benchmark (advisory baseline)
-        run: node scripts/bench-hooks.mjs --no-fail
+        run: node scripts/bench-hooks.mjs --no-fail --iterations 5
 
   install-compat:
     name: Install Compatibility

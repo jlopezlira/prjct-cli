@@ -356,9 +356,13 @@ static int is_allowed_verb(const char *cmd) {
     return 0;
 }
 
-/* Verb fast path: `hook-fast verb <cmd> [args…]`. Relays a daemon-served READ
+/* Verb fast path: `hook-fast verb <cmd> [args…]`. Relays a daemon-served hot
  * verb to the warm daemon and prints its captured stdout/stderr, exiting with
- * the daemon's exit code. Mirrors the JS shim's daemon-verb branch
+ * the daemon's exit code. The allowlist is read surfaces plus `status`, whose
+ * value form writes — relayed with the exact semantics the JS shim already
+ * gives it (same daemon execution; the retry/fallback re-run is idempotent
+ * because setting the same status twice is a no-op). Mirrors the JS shim's
+ * daemon-verb branch
  * (scripts/build.js generateDaemonShim, the `cmd && !skip.has(cmd)` block)
  * EXACTLY: same argv→{args,options} parse, same {id,command,args,options,cwd}
  * request, same relay — but `console.log`/`console.error` append a trailing
@@ -560,7 +564,7 @@ int main(int argc, char **argv) {
     if (argc < 2) fall_through();
     const char *subcommand = argv[1];
 
-    /* Verb mode: `hook-fast verb <cmd> [args…]` relays a daemon-served READ
+    /* Verb mode: `hook-fast verb <cmd> [args…]` relays a daemon-served hot
      * verb and exits with the daemon's code. No hook subcommand is named
      * "verb", so this never shadows the hook path. */
     if (strcmp(subcommand, "verb") == 0) return run_verb(argc, argv);

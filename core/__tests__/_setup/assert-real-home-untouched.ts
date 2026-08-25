@@ -58,15 +58,22 @@ function snapshot(): string {
   return WATCHED.map(stampOf).sort().join('\n')
 }
 
-const BEFORE = snapshot()
+// PRJCT_TEST_HOME_GUARD=0 disables the exit assertion for the one legitimate
+// false-positive: an EXTERNAL writer (e.g. a live agent session's prjct
+// self-heal) touching a watched config mid-run on a dev machine. CI has no
+// external writers, so it always keeps the guard on.
+const GUARD_ON = process.env.PRJCT_TEST_HOME_GUARD !== '0'
+const BEFORE = GUARD_ON ? snapshot() : ''
 
 process.on('exit', () => {
-  if (snapshot() !== BEFORE) {
+  if (GUARD_ON && snapshot() !== BEFORE) {
     process.exitCode = 1
     process.stderr.write(
-      '\n[test-isolation] REAL host config changed during the test run — a writer ' +
-        'resolved the real home (os.homedir()) instead of the sandbox.\n' +
-        'Migrate it to resolveUserHome()/resolveUserPath() or gate it on PRJCT_TEST_MODE.\n\n'
+      '\n[test-isolation] REAL host config changed during the test run.\n' +
+        'Most likely a writer resolved the real home (os.homedir()) instead of the sandbox — ' +
+        'migrate it to resolveUserHome()/resolveUserPath() or gate it on PRJCT_TEST_MODE.\n' +
+        'If an EXTERNAL process (e.g. a live agent session) wrote the config during the run, ' +
+        're-run to confirm, or set PRJCT_TEST_HOME_GUARD=0 for that run only.\n\n'
     )
   }
 })

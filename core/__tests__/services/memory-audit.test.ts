@@ -39,9 +39,10 @@ describe('buildMemoryAudit', () => {
 
     expect(audit.total).toBe(22)
     expect(audit.gated).toBe(true)
-    // None have a usefulness row → all never read.
+    // None have a usefulness row → all never read, none cited.
     expect(audit.neverRead).toBe(22)
     expect(audit.neverReadPct).toBe(100)
+    expect(audit.cited).toBe(0)
     expect(audit.passed).toBe(false)
     expect(audit.failures.some((f) => f.includes('never-read'))).toBe(true)
 
@@ -76,6 +77,7 @@ describe('buildMemoryAudit', () => {
 
     const audit = buildMemoryAudit(fixture.projectId)
     expect(audit.engaged).toBe(1)
+    expect(audit.cited).toBe(1)
     expect(audit.neverRead).toBe(20)
   })
 })

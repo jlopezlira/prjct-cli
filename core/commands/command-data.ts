@@ -1586,7 +1586,7 @@ export const COMMANDS: CommandMeta[] = [
       ['crew', 'Run a crew (multi-subagent) workflow'],
       [
         'harness',
-        'Harness scorecard, instruction observability/disposition, and Body/rig adoption (score · instructions · learn-from · list · use)',
+        'Harness scorecard, retrieval baseline, memory audit, instruction observability, and Body/rig adoption (score · retrieval · audit · instructions · learn-from · list · use)',
       ],
       [
         'doctor',

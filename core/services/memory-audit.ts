@@ -32,6 +32,9 @@ export interface MemoryAuditThresholds {
 export interface MemoryAudit {
   total: number
   engaged: number
+  /** Entries with a real citation (+REF) — the strong, uninflatable signal. */
+  cited: number
+  citedPct: number
   neverRead: number
   neverReadPct: number
   stale: number
@@ -47,18 +50,30 @@ export interface MemoryAudit {
   thresholds: MemoryAuditThresholds
 }
 
-function engagedIds(projectId: string): Set<string> {
-  const ids = new Set<string>()
+interface EngagementSets {
+  engaged: Set<string>
+  cited: Set<string>
+}
+
+// cited (ref_count) is tracked apart from the engaged union because historical
+// fetch_count rows were inflated by the old recall-credits-everything bug —
+// citations are the signal that was never inflatable.
+function engagementSets(projectId: string): EngagementSets {
+  const engaged = new Set<string>()
+  const cited = new Set<string>()
   try {
-    const rows = prjctDb.query<{ memory_id: string }>(
+    const rows = prjctDb.query<{ memory_id: string; ref_count: number }>(
       projectId,
-      'SELECT memory_id FROM memory_usefulness WHERE ref_count > 0 OR fetch_count > 0'
+      'SELECT memory_id, ref_count FROM memory_usefulness WHERE ref_count > 0 OR fetch_count > 0'
     )
-    for (const row of rows) ids.add(row.memory_id)
+    for (const row of rows) {
+      engaged.add(row.memory_id)
+      if (row.ref_count > 0) cited.add(row.memory_id)
+    }
   } catch {
     /* memory_usefulness may be empty/absent — treat as no engagement */
   }
-  return ids
+  return { engaged, cited }
 }
 
 export function buildMemoryAudit(
@@ -74,8 +89,9 @@ export function buildMemoryAudit(
   const retention = evaluateRetentionShared(projectId, nowMs)
   const health = computeSubstrateHealth(entries, nowMs)
 
-  const engaged = engagedIds(projectId)
-  const engagedCount = entries.filter((e) => engaged.has(e.id)).length
+  const sets = engagementSets(projectId)
+  const engagedCount = entries.filter((e) => sets.engaged.has(e.id)).length
+  const citedCount = entries.filter((e) => sets.cited.has(e.id)).length
   const neverRead = total - engagedCount
 
   const staleMs = STALE_DAYS * 24 * 60 * 60 * 1000
@@ -104,6 +120,8 @@ export function buildMemoryAudit(
   return {
     total,
     engaged: engagedCount,
+    cited: citedCount,
+    citedPct: pct(citedCount),
     neverRead,
     neverReadPct,
     stale,
@@ -130,7 +148,7 @@ export function renderMemoryAuditMd(audit: MemoryAudit): string {
   return [
     `## Memory audit — ${audit.total} model-worthy entries`,
     '',
-    `- **read / used:** ${audit.engaged} engaged · ${audit.neverRead} never read (${pctStr(audit.neverReadPct)})`,
+    `- **read / used:** ${audit.engaged} engaged (${audit.cited} cited — the uninflatable signal · ${audit.engaged - audit.cited} fetch-only) · ${audit.neverRead} never read (${pctStr(audit.neverReadPct)})`,
     `- **signal:** ${Math.round(audit.signalRatio * 100)}% (slop ${pctStr(audit.slopPct)})`,
     `- **stale (>${STALE_DAYS}d):** ${audit.stale} (${pctStr(audit.stalePct)})`,
     `- **auto-cleanup would remove next:** ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
@@ -147,7 +165,7 @@ export function renderMemoryAuditMd(audit: MemoryAudit): string {
 export function renderMemoryAuditText(audit: MemoryAudit): string {
   return [
     `Memory audit · ${audit.total} entries`,
-    `  read/used:    ${audit.engaged} engaged · ${audit.neverRead} never read (${audit.neverReadPct}%)`,
+    `  read/used:    ${audit.engaged} engaged (${audit.cited} cited · ${audit.engaged - audit.cited} fetch-only) · ${audit.neverRead} never read (${audit.neverReadPct}%)`,
     `  signal:       ${Math.round(audit.signalRatio * 100)}% (slop ${audit.slopPct}%)`,
     `  stale >${STALE_DAYS}d:   ${audit.stale} (${audit.stalePct}%)`,
     `  cleanup next: ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
