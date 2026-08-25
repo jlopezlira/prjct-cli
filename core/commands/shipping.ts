@@ -369,25 +369,17 @@ export class ShippingCommands extends PrjctCommandsBase {
       }
 
       // Machine gauntlet (Uncle Bob): the work counts when the machine says
-      // so. A fresh RED receipt always blocks; missing/stale blocks under
-      // code-strict and warns otherwise; --no-gauntlet overrides, recorded.
+      // so. Ship SELF-PROVISIONS: a missing/stale receipt triggers an inline
+      // run — nobody has to remember. A RED result always blocks;
+      // --no-gauntlet overrides explicitly and is recorded.
       try {
-        const {
-          gauntletShipVerdict,
-          projectHasGauntletCommands,
-          readGauntletReceipt,
-          recordGauntletOverride,
-        } = await import('../services/gauntlet')
+        const { ensureShipGauntlet, recordGauntletOverride } = await import('../services/gauntlet')
         const { gitStdout } = await import('../utils/exec')
         const headNow = await gitStdout(projectPath, ['rev-parse', 'HEAD'])
           .then((s) => s?.trim() || null)
           .catch(() => null)
-        const stamped = readGauntletReceipt(projectId)
-        const verdict = gauntletShipVerdict({
-          receipt: stamped?.data ?? null,
-          nowMs: Date.now(),
+        const verdict = await ensureShipGauntlet(projectPath, projectId, {
           headSha: headNow,
-          hasCommands: await projectHasGauntletCommands(projectPath),
           strict: isCodeStrictPack,
           override: options.noGauntlet === true,
         })

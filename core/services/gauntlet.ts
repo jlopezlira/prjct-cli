@@ -18,6 +18,9 @@ import { detectVerifiedCommands } from './project-command-facts'
 const GAUNTLET_DOC_KEY = 'gauntlet:latest'
 const GAUNTLET_EVENT = 'gauntlet-run'
 const GAUNTLET_OVERRIDE_EVENT = 'gauntlet-override'
+const GAUNTLET_RUNNING_KEY = 'gauntlet:running'
+/** A background warm marker older than this is a dead run — spawn again. */
+const RUNNING_STALE_MS = 15 * 60 * 1000
 /** A green receipt is trusted for this long on the same HEAD. */
 export const GAUNTLET_FRESH_MS = 30 * 60 * 1000
 const OUTPUT_TAIL_CHARS = 400
@@ -163,6 +166,7 @@ export async function runGauntlet(
 
   try {
     prjctDb.setDoc(projectId, GAUNTLET_DOC_KEY, receipt)
+    prjctDb.deleteDoc(projectId, GAUNTLET_RUNNING_KEY)
     prjctDb.appendEvent(projectId, GAUNTLET_EVENT, {
       passed: receipt.passed,
       vacuous: receipt.vacuous,
@@ -210,13 +214,20 @@ export interface GauntletVerdict {
   message: string | null
 }
 
-function receiptFresh(input: GauntletVerdictInput): boolean {
-  const receipt = input.receipt
+export function isReceiptFresh(
+  receipt: GauntletReceipt | null,
+  nowMs: number,
+  headSha: string | null
+): boolean {
   if (!receipt) return false
-  const age = input.nowMs - Date.parse(receipt.ranAt)
+  const age = nowMs - Date.parse(receipt.ranAt)
   if (!Number.isFinite(age) || age > GAUNTLET_FRESH_MS) return false
-  if (receipt.headSha && input.headSha && receipt.headSha !== input.headSha) return false
+  if (receipt.headSha && headSha && receipt.headSha !== headSha) return false
   return true
+}
+
+function receiptFresh(input: GauntletVerdictInput): boolean {
+  return isReceiptFresh(input.receipt, input.nowMs, input.headSha)
 }
 
 /** Pure ship-gate verdict — mirrors the judgment gate's shape. */
@@ -253,6 +264,71 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
     }
   }
   return { blocked: false, message: '✓ Gauntlet green for HEAD — machine-verified.' }
+}
+
+/**
+ * Ship-time self-provisioning: nobody has to remember to run the gauntlet —
+ * when the receipt is missing or stale (and there is no explicit override),
+ * ship runs the machine verification inline and gates on the REAL result.
+ */
+export async function ensureShipGauntlet(
+  projectPath: string,
+  projectId: string,
+  opts: { headSha: string | null; strict: boolean; override: boolean }
+): Promise<GauntletVerdict> {
+  const hasCommands = await projectHasGauntletCommands(projectPath)
+  const existing = readGauntletReceipt(projectId)?.data ?? null
+  const base = {
+    nowMs: Date.now(),
+    headSha: opts.headSha,
+    hasCommands,
+    strict: opts.strict,
+    override: opts.override,
+  }
+  if (opts.override || !hasCommands || isReceiptFresh(existing, base.nowMs, opts.headSha)) {
+    return gauntletShipVerdict({ ...base, receipt: existing })
+  }
+  console.log('Gauntlet receipt missing or stale — running machine verification now…')
+  const receipt = await runGauntlet(projectPath, projectId)
+  return gauntletShipVerdict({ ...base, nowMs: Date.now(), receipt })
+}
+
+/**
+ * Fire-and-forget background warm (done/land call this): spawns a detached
+ * `prjct gauntlet` so the next ship finds a fresh receipt without anyone
+ * remembering to run it. Skips when a fresh green receipt already exists,
+ * when a warm is already in flight, on win32, and always under tests.
+ */
+export async function warmGauntletInBackground(
+  projectPath: string,
+  projectId: string
+): Promise<boolean> {
+  try {
+    if (process.platform === 'win32') return false
+    // Never spawn a real CLI from inside a test process: PRJCT_TEST_MODE is
+    // the standard guard, but some tests clear it to cover their own branches
+    // — PRJCT_TEST_HOME (the sandbox marker set by the first preload) is the
+    // order-independent belt.
+    if (process.env.PRJCT_TEST_MODE === '1' || process.env.PRJCT_TEST_HOME) return false
+    if (!(await projectHasGauntletCommands(projectPath))) return false
+    const binding = await gitBinding(projectPath)
+    const stamped = readGauntletReceipt(projectId)
+    const fresh = isReceiptFresh(stamped?.data ?? null, Date.now(), binding.headSha)
+    if (fresh && stamped?.data.passed) return false
+    const running = prjctDb.getDocWithStamp<{ startedAt: string }>(projectId, GAUNTLET_RUNNING_KEY)
+    if (running && Date.now() - Date.parse(running.data.startedAt) < RUNNING_STALE_MS) return false
+    prjctDb.setDoc(projectId, GAUNTLET_RUNNING_KEY, { startedAt: new Date().toISOString() })
+    const { spawn } = await import('node:child_process')
+    const child = spawn(
+      '/bin/sh',
+      ['-c', 'command -v prjct >/dev/null 2>&1 && prjct gauntlet >/dev/null 2>&1'],
+      { cwd: projectPath, detached: true, stdio: 'ignore' }
+    )
+    child.unref()
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Non-blocking `status done` warning: done without a machine-green HEAD. */

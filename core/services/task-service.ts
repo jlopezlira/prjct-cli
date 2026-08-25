@@ -917,9 +917,16 @@ export async function setTaskStatus(
   // success — surface it through the existing warnings channel (non-blocking).
   if (normalized === 'done' || normalized === 'completed') {
     try {
-      const { gauntletDoneWarning } = await import('./gauntlet')
+      const { gauntletDoneWarning, warmGauntletInBackground } = await import('./gauntlet')
       const warning = await gauntletDoneWarning(projectPath, projectId)
       if (warning) verification.warnings.push(warning)
+      // Self-provisioning: done kicks a detached gauntlet so ship finds a
+      // fresh receipt without anyone remembering to run it.
+      if (await warmGauntletInBackground(projectPath, projectId)) {
+        verification.warnings.push(
+          'Gauntlet warming in background — the receipt will be fresh for ship.'
+        )
+      }
     } catch {
       /* advisory only */
     }

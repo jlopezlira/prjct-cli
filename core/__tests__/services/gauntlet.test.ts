@@ -3,12 +3,14 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  ensureShipGauntlet,
   GAUNTLET_FRESH_MS,
   type GauntletReceipt,
   gauntletDoneWarning,
   gauntletShipVerdict,
   readGauntletReceipt,
   runGauntlet,
+  warmGauntletInBackground,
 } from '../../services/gauntlet'
 import prjctDb from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
@@ -145,6 +147,69 @@ describe('gauntletShipVerdict', () => {
     })
     expect(vacuous.blocked).toBe(false)
     expect(vacuous.message).toContain('vacuous')
+  })
+})
+
+describe('ensureShipGauntlet (self-provisioning)', () => {
+  it('runs the gauntlet inline when the receipt is missing — nobody has to remember', async () => {
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'package.json'),
+      JSON.stringify({ name: 'fixture', scripts: { test: 'true' } })
+    )
+    expect(readGauntletReceipt(fixture.projectId)).toBeNull()
+
+    const verdict = await ensureShipGauntlet(fixture.projectDir, fixture.projectId, {
+      headSha: null,
+      strict: false,
+      override: false,
+    })
+
+    expect(verdict.blocked).toBe(false)
+    expect(readGauntletReceipt(fixture.projectId)?.data.passed).toBe(true)
+  })
+
+  it('blocks on the REAL result when the inline run goes red — even outside strict', async () => {
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'package.json'),
+      JSON.stringify({ name: 'fixture', scripts: { test: 'false' } })
+    )
+
+    const verdict = await ensureShipGauntlet(fixture.projectDir, fixture.projectId, {
+      headSha: null,
+      strict: false,
+      override: false,
+    })
+
+    expect(verdict.blocked).toBe(true)
+    expect(verdict.message).toContain('RED')
+  })
+
+  it('does not re-run when a fresh green receipt already exists', async () => {
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'package.json'),
+      JSON.stringify({ name: 'fixture', scripts: { test: 'true' } })
+    )
+    await runGauntlet(fixture.projectDir, fixture.projectId)
+    const ranAt = readGauntletReceipt(fixture.projectId)?.data.ranAt
+
+    const verdict = await ensureShipGauntlet(fixture.projectDir, fixture.projectId, {
+      headSha: null,
+      strict: false,
+      override: false,
+    })
+
+    expect(verdict.blocked).toBe(false)
+    expect(readGauntletReceipt(fixture.projectId)?.data.ranAt).toBe(ranAt)
+  })
+})
+
+describe('warmGauntletInBackground', () => {
+  it('never spawns a real CLI under tests (PRJCT_TEST_MODE guard)', async () => {
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'package.json'),
+      JSON.stringify({ name: 'fixture', scripts: { test: 'false' } })
+    )
+    expect(await warmGauntletInBackground(fixture.projectDir, fixture.projectId)).toBe(false)
   })
 })
 
