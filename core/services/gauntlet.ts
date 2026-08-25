@@ -59,15 +59,43 @@ export interface GauntletCheck {
  * to remember a config file.
  */
 const VACUOUS_BOOTSTRAP =
-  'Gauntlet is VACUOUS: no verify commands found in the manifest or CI — NOTHING machine-checked this work. ' +
-  'AGENT: identify how this project verifies itself (its test/lint/typecheck command, whatever the language) ' +
-  'and register it now — `prjct gauntlet set test "<command>"` — then re-run `prjct gauntlet`.'
+  'No machine gate for this project yet — NOTHING verifies the work, in any language. ' +
+  'AGENT: you are reading this repo, so YOU decide how it verifies itself — read its CI, ' +
+  'build files, docs, scripts — and register what you find: ' +
+  '`prjct gauntlet set test "<command>"` (also lint / typecheck). One time, then the gate is real.'
 
-/** POSIX "command not found"; the shell reports it for any missing binary. */
+/**
+ * SessionStart cue — the division of labor this harness runs on: prjct states
+ * the requirement and owns the mechanism (run · receipt · refuse red ships);
+ * the MODEL decides what the commands are. Whatever the manifests happen to
+ * declare is passed along as raw evidence for the agent to confirm or
+ * override — never as prjct's own conclusion about the project.
+ */
+export async function gauntletBootstrapCue(projectPath: string): Promise<string | null> {
+  try {
+    if (await projectHasGauntletCommands(projectPath)) return null
+    // Terse by mandate: this rides the always-on SessionStart block, whose
+    // char ceiling is a release gate (it caught this line 129 chars over).
+    // The instruction belongs here; the evidence and the full explanation
+    // belong in `prjct gauntlet` output, where bytes are cheap.
+    return '# prjct: no machine gate\nNothing verifies this project. AGENT: identify its test/lint/typecheck commands and register them — `prjct gauntlet set test "<cmd>"`.'
+  } catch {
+    return null
+  }
+}
+
+/**
+ * POSIX "command not found" — the ONLY signal used to call a check
+ * unavailable, because it is decided by the shell, not by us.
+ *
+ * An earlier version also pattern-matched the output for phrases like "not
+ * installed". It misfired on this very repo: a real red test suite whose
+ * output happened to contain such a phrase was reported as ⊘ not-installed,
+ * turning a genuine failure into a silent pass. Guessing intent from output
+ * text is the model's job, and a gate that guesses wrong is worse than no
+ * gate — so the heuristic is gone.
+ */
 const EXIT_COMMAND_NOT_FOUND = 127
-/** Toolchain present but the subcommand/component is not (e.g. clippy, a missing gem). */
-const UNAVAILABLE_OUTPUT =
-  /command not found|no such (?:sub)?command|not installed|couldn't find|could not find command|is not recognized/i
 
 export interface GauntletReceipt {
   version: 1
@@ -100,30 +128,18 @@ async function gauntletCommands(
     return declared.map(({ kind, command }) => ({ kind, command: command.trim() }))
   }
 
+  // Fast path ONLY, never the guarantee: a manifest whose toolchain is already
+  // standardized. prjct does not try to infer commands for every language —
+  // parsing CI, guessing tools, keeping a table of ecosystems is prjct
+  // pretending to be the intelligence when a model that already reads this
+  // repo is right there. Anything this misses is the agent's job (see
+  // VACUOUS_BOOTSTRAP), and what the agent registers wins outright.
   const byKind = new Map<string, string>()
-
-  // Fast path: ecosystems with a manifest whose toolchain we know.
   const facts = await detectVerifiedCommands(projectPath)
   for (const cmd of facts.commands) {
     if (cmd.mutating) continue
     if (!GAUNTLET_KINDS.includes(cmd.kind as (typeof GAUNTLET_KINDS)[number])) continue
     if (!byKind.has(cmd.kind)) byKind.set(cmd.kind, cmd.command)
-  }
-
-  // General path: the repo's OWN CI already names the commands it gates on, in
-  // whatever language it is written in. This is what keeps the gate real for
-  // ecosystems no table will ever enumerate — it fills only the kinds the
-  // manifest could not supply, so a Node repo keeps its clean package scripts.
-  const missing = GAUNTLET_KINDS.filter((kind) => !byKind.has(kind))
-  if (missing.length > 0) {
-    try {
-      const { detectCiVerifyCommands } = await import('./ci-verify-commands')
-      for (const ci of await detectCiVerifyCommands(projectPath)) {
-        if (!byKind.has(ci.kind)) byKind.set(ci.kind, ci.command)
-      }
-    } catch {
-      /* no CI, unreadable CI — the gate degrades to whatever the manifest gave */
-    }
   }
 
   return GAUNTLET_KINDS.flatMap((kind) => {
@@ -172,7 +188,7 @@ async function runCheck(
     ok: (r) => ({ kind, command, ok: true, outcome: 'ok', durationMs: r.durationMs }),
     exit: (r) => {
       const output = `${r.stdout}\n${r.stderr}`.trim()
-      const unavailable = r.code === EXIT_COMMAND_NOT_FOUND || UNAVAILABLE_OUTPUT.test(output)
+      const unavailable = r.code === EXIT_COMMAND_NOT_FOUND
       return {
         kind,
         command,

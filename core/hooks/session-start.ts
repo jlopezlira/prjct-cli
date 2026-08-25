@@ -161,17 +161,38 @@ export async function buildSessionContext(
         }
       })()
     : Promise.resolve(null)
+  // prjct does not infer the project's language — it states the gap and the
+  // agent, which is already reading this repo, closes it once.
+  const gauntletCuePromise: Promise<string | null> = opts.digest
+    ? (async () => {
+        try {
+          const { gauntletBootstrapCue } = await import('../services/gauntlet')
+          return await gauntletBootstrapCue(projectPath)
+        } catch {
+          return null
+        }
+      })()
+    : Promise.resolve(null)
   const identityPromise = buildProjectIdentityLine(projectPath, config.projectId)
-  const [staleness, vaultNotice, landCue, weakBanner, handoffCue, continuityCue, identity] =
-    await Promise.all([
-      stalenessPromise,
-      vaultNoticePromise,
-      landCuePromise,
-      weakBannerPromise,
-      handoffCuePromise,
-      continuityCuePromise,
-      identityPromise,
-    ])
+  const [
+    staleness,
+    vaultNotice,
+    landCue,
+    weakBanner,
+    handoffCue,
+    continuityCue,
+    gauntletCue,
+    identity,
+  ] = await Promise.all([
+    stalenessPromise,
+    vaultNoticePromise,
+    landCuePromise,
+    weakBannerPromise,
+    handoffCuePromise,
+    continuityCuePromise,
+    gauntletCuePromise,
+    identityPromise,
+  ])
 
   // Nothing to say (no identity, persona, knowledge, drift) → stay silent.
   if (
@@ -233,6 +254,10 @@ export async function buildSessionContext(
       sections.push('')
     }
     sections.push(continuityCue)
+  }
+  if (gauntletCue) {
+    if (sections.length > 0) sections.push('')
+    sections.push(gauntletCue)
   }
   return sections.join('\n')
 }

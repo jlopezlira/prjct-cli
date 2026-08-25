@@ -6,11 +6,13 @@ import {
   ensureShipGauntlet,
   GAUNTLET_FRESH_MS,
   type GauntletReceipt,
+  gauntletBootstrapCue,
   gauntletDoneWarning,
   gauntletShipVerdict,
   readGauntletReceipt,
   renderGauntletMd,
   runGauntlet,
+  setGauntletCommand,
   warmGauntletInBackground,
 } from '../../services/gauntlet'
 import prjctDb from '../../storage/database'
@@ -141,26 +143,39 @@ describe('runGauntlet', () => {
     expect(result.vacuous).toBe(true)
   })
 
-  it('gates a language with ZERO hardcoded support, straight from its CI', async () => {
-    // A Swift package: no manifest support, no config, nobody taught prjct the
-    // language. Its own CI names the verify step, so the gate is real anyway.
-    // (The command is a harmless stand-in for `swift test` so the assertion
-    // does not depend on a Swift toolchain being installed on the runner.)
+  it('an unknown language ASKS THE AGENT instead of prjct guessing, and then gates for real', async () => {
+    // Swift: prjct knows nothing about it and must not pretend to. It states
+    // the gap where the agent will act on it — and once the agent (which does
+    // know Swift) registers the command, the gate is real. That handoff, not a
+    // detection table, is what makes this work for any language.
     await fs.writeFile(
       path.join(fixture.projectDir, 'Package.swift'),
       '// swift-tools-version:5.9\n'
     )
-    await fs.mkdir(path.join(fixture.projectDir, '.github', 'workflows'), { recursive: true })
+
+    await fs.mkdir(path.join(fixture.projectDir, '.prjct'), { recursive: true })
     await fs.writeFile(
-      path.join(fixture.projectDir, '.github', 'workflows', 'ci.yml'),
-      ['jobs:', '  ci:', '    steps:', '      - name: Test', '        run: /bin/echo ok'].join('\n')
+      path.join(fixture.projectDir, '.prjct', 'prjct.config.json'),
+      JSON.stringify({ projectId: fixture.projectId, dataPath: fixture.tmpRoot })
     )
 
-    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+    const cue = await gauntletBootstrapCue(fixture.projectDir)
+    expect(cue).toContain('AGENT:')
+    expect(cue).toContain('prjct gauntlet set')
 
-    expect(result.vacuous).toBe(false) // the gate is NOT hollow for an unknown language
-    expect(result.checks.map((c) => c.command)).toEqual(['/bin/echo ok'])
+    // The agent reads the repo, knows it is Swift, and registers the command.
+    // (`/bin/echo` stands in for `swift test` so this does not require a Swift
+    // toolchain on the runner — the mechanism under test is the handoff.)
+    const saved = await setGauntletCommand(fixture.projectDir, 'test', '/bin/echo verified')
+    expect(saved.ok).toBe(true)
+
+    const result = await runGauntlet(fixture.projectDir, fixture.projectId)
+    expect(result.vacuous).toBe(false)
+    expect(result.checks.map((c) => c.command)).toEqual(['/bin/echo verified'])
     expect(result.passed).toBe(true)
+
+    // Gap closed — prjct stops asking.
+    expect(await gauntletBootstrapCue(fixture.projectDir)).toBeNull()
   })
 
   it('really EXECUTES a non-Node ecosystem end to end (make)', async () => {
@@ -277,8 +292,8 @@ describe('gauntletShipVerdict', () => {
       override: false,
     })
     expect(vacuous.blocked).toBe(false)
-    expect(vacuous.message).toMatch(/vacuous/i)
-    // …and it tells the AGENT how to make the gate real for any language.
+    // prjct never guesses the language — it hands the problem to the agent.
+    expect(vacuous.message).toContain('AGENT:')
     expect(vacuous.message).toContain('prjct gauntlet set')
   })
 })
