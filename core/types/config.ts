@@ -179,7 +179,7 @@ export interface LocalConfig {
     maxDelete?: number
     /** Hard-delete soft-deleted rows older than N days on sync (default 7 — no statistical value). */
     softDeletedPurgeDays?: number
-    /** Prune archives older than N days on sync (default 90). */
+    /** Prune archives older than N days on sync (default 7 — repos move fast). */
     archivePruneDays?: number
     /** Max live entries per auto source prefix (default 20). */
     autoSourceMaxLive?: number

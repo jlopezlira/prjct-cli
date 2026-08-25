@@ -18,6 +18,7 @@ import { projectMemory } from '../memory/project-memory'
 import { computeSubstrateHealth } from '../memory/substrate-health'
 import prjctDb from '../storage/database'
 import { evaluateRetentionShared } from './retention'
+import { DEFAULT_ARCHIVE_PRUNE_DAYS } from './retention/purge'
 
 const STALE_DAYS = 180
 const MIN_CORPUS_TO_GATE = 20
@@ -42,6 +43,8 @@ export interface MemoryAudit {
   /** What the automatic retention cleanup would remove on the next apply. */
   wouldArchive: number
   wouldDelete: number
+  /** Mean retention confidence (0–1) across the evaluated corpus. */
+  avgConfidence: number
   signalRatio: number
   slopPct: number
   gated: boolean
@@ -89,6 +92,12 @@ export function buildMemoryAudit(
   const retention = evaluateRetentionShared(projectId, nowMs)
   const health = computeSubstrateHealth(entries, nowMs)
 
+  const scores = [...retention.byId.values()].map((r) => r.score)
+  const avgConfidence =
+    scores.length === 0
+      ? 1
+      : Math.round((scores.reduce((s, x) => s + x, 0) / scores.length / 100) * 100) / 100
+
   const sets = engagementSets(projectId)
   const engagedCount = entries.filter((e) => sets.engaged.has(e.id)).length
   const citedCount = entries.filter((e) => sets.cited.has(e.id)).length
@@ -128,6 +137,7 @@ export function buildMemoryAudit(
     stalePct: pct(stale),
     wouldArchive: retention.archive,
     wouldDelete: retention.delete,
+    avgConfidence,
     signalRatio: health.signalRatio,
     slopPct,
     gated,
@@ -151,6 +161,7 @@ export function renderMemoryAuditMd(audit: MemoryAudit): string {
     `- **read / used:** ${audit.engaged} engaged (${audit.cited} cited — the uninflatable signal · ${audit.engaged - audit.cited} fetch-only) · ${audit.neverRead} never read (${pctStr(audit.neverReadPct)})`,
     `- **signal:** ${Math.round(audit.signalRatio * 100)}% (slop ${pctStr(audit.slopPct)})`,
     `- **stale (>${STALE_DAYS}d):** ${audit.stale} (${pctStr(audit.stalePct)})`,
+    `- **confidence:** avg ${audit.avgConfidence} (persisted per-entry; drives archive → ${DEFAULT_ARCHIVE_PRUNE_DAYS}d TTL → delete)`,
     `- **auto-cleanup would remove next:** ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
     '',
     `**Verdict: ${verdictLine(audit)}**`,
@@ -168,6 +179,7 @@ export function renderMemoryAuditText(audit: MemoryAudit): string {
     `  read/used:    ${audit.engaged} engaged (${audit.cited} cited · ${audit.engaged - audit.cited} fetch-only) · ${audit.neverRead} never read (${audit.neverReadPct}%)`,
     `  signal:       ${Math.round(audit.signalRatio * 100)}% (slop ${audit.slopPct}%)`,
     `  stale >${STALE_DAYS}d:   ${audit.stale} (${audit.stalePct}%)`,
+    `  confidence:   avg ${audit.avgConfidence}`,
     `  cleanup next: ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
     `  verdict:      ${verdictLine(audit)}`,
   ].join('\n')

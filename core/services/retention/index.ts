@@ -32,6 +32,7 @@ import {
   excessAgainstIndex,
   type ReferenceIndex,
 } from './excess'
+import { isAutoSource } from './purge'
 import { buildReferenceModel } from './reference-model'
 
 export type RetentionVerdict = 'active' | 'archive' | 'delete'
@@ -58,6 +59,36 @@ export interface RetentionReport {
   referenceSize: number
   flagged: RetentionResult[]
   byId: Map<string, RetentionResult>
+}
+
+/** Idle-penalty onset by provenance: auto-captured knowledge rots ~6× faster. */
+export function idleAfterDaysFor(source: string | undefined): number {
+  return isAutoSource(source) ? AUTO_IDLE_AFTER_DAYS : IDLE_AFTER_DAYS
+}
+
+/** New-entry grace by provenance: auto captures get one week, not one month. */
+export function graceDaysFor(source: string | undefined): number {
+  return isAutoSource(source) ? AUTO_GRACE_DAYS : GRACE_DAYS
+}
+
+/**
+ * Persist each entry's retention score as `memory_entries.confidence` (0–1) —
+ * the continuously-valued relevance the lifecycle keys on: recomputed on every
+ * apply pass; low confidence → archive verdict → archive TTL → hard delete.
+ * Returns the number of rows written (ship_* ids match no row and are ignored).
+ */
+export function persistConfidence(projectId: string, report: RetentionReport): number {
+  try {
+    const rows = [...report.byId.values()]
+    if (rows.length === 0) return 0
+    prjctDb.transaction(projectId, (db) => {
+      const upd = db.prepare('UPDATE memory_entries SET confidence = ? WHERE id = ?')
+      for (const r of rows) upd.run(Math.round(r.score) / 100, r.id)
+    })
+    return rows.length
+  } catch {
+    return 0
+  }
 }
 
 export interface ApplyRetentionOptions {
@@ -108,6 +139,11 @@ const RECENCY_WINDOW_DAYS = 180
 const IDLE_AFTER_DAYS = 90
 const IDLE_MAX_PENALTY = 25
 const IDLE_PENALTY_PER_DAY = 0.12
+/** Auto-captured entries describe point-in-time states (fixed bugs, transient
+ * errors) that rot fast in a moving repo — they idle out and lose new-entry
+ * grace much sooner than user-declared knowledge. */
+const AUTO_IDLE_AFTER_DAYS = 14
+const AUTO_GRACE_DAYS = 7
 const SUPERSEDED_PENALTY = 40
 const CORRECTED_PENALTY = 40
 const NOISE_PENALTY = 30
@@ -225,12 +261,16 @@ export function scoreEntry(
     ? Math.max(0, RECENCY_MAX_BONUS * (1 - ageDays / RECENCY_WINDOW_DAYS))
     : 0
 
+  const auto = isAutoSource(entry.tags?.source)
+  const idleAfterDays = idleAfterDaysFor(entry.tags?.source)
   const idlePenalty =
-    usefulness <= 0 && Number.isFinite(ageDays) && ageDays > IDLE_AFTER_DAYS
-      ? Math.min(IDLE_MAX_PENALTY, (ageDays - IDLE_AFTER_DAYS) * IDLE_PENALTY_PER_DAY)
+    usefulness <= 0 && Number.isFinite(ageDays) && ageDays > idleAfterDays
+      ? Math.min(IDLE_MAX_PENALTY, (ageDays - idleAfterDays) * IDLE_PENALTY_PER_DAY)
       : 0
   if (idlePenalty > 0) {
-    reasons.push(`idle ${Math.round(ageDays)}d`)
+    reasons.push(
+      auto ? `idle ${Math.round(ageDays)}d (auto-source)` : `idle ${Math.round(ageDays)}d`
+    )
   }
 
   // ── Groundedness / refutation ──────────────────────────────────────
@@ -277,7 +317,9 @@ export function scoreEntry(
   // unless already known-dead (dup/superseded/near-dup of R).
   const knownDead = corpusDup || ex.exactDup || ex.nearDup || superseded
   const graceVerdict =
-    scoredVerdict !== 'active' && ageDays < GRACE_DAYS && !knownDead ? 'active' : scoredVerdict
+    scoredVerdict !== 'active' && ageDays < graceDaysFor(entry.tags?.source) && !knownDead
+      ? 'active'
+      : scoredVerdict
   if (graceVerdict !== scoredVerdict) {
     reasons.push('grace period')
   }
@@ -446,6 +488,7 @@ export function applyRetention(
   const maxDelete = options.maxDelete ?? DEFAULT_MAX_DELETE
 
   const report = evaluateRetentionShared(projectId, nowMs)
+  if (!dryRun) persistConfidence(projectId, report)
   // Honest counts: only ids we can actually remove (mem_* / ship_*). Orphan
   // shapes (if any) do not inflate wouldArchive / wouldDelete vs archived.
   const toArchive = report.flagged.filter(
