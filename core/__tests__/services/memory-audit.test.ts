@@ -80,4 +80,18 @@ describe('buildMemoryAudit', () => {
     expect(audit.cited).toBe(1)
     expect(audit.neverRead).toBe(20)
   })
+
+  it('counts anti-placebo value receipts from gauntlet events', () => {
+    for (const i of Array.from({ length: 21 }, (_, k) => k)) {
+      remember(`Decision ${i}: keep the reference model bounded at size ${i}.`)
+    }
+    prjctDb.appendEvent(fixture.projectId, 'gauntlet-run', { passed: false, vacuous: false })
+    prjctDb.appendEvent(fixture.projectId, 'gauntlet-run', { passed: true, vacuous: false })
+    prjctDb.appendEvent(fixture.projectId, 'gauntlet-override', { at: 'now' })
+
+    const audit = buildMemoryAudit(fixture.projectId)
+    expect(audit.value.gauntletRuns).toBe(2)
+    expect(audit.value.gauntletRed).toBe(1)
+    expect(audit.value.gauntletOverrides).toBe(1)
+  })
 })

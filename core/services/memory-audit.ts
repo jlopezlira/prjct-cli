@@ -48,6 +48,8 @@ export interface MemoryAudit {
   avgConfidence: number
   /** Repeat-missed traps that should become mechanical constraints, not reminders. */
   escalation: Array<{ id: string; count: number; cue: string }>
+  /** Anti-placebo receipts: non-circular evidence the harness pays rent. */
+  value: ValueReceipts
 
   signalRatio: number
   slopPct: number
@@ -55,6 +57,34 @@ export interface MemoryAudit {
   passed: boolean
   failures: string[]
   thresholds: MemoryAuditThresholds
+}
+
+export interface ValueReceipts {
+  /** Machine gauntlet executions recorded for this project. */
+  gauntletRuns: number
+  /** Runs that came back RED — each one is a defect the machine stopped. */
+  gauntletRed: number
+  /** Explicit --no-gauntlet overrides — a high count means gate theater. */
+  gauntletOverrides: number
+}
+
+// Non-circular by construction: a RED run is a real defect caught before ship
+// (not adherence to prjct's own rituals), and overrides expose gate theater.
+function valueReceipts(projectId: string): ValueReceipts {
+  try {
+    const runs = prjctDb.getEvents(projectId, 'gauntlet-run', 500)
+    const red = runs.filter((r) => {
+      try {
+        return (JSON.parse(r.data) as { passed?: boolean }).passed === false
+      } catch {
+        return false
+      }
+    }).length
+    const overrides = prjctDb.getEvents(projectId, 'gauntlet-override', 500).length
+    return { gauntletRuns: runs.length, gauntletRed: red, gauntletOverrides: overrides }
+  } catch {
+    return { gauntletRuns: 0, gauntletRed: 0, gauntletOverrides: 0 }
+  }
 }
 
 interface EngagementSets {
@@ -151,6 +181,7 @@ export function buildMemoryAudit(
     wouldDelete: retention.delete,
     avgConfidence,
     escalation,
+    value: valueReceipts(projectId),
     signalRatio: health.signalRatio,
     slopPct,
     gated,
@@ -176,6 +207,11 @@ export function renderMemoryAuditMd(audit: MemoryAudit): string {
     `- **stale (>${STALE_DAYS}d):** ${audit.stale} (${pctStr(audit.stalePct)})`,
     `- **confidence:** avg ${audit.avgConfidence} (persisted per-entry; drives archive → ${DEFAULT_ARCHIVE_PRUNE_DAYS}d TTL → delete)`,
     `- **auto-cleanup would remove next:** ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
+    '',
+    '### Value receipts (anti-placebo)',
+    `- machine catches: ${audit.value.gauntletRed} RED of ${audit.value.gauntletRuns} gauntlet runs — each RED is a real defect stopped before ship`,
+    `- overrides: ${audit.value.gauntletOverrides} (\`--no-gauntlet\`) — a high count means the gate is theater`,
+    `- knowledge applied: ${audit.cited} entries cited in later work (the uninflatable signal)`,
     '',
     ...(audit.escalation.length > 0
       ? [
@@ -203,6 +239,7 @@ export function renderMemoryAuditText(audit: MemoryAudit): string {
     `  signal:       ${Math.round(audit.signalRatio * 100)}% (slop ${audit.slopPct}%)`,
     `  stale >${STALE_DAYS}d:   ${audit.stale} (${audit.stalePct}%)`,
     `  confidence:   avg ${audit.avgConfidence}`,
+    `  value:        ${audit.value.gauntletRed} machine catches / ${audit.value.gauntletRuns} runs · ${audit.value.gauntletOverrides} overrides · ${audit.cited} cited`,
     `  cleanup next: ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
     `  verdict:      ${verdictLine(audit)}`,
   ].join('\n')
