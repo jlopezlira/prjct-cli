@@ -506,13 +506,14 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     })()
     process.exitCode = result.success ? 0 : 1
   } else if (args[0] === 'harness') {
-    // score | instructions [window|set <id> <disposition>] | learn-from | list | use <rig>
+    // score | retrieval | instructions [window|set <id> <disposition>] | learn-from | list | use <rig>
     const subcommand = args[1] ?? 'list'
     const { HarnessCommands } = await import('../commands/harness')
     const cmd = new HarnessCommands()
     const mdMode = args.includes('--md')
     const result: { success: boolean; error?: string } = await (async () => {
       if (subcommand === 'score') return cmd.score(process.cwd(), { md: mdMode })
+      if (subcommand === 'retrieval') return cmd.retrieval(process.cwd(), { md: mdMode })
       if (subcommand === 'instructions') {
         if (args[2] === 'set') {
           return cmd.instructionDisposition(args[3] ?? null, args[4] ?? null, process.cwd())
@@ -524,7 +525,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
       if (subcommand === 'list') return cmd.list({ md: mdMode })
       if (subcommand === 'use') return cmd.use(args[2] ?? null, process.cwd(), { md: mdMode })
       console.error(
-        `Unknown harness subcommand: ${subcommand}. Use: score, instructions [24h|7d|14d|30d|set <id> <open|resolved|false-positive>], learn-from, list, use <rig>.`
+        `Unknown harness subcommand: ${subcommand}. Use: score, retrieval, instructions [24h|7d|14d|30d|set <id> <open|resolved|false-positive>], learn-from, list, use <rig>.`
       )
       return { success: false, error: `unknown subcommand: ${subcommand}` }
     })()
@@ -576,7 +577,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     console.log(getHelp(topic))
     process.exitCode = 0
   } else if (args[0] === 'version' || args[0] === '-v' || args[0] === '--version') {
-    const os = await import('node:os')
+    const { resolveUserHome } = await import('../infrastructure/user-home')
     const path = await import('node:path')
     const chalk = (await import('chalk')).default
     const { detectAllProviders, detectAntigravity, detectCodex } = await import(
@@ -586,7 +587,7 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
     const { fileExists } = await import('../utils/file-helper')
     const { VERSION } = await import('../utils/version')
     const detection = await detectAllProviders(ctx.isRefresh)
-    const home = os.homedir()
+    const home = resolveUserHome()
     const cwd = process.cwd()
     const [
       claudeConfigured,

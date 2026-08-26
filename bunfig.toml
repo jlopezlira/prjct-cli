@@ -3,12 +3,16 @@
 
 [test]
 # Global test isolation:
-#  1. isolate-cli-home: point PRJCT_CLI_HOME at a temp dir BEFORE any prjct
-#     module loads, so tests never write fixtures into the real ~/.prjct-cli
-#     (mem_1560). Must be first — pathManager resolves the home at import time.
-#  2. reset-singletons: reset module-level singletons (circuit breakers) before
+#  1. isolate-cli-home: set PRJCT_TEST_MODE + sandbox HOME + PRJCT_CLI_HOME
+#     BEFORE any prjct module loads, so tests never write into the real home
+#     (mem_1560, mem_19026). Must be first — pathManager + module-level captures
+#     resolve the home at import time.
+#  2. assert-real-home-untouched: snapshot the real host configs and fail the run
+#     if any changed — the ~/.kimi-code/mcp.json incident class as a red test.
+#  3. reset-singletons: reset module-level singletons (circuit breakers) before
 #     every test so one suite's failures can't cascade into another.
 preload = [
   "./core/__tests__/_setup/isolate-cli-home.ts",
+  "./core/__tests__/_setup/assert-real-home-untouched.ts",
   "./core/__tests__/_setup/reset-singletons.ts",
 ]

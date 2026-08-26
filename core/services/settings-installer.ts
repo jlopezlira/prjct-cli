@@ -13,8 +13,8 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
+import { resolveUserHome } from '../infrastructure/user-home'
 import { hookCommandChain } from './hook-command'
 
 /**
@@ -24,7 +24,7 @@ import { hookCommandChain } from './hook-command'
  * `process.env.HOME` is set, so `os.homedir()` is a last-resort fallback.
  */
 function settingsPath(): string {
-  const home = process.env.HOME || os.homedir()
+  const home = resolveUserHome()
   return path.join(home, '.claude', 'settings.json')
 }
 

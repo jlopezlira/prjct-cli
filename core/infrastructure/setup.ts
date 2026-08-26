@@ -19,7 +19,6 @@
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import chalk from 'chalk'
 import { getTemplateContent } from '../agentic/template-loader'
@@ -48,6 +47,7 @@ import { installGrokSkill } from './grok-skill'
 import { mergeWithMarkers } from './ide-project-installer'
 import pathManager from './path-manager'
 import { installStatusLine } from './statusline-installer'
+import { resolveUserPath } from './user-home'
 
 interface ProviderSetupResult {
   provider: AIProviderName
@@ -305,7 +305,7 @@ export async function run(): Promise<SetupResults> {
  */
 async function installGeminiRouter(): Promise<boolean> {
   try {
-    const geminiCommandsDir = path.join(os.homedir(), '.gemini', 'commands')
+    const geminiCommandsDir = resolveUserPath('.gemini', 'commands')
     const routerDest = path.join(geminiCommandsDir, 'p.toml')
 
     // Clean up legacy router if it exists
@@ -329,7 +329,7 @@ async function installGeminiRouter(): Promise<boolean> {
  */
 async function installGeminiGlobalConfig(): Promise<{ success: boolean; action: string | null }> {
   try {
-    const geminiDir = path.join(os.homedir(), '.gemini')
+    const geminiDir = resolveUserPath('.gemini')
     const globalConfigPath = path.join(geminiDir, 'GEMINI.md')
     await fs.mkdir(geminiDir, { recursive: true })
 
@@ -374,7 +374,7 @@ async function installAntigravitySkill(): Promise<{
   action: string | null
 }> {
   try {
-    const antigravitySkillsDir = path.join(os.homedir(), '.gemini', 'antigravity', 'skills')
+    const antigravitySkillsDir = resolveUserPath('.gemini', 'antigravity', 'skills')
     const prjctSkillDir = path.join(antigravitySkillsDir, 'prjct')
     const skillMdPath = path.join(prjctSkillDir, 'SKILL.md')
     await fs.mkdir(prjctSkillDir, { recursive: true })

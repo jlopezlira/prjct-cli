@@ -7,7 +7,6 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { getTemplateContent } from '../agentic/template-loader'
 import { getErrorMessage } from '../types/fs'
@@ -18,6 +17,7 @@ import log from '../utils/logger'
 import { VERSION } from '../utils/version'
 import { detectCodex } from './ai-provider'
 import { writeSkillIfChanged } from './skill-install-helper'
+import { resolveUserPath } from './user-home'
 
 const CODEX_SKILL_META_MARKER = 'prjct-codex-router'
 
@@ -31,7 +31,7 @@ const CODEX_SKILL_META_MARKER = 'prjct-codex-router'
 export const CODEX_SKILL_MAX_BYTES = 1024
 
 function getCodexSkillPath(): string {
-  return path.join(os.homedir(), '.codex', 'skills', 'prjct', 'SKILL.md')
+  return resolveUserPath('.codex', 'skills', 'prjct', 'SKILL.md')
 }
 
 // Compact on purpose: every metadata byte counts against the 1024-byte

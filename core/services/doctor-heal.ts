@@ -129,10 +129,9 @@ export async function applyDoctorHeal(
   const skillPoisoned = await (async () => {
     try {
       const fs = await import('node:fs/promises')
-      const path = await import('node:path')
-      const os = await import('node:os')
+      const { resolveUserPath } = await import('../infrastructure/user-home')
       const { skillBodyHasProjectStamp } = await import('./skill-generator')
-      const skillPath = path.join(os.homedir(), '.claude', 'skills', 'prjct', 'SKILL.md')
+      const skillPath = resolveUserPath('.claude', 'skills', 'prjct', 'SKILL.md')
       const body = await fs.readFile(skillPath, 'utf-8').catch(() => null)
       return body ? skillBodyHasProjectStamp(body) : false
     } catch {

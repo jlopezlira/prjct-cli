@@ -15,8 +15,8 @@
  */
 
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { resolveUserPath } from '../infrastructure/user-home'
 
 export type McpSource = 'cloud' | 'project' | 'global'
 
@@ -147,7 +147,7 @@ class McpService {
 
     // Global ~/.claude.json mcpServers
     const globalMcp = this.readJson<{ mcpServers?: Record<string, unknown> }>(
-      path.join(os.homedir(), '.claude.json')
+      resolveUserPath('.claude.json')
     )
     if (globalMcp?.mcpServers) {
       for (const name2 of Object.keys(globalMcp.mcpServers)) {

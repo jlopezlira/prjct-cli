@@ -702,15 +702,9 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
   private async installAntigravitySurface(installed: boolean): Promise<void> {
     if (!installed) return
     try {
-      const os = await import('node:os')
+      const { resolveUserPath } = await import('../infrastructure/user-home')
       const { getTemplateContent } = await import('../agentic/template-loader')
-      const antigravitySkillDir = path.join(
-        os.homedir(),
-        '.gemini',
-        'antigravity',
-        'skills',
-        'prjct'
-      )
+      const antigravitySkillDir = resolveUserPath('.gemini', 'antigravity', 'skills', 'prjct')
       const skillPath = path.join(antigravitySkillDir, 'SKILL.md')
       const templateContent = getTemplateContent('antigravity/SKILL.md')
       if (!templateContent) {

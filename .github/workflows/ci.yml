@@ -228,6 +228,14 @@ jobs:
           prjct --version | grep -q "prjct"
           echo "✅ CLI builds and runs correctly"
 
+      # Perf ratchet — cold hook SLO (EVALS.md: p50 ≤ 400ms, p95 ≤ 800ms).
+      # Advisory for now (--no-fail) so the FIRST CI runs surface real
+      # runner-hardware numbers; once we have them, drop --no-fail (or set
+      # PRJCT_HOOK_COLD_P50_MS/_P95_MS with headroom) to make it release-blocking.
+      # Phase 1 (native daemon-first client) adds the warm verb-latency gate.
+      - name: Hook cold-path benchmark (advisory baseline)
+        run: node scripts/bench-hooks.mjs --no-fail
+
   install-compat:
     name: Install Compatibility
     runs-on: ubuntu-latest

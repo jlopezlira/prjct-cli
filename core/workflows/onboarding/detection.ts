@@ -6,8 +6,8 @@
  */
 
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
+import { resolveUserPath } from '../../infrastructure/user-home'
 import type {
   AIAgent,
   OnboardingDetectedStack as DetectedStack,
@@ -102,19 +102,19 @@ export async function detectProjectType(projectPath: string): Promise<ProjectTyp
 export async function detectInstalledAgents(projectPath: string): Promise<AIAgent[]> {
   const agents: AIAgent[] = []
 
-  if (await dirExists(path.join(os.homedir(), '.claude'))) agents.push('claude')
+  if (await dirExists(resolveUserPath('.claude'))) agents.push('claude')
   if (await fileExists(path.join(projectPath, '.cursorrules'))) agents.push('cursor')
   if (await fileExists(path.join(projectPath, '.github', 'copilot-instructions.md'))) {
     agents.push('copilot')
   }
-  if (await dirExists(path.join(os.homedir(), '.gemini'))) agents.push('gemini')
-  if (await dirExists(path.join(os.homedir(), '.gemini', 'antigravity'))) {
+  if (await dirExists(resolveUserPath('.gemini'))) agents.push('gemini')
+  if (await dirExists(resolveUserPath('.gemini', 'antigravity'))) {
     agents.push('antigravity')
   }
   if (await dirExists(path.join(projectPath, '.opencode'))) agents.push('opencode')
   if (
     (await dirExists(path.join(projectPath, '.pi'))) ||
-    (await dirExists(path.join(os.homedir(), '.pi')))
+    (await dirExists(resolveUserPath('.pi')))
   ) {
     agents.push('pi')
   }
@@ -144,7 +144,7 @@ export async function detectInstalledAgents(projectPath: string): Promise<AIAgen
     await execAsync('which codex')
     agents.push('codex')
   } catch {
-    if (await dirExists(path.join(os.homedir(), '.codex'))) agents.push('codex')
+    if (await dirExists(resolveUserPath('.codex'))) agents.push('codex')
   }
 
   return agents

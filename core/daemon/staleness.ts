@@ -9,8 +9,8 @@
  */
 
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { resolveUserHome } from '../infrastructure/user-home'
 import { DAEMON_PATHS } from './protocol'
 
 function ancestorDirectories(start: string, limit: number): string[] {
@@ -145,7 +145,7 @@ export function isStrictlyNewerVersion(candidate: string, baseline: string): boo
  */
 export function isGlobalVersionDrifted(ownVersion: string | null): boolean {
   if (!ownVersion) return false
-  const home = os.homedir()
+  const home = resolveUserHome()
 
   const candidates = [
     `${home}/Library/pnpm/prjct`, // pnpm (macOS default)

@@ -9,7 +9,6 @@ import { PrjctCommands } from './commands/commands'
 import { mapOptions } from './commands/option-mapper'
 import { commandRegistry } from './commands/registry'
 import './commands/register' // Ensure commands are registered
-import os from 'node:os'
 import path from 'node:path'
 import chalk from 'chalk'
 import { isRemovedVerb, REMOVED_VERBS } from './commands/removed-verbs'
@@ -17,6 +16,7 @@ import { routeSpec } from './commands/route-spec'
 import { detectAllProviders, detectAntigravity } from './infrastructure/ai-provider'
 import configManager from './infrastructure/config-manager'
 import performanceTracker from './infrastructure/performance-tracker'
+import { resolveUserPath } from './infrastructure/user-home'
 import { sessionTracker } from './services/session-tracker'
 import type { CommandMeta, CommandResult } from './types/commands'
 import { getErrorMessage, getErrorStack } from './types/fs'
@@ -392,8 +392,8 @@ function parseCommandArgs(_cmd: CommandMeta, rawArgs: string[]): ParsedCommandAr
 async function displayVersion(version: string): Promise<void> {
   const detection = await detectAllProviders()
 
-  const claudeCommandPath = path.join(os.homedir(), '.claude', 'commands', 'p.md')
-  const geminiCommandPath = path.join(os.homedir(), '.gemini', 'commands', 'p.toml')
+  const claudeCommandPath = resolveUserPath('.claude', 'commands', 'p.md')
+  const geminiCommandPath = resolveUserPath('.gemini', 'commands', 'p.toml')
   const [claudeConfigured, geminiConfigured, cursorConfigured, cursorExists] = await Promise.all([
     fileExists(claudeCommandPath),
     fileExists(geminiCommandPath),

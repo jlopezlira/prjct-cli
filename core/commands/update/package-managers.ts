@@ -9,6 +9,7 @@
 import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
+import { resolveUserHome } from '../../infrastructure/user-home'
 import { resetPackageRoot } from '../../utils/version'
 import { commandOnPath } from '../../utils/which'
 
@@ -26,7 +27,7 @@ export interface InstalledLocation {
   version: string
 }
 
-const HOME = os.homedir()
+const HOME = resolveUserHome()
 
 /**
  * Global install args always pin the npm registry package name.

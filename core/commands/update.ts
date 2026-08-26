@@ -13,6 +13,7 @@ import path from 'node:path'
 import { CommandInstaller } from '../infrastructure/command-installer'
 import editorsConfig from '../infrastructure/editors-config'
 import UpdateChecker from '../infrastructure/update-checker'
+import { resolveUserHome } from '../infrastructure/user-home'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
 import { failFromError } from '../utils/md-aware'
@@ -343,7 +344,7 @@ export class UpdateCommands extends PrjctCommandsBase {
       try {
         const { detectAllProviders } = await import('../infrastructure/ai-provider')
         const detection = await detectAllProviders()
-        const home = path.join(require('node:os').homedir())
+        const home = resolveUserHome()
 
         if (detection.gemini.installed) {
           const geminiPath = path.join(home, '.gemini', 'GEMINI.md')
