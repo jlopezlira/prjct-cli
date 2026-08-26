@@ -1,5 +1,5 @@
 ---
-description: "The agentic harness for AI coding agents: intent briefs, RAG context, synthesized memory, guardrails, performance, and ships. Run the prjct verb yourself; use `prjct work` normally."
+description: "The agentic harness for AI coding agents: machine-verified ships, guarded edits, and project lookup that beats re-deriving from source. Run the prjct verb yourself; use `prjct work` normally."
 allowed-tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Task"]
 user-invocable: true
 ---

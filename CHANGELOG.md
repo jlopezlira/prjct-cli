@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [4.10.0] - 2026-08-26
+
+### Features
+
+- efficiency program: native verb client, machine gauntlet, RRF retrieval, knowledge-first enforcement (v4.9.0)
+- block the grep, name the lookup — the agent must consult prjct
+- language-agnostic by mechanism, not by hardcoded list
+- RRF fusion (measured +39.8% nDCG) + retire unmeasured competitor marketing
+- anti-placebo value receipts — non-circular proof the harness pays rent
+- self-provisioning — the gauntlet runs itself, nobody has to remember
+- the machine gate — Uncle Bob's agentic discipline as a prjct mechanism
+- live confidence lifecycle — score persisted, auto rot 6x faster, archive TTL 7d
+- fix self-inflating read signal + add fail-able memory audit (Phase 2)
+
+### Bug Fixes
+
+- the harness instructs, the model decides — delete the inference
+- a missing toolchain must never block a client's ship + polyglot detection
+- Fable re-evaluation — honest audit tiers + 5 hardening fixes
+
+### Performance
+
+- kill dead code + hot-path friction (knip-clean, statusline, telemetry, journal, MCP boot)
+
+### Maintenance
+
+- Phase 2: memory that earns its place + the machine gauntlet (Uncle Bob discipline) (#634)
+
+
 ## [4.9.1] - 2026-08-26
 
 ### Performance
