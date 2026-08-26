@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-08-26
+
+### Features
+
+- promote retrieval eval to `prjct harness retrieval` + CI baseline (Phase 0)
+
+### Maintenance
+
+- wire hook cold-path bench into CI + add verb-latency bench (Phase 0)
+
+
 ## [4.8.1] - 2026-08-22
 
 ### Fixed
