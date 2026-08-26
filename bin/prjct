@@ -194,6 +194,31 @@ run_with_node() {
 
 # Main execution
 main() {
+  # Native verb fast path: for a daemon-served READ verb, hand off to the
+  # native client (no runtime boot, no ensure_setup) — it talks to the warm
+  # daemon and exits with its code. Exit 89 = punt → fall through to the
+  # runtime below. Additive: a missing binary or a down daemon just continues.
+  if [ "$PRJCT_NO_DAEMON" != "1" ]; then
+    case "$1" in
+      work|search|guard|status|prime)
+        # One fork for platform+arch (matches node's process.platform/arch labels).
+        _label=""
+        case "$(uname -sm)" in
+          "Darwin arm64") _label="darwin-arm64" ;;
+          "Darwin x86_64") _label="darwin-x64" ;;
+          "Linux x86_64") _label="linux-x64" ;;
+          "Linux aarch64" | "Linux arm64") _label="linux-arm64" ;;
+        esac
+        _native="$ROOT_DIR/dist/bin/hook-fast-${_label}"
+        if [ -n "$_label" ] && [ -x "$_native" ]; then
+          "$_native" verb "$@"
+          _rc=$?
+          [ "$_rc" = 89 ] || exit "$_rc"
+        fi
+        ;;
+    esac
+  fi
+
   # Hooks fire per prompt / tool call / turn inside Claude Code — the hot
   # path must not pay ensure_setup's stats/cp/sed on every event. The .cjs
   # bin already skips setup for `hook` (bin/prjct.cjs setupSkipCommands);

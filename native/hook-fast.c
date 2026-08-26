@@ -73,6 +73,9 @@
 #define SESSION_START_RESPONSE_TIMEOUT_MS 4000
 #define MAX_STDIN_BYTES (1 * 1024 * 1024)
 #define MAX_RESPONSE_BYTES (4 * 1024 * 1024)
+/* Verb (non-hook) response budget. The read-verb allowlist is snappy and long
+ * verbs are excluded from native routing entirely, so 30s is generous. */
+#define VERB_RESPONSE_TIMEOUT_MS 30000
 
 static void fall_through(void) {
     exit(FALLTHROUGH_EXIT);
@@ -345,11 +348,222 @@ static int read_stdin_with_timeout(buf_t *out, int timeout_ms) {
     }
 }
 
+static int is_allowed_verb(const char *cmd) {
+    static const char *const ALLOW[] = { "work", "search", "guard", "status", "prime", NULL };
+    for (int i = 0; ALLOW[i]; i++) {
+        if (strcmp(cmd, ALLOW[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Verb fast path: `hook-fast verb <cmd> [args…]`. Relays a daemon-served READ
+ * verb to the warm daemon and prints its captured stdout/stderr, exiting with
+ * the daemon's exit code. Mirrors the JS shim's daemon-verb branch
+ * (scripts/build.js generateDaemonShim, the `cmd && !skip.has(cmd)` block)
+ * EXACTLY: same argv→{args,options} parse, same {id,command,args,options,cwd}
+ * request, same relay — but `console.log`/`console.error` append a trailing
+ * newline, so this does too (the hook path deliberately does raw fwrite). Verbs
+ * read no stdin, so ANY uncertainty is a clean exit 89 (fall_through) and the
+ * launcher re-runs the verb on the JS path with an untouched pipe. */
+static int run_verb(int argc, char **argv) {
+#define A(call) do { if ((call) != 0) fall_through(); } while (0)
+    if (argc < 3) fall_through();
+
+    const char *no_daemon = getenv("PRJCT_NO_DAEMON");
+    if (no_daemon && strcmp(no_daemon, "1") == 0) fall_through();
+    const char *home = getenv("HOME");
+    if (!home || !*home) fall_through();
+
+    const int uargc = argc - 2;
+    char **const uargv = argv + 2;
+    if (uargc > 200) fall_through();
+
+    /* command = first non-flag arg, mirroring the shim's args.find(). */
+    const char *cmd = NULL;
+    for (int i = 0; i < uargc; i++) {
+        if (uargv[i][0] != '-') { cmd = uargv[i]; break; }
+    }
+    if (!cmd || !is_allowed_verb(cmd)) fall_through();
+
+    const char *cli_home_env = getenv("PRJCT_CLI_HOME");
+    char run_dir[PATH_MAX + 128];
+    char sock_path[PATH_MAX + 256];
+    if (cli_home_env && *cli_home_env) {
+        snprintf(run_dir, sizeof(run_dir), "%s/run", cli_home_env);
+    } else {
+        snprintf(run_dir, sizeof(run_dir), "%s/.prjct-cli/run", home);
+    }
+    snprintf(sock_path, sizeof(sock_path), "%s/daemon.sock", run_dir);
+    struct stat st;
+    if (stat(sock_path, &st) != 0) fall_through(); /* no daemon listening */
+
+    char cwd[PATH_MAX + 256];
+    if (!getcwd(cwd, sizeof(cwd))) fall_through();
+
+    /* Parse argv → {args, options} exactly like the shim: `--k=v` / `--k v`
+     * are string options, bare `--flag` and `-x` are boolean true, and a
+     * positional at index > 0 (index 0 is the command token) is an arg. */
+    buf_t args_json, opts_json;
+    if (buf_init(&args_json, 256) != 0) fall_through();
+    if (buf_init(&opts_json, 256) != 0) fall_through();
+    int consumed[256] = { 0 };
+    int args_count = 0, opts_count = 0;
+    for (int i = 0; i < uargc; i++) {
+        if (consumed[i]) continue;
+        const char *a = uargv[i];
+        if (a[0] == '-' && a[1] == '-') {
+            const char *r = a + 2;
+            const char *eq = strchr(r, '=');
+            if (eq) {
+                if (opts_count++) A(buf_append_str(&opts_json, ","));
+                A(buf_append_str(&opts_json, "\""));
+                A(json_escape_append(&opts_json, r, (size_t)(eq - r)));
+                A(buf_append_str(&opts_json, "\":\""));
+                A(json_escape_append(&opts_json, eq + 1, strlen(eq + 1)));
+                A(buf_append_str(&opts_json, "\""));
+            } else if (i + 1 < uargc && !(uargv[i + 1][0] == '-' && uargv[i + 1][1] == '-')) {
+                if (opts_count++) A(buf_append_str(&opts_json, ","));
+                A(buf_append_str(&opts_json, "\""));
+                A(json_escape_append(&opts_json, r, strlen(r)));
+                A(buf_append_str(&opts_json, "\":\""));
+                A(json_escape_append(&opts_json, uargv[i + 1], strlen(uargv[i + 1])));
+                A(buf_append_str(&opts_json, "\""));
+                consumed[i + 1] = 1;
+            } else {
+                if (opts_count++) A(buf_append_str(&opts_json, ","));
+                A(buf_append_str(&opts_json, "\""));
+                A(json_escape_append(&opts_json, r, strlen(r)));
+                A(buf_append_str(&opts_json, "\":true"));
+            }
+        } else if (a[0] == '-' && a[1] && a[2] == '\0') {
+            if (opts_count++) A(buf_append_str(&opts_json, ","));
+            A(buf_append_str(&opts_json, "\""));
+            A(json_escape_append(&opts_json, a + 1, 1));
+            A(buf_append_str(&opts_json, "\":true"));
+        } else if (i > 0) {
+            if (args_count++) A(buf_append_str(&args_json, ","));
+            A(buf_append_str(&args_json, "\""));
+            A(json_escape_append(&args_json, a, strlen(a)));
+            A(buf_append_str(&args_json, "\""));
+        }
+    }
+
+    buf_t req;
+    if (buf_init(&req, 1024) != 0) fall_through();
+    char id[64];
+    snprintf(id, sizeof(id), "vf-%ld-%d", (long)time(NULL), (int)getpid());
+    A(buf_append_str(&req, "{\"id\":\""));
+    A(json_escape_append(&req, id, strlen(id)));
+    A(buf_append_str(&req, "\",\"command\":\""));
+    A(json_escape_append(&req, cmd, strlen(cmd)));
+    A(buf_append_str(&req, "\",\"args\":["));
+    A(buf_append(&req, args_json.data, args_json.len));
+    A(buf_append_str(&req, "],\"options\":{"));
+    A(buf_append(&req, opts_json.data, opts_json.len));
+    A(buf_append_str(&req, "},\"cwd\":\""));
+    A(json_escape_append(&req, cwd, strlen(cwd)));
+    A(buf_append_str(&req, "\"}\n"));
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) fall_through();
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    if (strlen(sock_path) >= sizeof(addr.sun_path)) { close(fd); fall_through(); }
+    strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) { close(fd); fall_through(); }
+
+    struct timeval rcvtimeo;
+    rcvtimeo.tv_sec = VERB_RESPONSE_TIMEOUT_MS / 1000;
+    rcvtimeo.tv_usec = (VERB_RESPONSE_TIMEOUT_MS % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
+
+    size_t written = 0;
+    while (written < req.len) {
+        ssize_t n = write(fd, req.data + written, req.len - written);
+        if (n <= 0) { close(fd); fall_through(); }
+        written += (size_t)n;
+    }
+
+    buf_t resp;
+    if (buf_init(&resp, 4096) != 0) { close(fd); fall_through(); }
+    for (;;) {
+        char chunk[65536];
+        ssize_t n = read(fd, chunk, sizeof(chunk));
+        if (n <= 0) { close(fd); fall_through(); }
+        if (resp.len + (size_t)n > MAX_RESPONSE_BYTES) { close(fd); fall_through(); }
+        if (buf_append(&resp, chunk, (size_t)n) != 0) { close(fd); fall_through(); }
+        if (memchr(resp.data, '\n', resp.len)) break;
+    }
+    close(fd);
+
+    char *nl = memchr(resp.data, '\n', resp.len);
+    const char *body_end = nl ? nl : (resp.data + resp.len);
+    const char *p;
+
+    /* Stale daemon code: request did NOT run — fall through so the launcher
+     * re-runs the verb on fresh JS code (it re-sets PRJCT_NO_DAEMON=1 first). */
+    p = find_key(resp.data, body_end, "retry");
+    if (p) {
+        while (p < body_end && *p == ' ') p++;
+        if (p + 4 <= body_end && memcmp(p, "true", 4) == 0) fall_through();
+    }
+
+    long exit_code = 0;
+    p = find_key(resp.data, body_end, "exitCode");
+    if (p) {
+        while (p < body_end && *p == ' ') p++;
+        char *num_end = NULL;
+        exit_code = strtol(p, &num_end, 10);
+        if (num_end == p) exit_code = 0;
+    }
+
+    /* stdout/stderr are printed only when present as a string, each with a
+     * trailing newline, matching `if(r.stdout)console.log(...)` / console.error. */
+    p = find_key(resp.data, body_end, "stdout");
+    if (p) {
+        while (p < body_end && *p == ' ') p++;
+        if (p < body_end && *p == '"') {
+            buf_t out;
+            if (buf_init(&out, resp.len) != 0) fall_through();
+            const char *after = parse_json_string(p, body_end, &out);
+            if (!after) fall_through(); /* malformed — let the fallback re-run */
+            fwrite(out.data, 1, out.len, stdout);
+            fputc('\n', stdout);
+        }
+    }
+    fflush(stdout);
+
+    p = find_key(resp.data, body_end, "stderr");
+    if (p) {
+        while (p < body_end && *p == ' ') p++;
+        if (p < body_end && *p == '"') {
+            buf_t err;
+            if (buf_init(&err, 256) == 0) {
+                const char *after = parse_json_string(p, body_end, &err);
+                if (after) {
+                    fwrite(err.data, 1, err.len, stderr);
+                    fputc('\n', stderr);
+                }
+            }
+        }
+    }
+    fflush(stderr);
+
+    return (int)exit_code;
+#undef A
+}
+
 int main(int argc, char **argv) {
     /* ---- Phase 1: BEFORE stdin is touched. fall_through() here is safe —
      * the next stage in the shell `||` chain gets a fully untouched pipe. */
     if (argc < 2) fall_through();
     const char *subcommand = argv[1];
+
+    /* Verb mode: `hook-fast verb <cmd> [args…]` relays a daemon-served READ
+     * verb and exits with the daemon's code. No hook subcommand is named
+     * "verb", so this never shadows the hook path. */
+    if (strcmp(subcommand, "verb") == 0) return run_verb(argc, argv);
 
     /* Must match every other entry point's PRJCT_NO_DAEMON contract
      * (scripts/build.js generateDaemonShim, bin/prjct.ts): "1" forces the
