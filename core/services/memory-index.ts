@@ -273,15 +273,16 @@ export function memoryL0IndexForSession(
  * Exported: `hooks/session-start.ts` imports this directly rather than
  * keeping its own copy.
  */
-export function findRepeatMissedEntry(
+export function findRepeatMissedEntries(
   projectId: string,
-  alreadyShown: Set<string>
-): { entry: MemoryEntry; count: number } | null {
+  alreadyShown: Set<string>,
+  limit = 1
+): Array<{ entry: MemoryEntry; count: number }> {
   try {
     const signals = projectMemory.recall(projectId, {
       types: ['improvement-signal'],
       tags: { kind: 'skill-miss' },
-      limit: 50,
+      limit: 100,
       dedupeByKey: false,
     })
     const counts = new Map<string, number>()
@@ -290,12 +291,22 @@ export function findRepeatMissedEntry(
       if (!memId) continue
       counts.set(memId, (counts.get(memId) ?? 0) + 1)
     }
-    const top = [...counts].sort((a, b) => b[1] - a[1])[0]
-    if (!top || top[1] < REPEAT_MISS_THRESHOLD || alreadyShown.has(top[0])) return null
-    const [topId, topCount] = top
-    const entry = projectMemory.getById(projectId, topId)
-    return entry ? { entry, count: topCount } : null
+    return [...counts]
+      .filter(([id, count]) => count >= REPEAT_MISS_THRESHOLD && !alreadyShown.has(id))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .flatMap(([id, count]) => {
+        const entry = projectMemory.getById(projectId, id)
+        return entry ? [{ entry, count }] : []
+      })
   } catch {
-    return null
+    return []
   }
+}
+
+export function findRepeatMissedEntry(
+  projectId: string,
+  alreadyShown: Set<string>
+): { entry: MemoryEntry; count: number } | null {
+  return findRepeatMissedEntries(projectId, alreadyShown, 1)[0] ?? null
 }

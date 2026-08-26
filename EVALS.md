@@ -56,7 +56,7 @@ The agent-runtime hot path is a release contract:
 
 - Warm hook handler p50: **< 20ms**, observed with `prjct perf --md`.
 - Cold production hook p50: **≤ 400ms** and p95: **≤ 800ms**, gated by `node scripts/bench-hooks.mjs --runtime both`.
-- Prompt state payload: **≤ 1500 characters** and byte-hash deduplicated when unchanged.
+- Prompt state payload: **≤ 700 characters** (STATE_BUDGET) and byte-hash deduplicated when unchanged.
 - PreToolUse fan-out: **one prjct process per host event** (`pre-bash` or `pre-edit`); do not reinstall separate secret/package/commit processes.
 
 Use `--no-fail` only for exploratory benchmark capture. The default benchmark exits non-zero on an SLO regression.

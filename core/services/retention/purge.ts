@@ -16,7 +16,10 @@ import prjctDb from '../../storage/database'
 
 /** Soft-deleted rows have no future/statistical value — purge quickly. */
 export const DEFAULT_SOFT_DELETED_PURGE_DAYS = 7
-export const DEFAULT_ARCHIVE_PRUNE_DAYS = 90
+// One repo-week: long enough to notice a wrongly-archived entry, short enough
+// that dead knowledge doesn't linger while the codebase moves (JJ, 2026-08-25;
+// was 90). Override: config retention.archivePruneDays.
+export const DEFAULT_ARCHIVE_PRUNE_DAYS = 7
 export const DEFAULT_AUTO_SOURCE_MAX_LIVE = 20
 /** Sources that are auto-generated (not human judgment). */
 export const AUTO_SOURCE_PREFIXES = [
@@ -46,7 +49,7 @@ export interface VaultHealth {
   autoSourceLive: number
 }
 
-function isAutoSource(source: string | undefined): boolean {
+export function isAutoSource(source: string | undefined): boolean {
   if (!source) return false
   return AUTO_SOURCE_PREFIXES.some(
     (p) => source === p || source.startsWith(`${p}-`) || source.startsWith(p)
@@ -295,5 +298,3 @@ export async function runVaultPurge(
     digestsWritten,
   }
 }
-
-export { isAutoSource }

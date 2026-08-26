@@ -3,6 +3,11 @@
 # Displays the current prjct task
 
 component_task() {
+  # DEAD DATA SOURCE: state moved to SQLite (v1.24+); storage/state.json no
+  # longer exists, so this component can only ever render blank. Return before
+  # paying stat/jq forks. Re-enable only with a live source (daemon snapshot).
+  return
+
   component_enabled "task" || return
 
   local cache_file="${CACHE_DIR}/prjct_task.cache"

@@ -144,11 +144,6 @@ function resolveLocalPrjctBin(): string | null {
  * value inside the host's server entry (kimi mcp.json / codex config.toml
  * managed block).
  */
-export function getPrjctLeanMcpConfig(): MCPServerConfig {
-  const base = MCP_SERVER_PRESETS.prjct
-  return { ...base, env: { ...(base.env ?? {}), PRJCT_MCP_TOOLS: 'lean' } }
-}
-
 /**
  * prjct preset pinned to the micro tier (ONE dispatch tool, <800-char
  * catalog) — the default for non-caching hosts (Kimi/Codex) that re-pay

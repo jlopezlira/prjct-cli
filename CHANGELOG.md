@@ -14,11 +14,24 @@
 ### Features
 
 - promote retrieval eval to `prjct harness retrieval` + CI baseline (Phase 0)
+- native daemon-first client for hot read verbs (Phase 1)
+- machine gauntlet: run the project's verify commands as a recorded gate bound
+  to git HEAD; `ship` refuses a red receipt, `done`/`land` warm it in background
+- RRF fusion for retrieval (measured +39.8% nDCG on a leak-free split)
+- knowledge-first enforcement: a Grep/Glob whose token prjct already holds
+  judgment about is denied once, pointing at `prjct search`
+- live confidence lifecycle: retention score persisted per entry, auto-source
+  rot 6x faster, archive TTL 90d -> 7d
+- `prjct harness audit`: fail-able memory relevance check with anti-placebo
+  value receipts
 
 ### Maintenance
 
 - wire hook cold-path bench into CI + add verb-latency bench (Phase 0)
-
+- close the real-host-config write incident class (test hermeticity red-test)
+- kill dead code + hot-path friction (knip-clean, statusline, telemetry,
+  daemon journal, MCP compile cache)
+- retire unmeasured competitor marketing from `harness score`
 
 ## [4.8.1] - 2026-08-22
 

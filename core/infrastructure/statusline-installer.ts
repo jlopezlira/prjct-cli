@@ -153,14 +153,6 @@ if [ -f "$CONFIG" ]; then
       echo "prjct v$LATEST - run p. upgrade"
       exit 0
     fi
-    STATE="$HOME/.prjct-cli/projects/$PROJECT_ID/storage/state.json"
-    if [ -f "$STATE" ]; then
-      TASK=$(jq -r '.currentTask.description // ""' "$STATE" 2>/dev/null)
-      if [ -n "$TASK" ]; then
-        echo "$TASK"
-        exit 0
-      fi
-    fi
   fi
 fi
 echo "prjct"

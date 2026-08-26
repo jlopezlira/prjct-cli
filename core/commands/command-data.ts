@@ -166,6 +166,7 @@ export const COMMANDS: CommandMeta[] = [
         'allowNewDeps',
         'forcePressure',
         'noJudgmentGate',
+        'noGauntlet',
       ],
       strings: ['intent', 'geometry'],
     },
@@ -1586,7 +1587,13 @@ export const COMMANDS: CommandMeta[] = [
       ['crew', 'Run a crew (multi-subagent) workflow'],
       [
         'harness',
-        'Harness scorecard, instruction observability/disposition, and Body/rig adoption (score · instructions · learn-from · list · use)',
+        'Harness scorecard, retrieval baseline, memory audit, instruction observability, and Body/rig adoption (score · retrieval · audit · instructions · learn-from · list · use)',
+      ],
+      [
+        'gauntlet',
+        "Run the project's verify commands (typecheck · lint · test) as a recorded machine gate — ship requires a fresh green receipt",
+        undefined,
+        '[--md]',
       ],
       [
         'doctor',

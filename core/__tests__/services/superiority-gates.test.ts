@@ -24,7 +24,6 @@ import {
   readDriftStamp,
   shouldRefreshDrift,
 } from '../../services/drift-refresh'
-import { computeHarnessScore, renderCompetitiveDustMd } from '../../services/harness-score'
 import {
   CORE_SUPERIORITY_RUNTIMES,
   multiRuntimeInstallParityReport,
@@ -229,20 +228,6 @@ describe('judgment gate consent-scoped override', () => {
       override: true,
     })
     expect(ok.blocked).toBe(false)
-  })
-})
-
-describe('competitive dust claims SUPERIOR on every row', () => {
-  it('matrix uses SUPERIOR not n/a ties', () => {
-    const md = renderCompetitiveDustMd(computeHarnessScore())
-    expect(md).toMatch(/SUPERIOR/i)
-    expect(md).toContain('gentle-ai')
-    expect(md).toContain('open-GSD')
-    expect(md).toContain('memory plugins')
-    expect(md).not.toMatch(/\bn\/a\b/i)
-    expect(md).toMatch(/discuss-lock/i)
-    expect(md).toMatch(/Rho/i)
-    expect(md).toMatch(/Package legitimacy/i)
   })
 })
 

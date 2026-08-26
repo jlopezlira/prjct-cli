@@ -166,19 +166,23 @@ class PerformanceTracker {
       { metric: 'external_memory', value: snapshot.external, unit: 'bytes' },
     ]
 
-    for (const m of metrics) {
-      this.recordSample(
+    // One multi-row INSERT instead of four — this runs on every CLI command,
+    // so the per-command write amplification is pure hot-path tax.
+    try {
+      const timestamp = new Date().toISOString()
+      prjctDb.run(
         projectId,
-        m.metric,
-        {
-          metric: m.metric,
-          value: m.value,
-          unit: m.unit,
-          context,
-        },
-        m.value,
-        m.unit
+        'INSERT INTO perf_samples (metric, value, unit, data, timestamp) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)',
+        ...metrics.flatMap((m) => [
+          m.metric,
+          m.value,
+          m.unit,
+          JSON.stringify({ metric: m.metric, value: m.value, unit: m.unit, context }),
+          timestamp,
+        ])
       )
+    } catch {
+      /* telemetry is best-effort */
     }
 
     return snapshot

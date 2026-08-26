@@ -1,7 +1,9 @@
 /**
  * Verified project command facts — language-agnostic. Reads real evidence
  * per ecosystem (package.json `scripts`, Cargo.toml/go.mod presence,
- * pyproject.toml tool sections) so downstream consumers (PRJCT.md,
+ * pyproject.toml tool sections, pom.xml/build.gradle, Gemfile+.rspec,
+ * composer.json+phpunit.xml, *.csproj/*.sln, mix.exs, Makefile targets)
+ * so downstream consumers (PRJCT.md,
  * `prjct context project --md`, the `prjct_project_facts` MCP tool) can
  * quote commands that actually exist — never guessed by lockfile presence
  * the way `sync-analyzer.ts`'s `detectCommands` does. Inspection only —
@@ -18,9 +20,18 @@
  * section), never assumed from the ecosystem alone.
  */
 
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileExists, readFile, readJson } from '../utils/file-helper'
 import { shellCommands, unwrapCommand } from './shell-lexer'
+
+async function readdirSafe(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir)
+  } catch {
+    return []
+  }
+}
 
 export type VerifiedCommandKind = 'test' | 'lint' | 'build' | 'dev' | 'typecheck' | 'format'
 
@@ -84,6 +95,7 @@ async function detectNodeCommands(projectPath: string): Promise<VerifiedCommand[
 async function detectCargoCommands(projectPath: string): Promise<VerifiedCommand[]> {
   if (!(await fileExists(path.join(projectPath, 'Cargo.toml')))) return []
   return [
+    { scriptName: 'typecheck', command: 'cargo check', kind: 'typecheck', mutating: false },
     { scriptName: 'test', command: 'cargo test', kind: 'test', mutating: false },
     { scriptName: 'build', command: 'cargo build', kind: 'build', mutating: false },
     { scriptName: 'lint', command: 'cargo clippy', kind: 'lint', mutating: false },
@@ -96,9 +108,150 @@ async function detectGoCommands(projectPath: string): Promise<VerifiedCommand[]>
   return [
     { scriptName: 'test', command: 'go test ./...', kind: 'test', mutating: false },
     { scriptName: 'build', command: 'go build ./...', kind: 'build', mutating: false },
+    // `go vet` ships with the toolchain — the standard read-only correctness pass.
+    { scriptName: 'lint', command: 'go vet ./...', kind: 'lint', mutating: false },
     // `gofmt -l` only lists files that need formatting — read-only, unlike `go fmt ./...`.
     { scriptName: 'format', command: 'gofmt -l .', kind: 'format', mutating: false },
   ]
+}
+
+// JVM / .NET / RUBY / PHP / ELIXIR / MAKE — same evidence rule: a command is
+// offered only when this repo carries the manifest (or configured tool) that
+// defines it. Wrapper scripts (`./gradlew`, `./mvnw`) win when present so the
+// project's pinned toolchain runs, not whatever is on PATH.
+
+async function detectMavenCommands(projectPath: string): Promise<VerifiedCommand[]> {
+  if (!(await fileExists(path.join(projectPath, 'pom.xml')))) return []
+  const mvn = (await fileExists(path.join(projectPath, 'mvnw'))) ? './mvnw' : 'mvn'
+  return [
+    { scriptName: 'test', command: `${mvn} -B test`, kind: 'test', mutating: false },
+    {
+      scriptName: 'build',
+      command: `${mvn} -B -DskipTests package`,
+      kind: 'build',
+      mutating: false,
+    },
+  ]
+}
+
+async function detectGradleCommands(projectPath: string): Promise<VerifiedCommand[]> {
+  const hasBuildFile =
+    (await fileExists(path.join(projectPath, 'build.gradle'))) ||
+    (await fileExists(path.join(projectPath, 'build.gradle.kts')))
+  if (!hasBuildFile) return []
+  const gradle = (await fileExists(path.join(projectPath, 'gradlew'))) ? './gradlew' : 'gradle'
+  return [
+    { scriptName: 'test', command: `${gradle} test`, kind: 'test', mutating: false },
+    { scriptName: 'build', command: `${gradle} build -x test`, kind: 'build', mutating: false },
+  ]
+}
+
+async function detectRubyCommands(projectPath: string): Promise<VerifiedCommand[]> {
+  if (!(await fileExists(path.join(projectPath, 'Gemfile')))) return []
+  const [hasRspec, hasRubocop] = await Promise.all([
+    fileExists(path.join(projectPath, '.rspec')),
+    fileExists(path.join(projectPath, '.rubocop.yml')),
+  ])
+  return [
+    ...(hasRspec
+      ? [
+          {
+            scriptName: 'test',
+            command: 'bundle exec rspec',
+            kind: 'test' as const,
+            mutating: false,
+          },
+        ]
+      : []),
+    ...(hasRubocop
+      ? [
+          {
+            scriptName: 'lint',
+            command: 'bundle exec rubocop',
+            kind: 'lint' as const,
+            mutating: false,
+          },
+        ]
+      : []),
+  ]
+}
+
+async function detectPhpCommands(projectPath: string): Promise<VerifiedCommand[]> {
+  if (!(await fileExists(path.join(projectPath, 'composer.json')))) return []
+  const [hasPhpunit, hasPhpstan] = await Promise.all([
+    fileExists(path.join(projectPath, 'phpunit.xml')),
+    fileExists(path.join(projectPath, 'phpstan.neon')),
+  ])
+  return [
+    ...(hasPhpunit
+      ? [
+          {
+            scriptName: 'test',
+            command: 'vendor/bin/phpunit',
+            kind: 'test' as const,
+            mutating: false,
+          },
+        ]
+      : []),
+    ...(hasPhpstan
+      ? [
+          {
+            scriptName: 'typecheck',
+            command: 'vendor/bin/phpstan analyse',
+            kind: 'typecheck' as const,
+            mutating: false,
+          },
+        ]
+      : []),
+  ]
+}
+
+async function detectDotnetCommands(projectPath: string): Promise<VerifiedCommand[]> {
+  const entries = await readdirSafe(projectPath)
+  const hasProject = entries.some((f) => f.endsWith('.sln') || f.endsWith('.csproj'))
+  if (!hasProject) return []
+  return [
+    { scriptName: 'test', command: 'dotnet test', kind: 'test', mutating: false },
+    { scriptName: 'build', command: 'dotnet build', kind: 'build', mutating: false },
+  ]
+}
+
+async function detectElixirCommands(projectPath: string): Promise<VerifiedCommand[]> {
+  if (!(await fileExists(path.join(projectPath, 'mix.exs')))) return []
+  return [
+    { scriptName: 'test', command: 'mix test', kind: 'test', mutating: false },
+    {
+      scriptName: 'typecheck',
+      command: 'mix compile --warnings-as-errors',
+      kind: 'typecheck',
+      mutating: false,
+    },
+  ]
+}
+
+/**
+ * Make is the catch-all for everything without a package manifest (C/C++,
+ * Zig, embedded, polyglot monorepos): a target only counts when the Makefile
+ * actually declares it, so this never invents a command.
+ */
+const MAKE_TARGETS: ReadonlyArray<{ target: string; kind: VerifiedCommandKind }> = [
+  { target: 'test', kind: 'test' },
+  { target: 'lint', kind: 'lint' },
+  { target: 'check', kind: 'typecheck' },
+]
+
+async function detectMakeCommands(projectPath: string): Promise<VerifiedCommand[]> {
+  const makefile = path.join(projectPath, 'Makefile')
+  if (!(await fileExists(makefile))) return []
+  const content = await readFile(makefile, '')
+  return MAKE_TARGETS.filter(({ target }) => new RegExp(`^${target}\\s*:`, 'm').test(content)).map(
+    ({ target, kind }) => ({
+      scriptName: target,
+      command: `make ${target}`,
+      kind,
+      mutating: false,
+    })
+  )
 }
 
 // PYTHON — no single standard runner, so a command is only offered when
@@ -153,14 +306,39 @@ async function detectPythonCommands(projectPath: string): Promise<VerifiedComman
 
 /** Detect verified commands across every ecosystem with real evidence in the repo. */
 export async function detectVerifiedCommands(projectPath: string): Promise<VerifiedCommandFacts> {
-  const [node, cargo, go, python, packageManager] = await Promise.all([
-    detectNodeCommands(projectPath),
-    detectCargoCommands(projectPath),
-    detectGoCommands(projectPath),
-    detectPythonCommands(projectPath),
-    detectPackageManager(projectPath),
-  ])
-  return { packageManager, commands: [...node, ...cargo, ...go, ...python] }
+  const [node, cargo, go, python, maven, gradle, ruby, php, dotnet, elixir, make, packageManager] =
+    await Promise.all([
+      detectNodeCommands(projectPath),
+      detectCargoCommands(projectPath),
+      detectGoCommands(projectPath),
+      detectPythonCommands(projectPath),
+      detectMavenCommands(projectPath),
+      detectGradleCommands(projectPath),
+      detectRubyCommands(projectPath),
+      detectPhpCommands(projectPath),
+      detectDotnetCommands(projectPath),
+      detectElixirCommands(projectPath),
+      detectMakeCommands(projectPath),
+      detectPackageManager(projectPath),
+    ])
+  return {
+    packageManager,
+    // Make last: a repo with both a manifest and a Makefile prefers the
+    // ecosystem's own toolchain, and consumers take the first per kind.
+    commands: [
+      ...node,
+      ...cargo,
+      ...go,
+      ...python,
+      ...maven,
+      ...gradle,
+      ...ruby,
+      ...php,
+      ...dotnet,
+      ...elixir,
+      ...make,
+    ],
+  }
 }
 
 const MUTATING_FLAG_PATTERN = /^(?:--fix|--write|--update|-w|--fix-type)$/

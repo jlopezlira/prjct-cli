@@ -707,6 +707,17 @@ export class CeremonyCommands extends PrjctCommandsBase {
       /* best-effort */
     }
 
+    // End-of-session machine verification: warm the gauntlet in the background
+    // so the next ship finds a fresh receipt without anyone remembering to run it.
+    try {
+      const { warmGauntletInBackground } = await import('../services/gauntlet')
+      if (await warmGauntletInBackground(projectPath, proj.value)) {
+        todo.push('Gauntlet warming in background — machine receipt will be fresh for ship.')
+      }
+    } catch {
+      /* best-effort */
+    }
+
     todo.push(
       'Team share (optional): `prjct memory export` → commit `.prjct/memory-export/` → clone → `prjct memory import`.'
     )

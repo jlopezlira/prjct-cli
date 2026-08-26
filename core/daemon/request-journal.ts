@@ -25,12 +25,28 @@ export class RequestJournal {
     this.now = options.now ?? Date.now
   }
 
+  private lastPruneAt = 0
+
   run(request: DaemonRequest, runner: () => Promise<DaemonResponse>): Promise<DaemonResponse> {
     const now = this.now()
-    this.prune(now)
+    // Prune at most once per second: iterating the whole journal on EVERY
+    // request is per-request tax for a cleanup whose TTL is 120s.
+    if (now - this.lastPruneAt >= 1000) {
+      this.prune(now)
+      this.lastPruneAt = now
+    }
 
     const fingerprint = requestFingerprint(request)
-    const existing = this.entries.get(request.id)
+    // TTL is enforced exactly for the id being looked up (O(1)); the throttled
+    // sweep above only reclaims memory of ids that are never asked for again.
+    const existing = (() => {
+      const entry = this.entries.get(request.id)
+      if (entry && now - entry.createdAt > this.ttlMs) {
+        this.entries.delete(request.id)
+        return undefined
+      }
+      return entry
+    })()
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
         return Promise.resolve({

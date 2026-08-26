@@ -158,7 +158,7 @@ const __dirname = __pathDirname(__filename);`,
     },
   })
 
-  // 1b. Thin shim entry point (tries daemon first, ~3KB, <15ms parse)
+  // 1b. Thin shim entry point (tries daemon first, ~9KB, fast parse)
   console.log('  → dist/bin/prjct.mjs (daemon shim)')
   const shimSource = generateDaemonShim()
   fs.writeFileSync(path.join(DIST, 'bin', 'prjct.mjs'), shimSource)
@@ -226,7 +226,10 @@ import { fileURLToPath as __fileURLToPath } from 'url';
 import { dirname as __pathDirname } from 'path';
 const require = __createRequire(import.meta.url);
 const __filename = __fileURLToPath(import.meta.url);
-const __dirname = __pathDirname(__filename);`,
+const __dirname = __pathDirname(__filename);
+// V8 compile cache: this ~1MB bundle is parsed once per MCP SESSION (every
+// agent session spawns its own server) — bytecode-cache it like the CLI does.
+try { const __m = require('node:module'); if (__m.enableCompileCache) __m.enableCompileCache(); } catch {}`,
     },
   })
   fs.chmodSync(path.join(DIST, 'mcp', 'server.mjs'), 0o755)

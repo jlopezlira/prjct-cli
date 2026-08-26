@@ -7,7 +7,7 @@
  */
 
 export const PRJCT_SKILL_DESCRIPTION =
-  'The agentic harness for AI coding agents: intent briefs, RAG context, synthesized memory, guardrails, performance, and ships. Run the prjct verb yourself; use `prjct work` normally.'
+  'The agentic harness for AI coding agents: machine-verified ships, guarded edits, and project lookup that beats re-deriving from source. Run the prjct verb yourself; use `prjct work` normally.'
 
 export const PRJCT_SKILL_ALLOWED_TOOLS = [
   'Bash',
@@ -20,10 +20,6 @@ export const PRJCT_SKILL_ALLOWED_TOOLS = [
 ] as const
 
 export const PRJCT_SKILL_REFERENCE_FILE = 'workflows.md'
-
-/** Portable "What's here" — never project name/stack/branch. */
-export const PORTABLE_WHATS_HERE =
-  'Portable L0 — no project stamp. Identity is cwd-scoped (SessionStart / `prjct context --md`). Uninitialized tree: suggest `prjct init` once, then run the verb.'
 
 export function buildPrjctSkillFrontmatter(): string {
   const tools = PRJCT_SKILL_ALLOWED_TOOLS.map((t) => `"${t}"`).join(', ')

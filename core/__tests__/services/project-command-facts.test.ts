@@ -91,7 +91,7 @@ describe('detectVerifiedCommands — non-Node ecosystems', () => {
     const facts = await detectVerifiedCommands(fixture.dir)
     expect(facts.packageManager).toBeNull()
     expect(new Set(facts.commands.map((c) => c.kind))).toEqual(
-      new Set(['test', 'build', 'lint', 'format'])
+      new Set(['typecheck', 'test', 'build', 'lint', 'format'])
     )
     expect(facts.commands.find((c) => c.kind === 'test')).toMatchObject({
       command: 'cargo test',
@@ -107,7 +107,9 @@ describe('detectVerifiedCommands — non-Node ecosystems', () => {
   it('offers go toolchain commands from go.mod presence alone, format stays read-only (gofmt -l)', async () => {
     await fs.writeFile(path.join(fixture.dir, 'go.mod'), 'module fixture\n\ngo 1.22\n')
     const facts = await detectVerifiedCommands(fixture.dir)
-    expect(new Set(facts.commands.map((c) => c.kind))).toEqual(new Set(['test', 'build', 'format']))
+    expect(new Set(facts.commands.map((c) => c.kind))).toEqual(
+      new Set(['test', 'build', 'lint', 'format'])
+    )
     expect(facts.commands.find((c) => c.kind === 'format')).toMatchObject({
       command: 'gofmt -l .',
       mutating: false,

@@ -171,6 +171,27 @@ export interface LocalConfig {
    * Unset / `apply` runs archive+delete on sync (capped). `dry-run` only
    * reports. `off` skips the retention phase entirely.
    */
+  /**
+   * Hard enforcement. Advisory instructions are ignored by models often enough
+   * to be worthless as a guarantee, so these are the places prjct BLOCKS a tool
+   * call instead of asking. Each defaults ON and can be turned off here.
+   */
+  enforce?: {
+    /**
+     * Deny a Grep/Glob whose token prjct already holds recorded judgment about
+     * (once per token per session), pointing at `prjct search` instead.
+     */
+    knowledgeFirst?: boolean
+  }
+  /**
+   * Machine gauntlet. Detection covers the common ecosystems; declaring
+   * commands here is the universal escape hatch — ANY language, any runner,
+   * including one prjct has never heard of. Declared commands REPLACE
+   * detection, so the project owns its own definition of "verified".
+   */
+  gauntlet?: {
+    commands?: Array<{ kind: 'typecheck' | 'lint' | 'test'; command: string }>
+  }
   retention?: {
     mode?: 'off' | 'dry-run' | 'apply'
     /** Max archive actions per full sync (default 100). */
@@ -179,7 +200,7 @@ export interface LocalConfig {
     maxDelete?: number
     /** Hard-delete soft-deleted rows older than N days on sync (default 7 — no statistical value). */
     softDeletedPurgeDays?: number
-    /** Prune archives older than N days on sync (default 90). */
+    /** Prune archives older than N days on sync (default 7 — repos move fast). */
     archivePruneDays?: number
     /** Max live entries per auto source prefix (default 20). */
     autoSourceMaxLive?: number

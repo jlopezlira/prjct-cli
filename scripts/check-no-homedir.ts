@@ -31,10 +31,18 @@ function trackedProductionFiles(): string[] {
 
 function stripComments(source: string): string {
   const noBlocks = source.replace(/\/\*[\s\S]*?\*\//g, '')
+  // Skip `//` preceded by `:` (URLs in strings) so code after a URL literal on
+  // the same line is still scanned.
+  const lineCommentStart = (line: string, from: number): number => {
+    const idx = line.indexOf('//', from)
+    if (idx === -1) return -1
+    if (idx > 0 && line[idx - 1] === ':') return lineCommentStart(line, idx + 2)
+    return idx
+  }
   return noBlocks
     .split('\n')
     .map((line) => {
-      const idx = line.indexOf('//')
+      const idx = lineCommentStart(line, 0)
       return idx === -1 ? line : line.slice(0, idx)
     })
     .join('\n')

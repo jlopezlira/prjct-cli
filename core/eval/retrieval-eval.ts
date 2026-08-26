@@ -9,6 +9,7 @@
 
 import type { MemoryEntry } from '../memory/entries'
 import { projectMemory } from '../memory/project-memory'
+import { rrfFuse } from '../memory/rank-fusion'
 import { cosineSimilarity, type EmbeddingProvider } from '../services/embeddings'
 import type { LabeledPair } from './ledger-pairs'
 import { type AggregateMetrics, aggregate } from './retrieval-metrics'
@@ -51,6 +52,22 @@ export async function evalProvider(
   return aggregate(cases, k)
 }
 
+/** BM25 ranking for one pair over the real FTS5 index. */
+function bm25Ranking(projectId: string, pair: LabeledPair): string[] {
+  const keywords = pair.queryText
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .slice(0, 32)
+  try {
+    return projectMemory
+      .searchFts(projectId, keywords, 100)
+      .map((entry) => entry.id)
+      .filter((id) => id !== pair.anchorId)
+  } catch {
+    return []
+  }
+}
+
 /**
  * BM25 baseline over the real FTS5 index. Queries with the anchor's tokens and
  * scores where the cited positives land. Anchors that the lexical leg can't
@@ -58,23 +75,40 @@ export async function evalProvider(
  * is the honest outcome.
  */
 export function evalBm25(projectId: string, pairs: LabeledPair[], k: number): AggregateMetrics {
+  const cases = pairs.map((p) => ({
+    ranked: bm25Ranking(projectId, p),
+    relevant: new Set(p.positives),
+  }))
+  return aggregate(cases, k)
+}
+
+/**
+ * The candidate: BM25 and the semantic leg fused by Reciprocal Rank Fusion —
+ * scored on the SAME pairs as each leg alone, so the fusion has to earn the
+ * swap instead of being assumed better (the previous prepend-semantic behavior
+ * was never measured).
+ */
+export async function evalFused(
+  projectId: string,
+  corpus: MemoryEntry[],
+  pairs: LabeledPair[],
+  provider: EmbeddingProvider,
+  k: number
+): Promise<AggregateMetrics> {
+  const corpusVecs = (await provider.embed(corpus.map((e) => e.content))).map((vec, i) => ({
+    id: corpus[i].id,
+    vec,
+  }))
   const cases: Array<{ ranked: string[]; relevant: Set<string> }> = []
   for (const p of pairs) {
-    const keywords = p.queryText
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
-      .slice(0, 32)
-    const ranked = (() => {
-      try {
-        return projectMemory
-          .searchFts(projectId, keywords, 100)
-          .map((entry) => entry.id)
-          .filter((id) => id !== p.anchorId)
-      } catch {
-        return []
-      }
-    })()
-    cases.push({ ranked, relevant: new Set(p.positives) })
+    const [qv] = await provider.embed([p.queryText])
+    const semantic = qv ? rankByVector(qv, corpusVecs, p.anchorId) : []
+    // Mirror production: the semantic leg contributes a bounded top-N, the
+    // lexical leg its full result set.
+    cases.push({
+      ranked: rrfFuse([bm25Ranking(projectId, p), semantic.slice(0, 10)]),
+      relevant: new Set(p.positives),
+    })
   }
   return aggregate(cases, k)
 }

@@ -46,25 +46,14 @@ describe('harness score', () => {
     expect(md).toMatch(/done|in progress/)
   })
 
-  it('renders competitive dust table vs gentle-ai and open-GSD', () => {
+  it('carries no unmeasured competitor marketing (retired 2026-08-25)', () => {
+    // The old "Competitive dust" table asserted SUPERIOR on 21 dimensions with
+    // zero measurement, and rode into agent context on every score --md. The
+    // live-or-die trial classed that as inadmissible; only measured criteria ship.
     const md = renderHarnessScoreMd(computeHarnessScore())
-    expect(md).toContain('Competitive dust')
-    expect(md).toContain('gentle-ai')
-    expect(md).toContain('open-GSD')
-    expect(md).toContain('discuss-lock')
-    expect(md).toContain('SQLite')
-    expect(md).toContain('Multi-runtime wire')
-    expect(md).toContain('Organic feel')
-    expect(md).toContain('Public harness Δ')
-    expect(md).toContain('Content-bound approve')
-    expect(md).toContain('SoT hard-bind')
-    expect(md).toContain('Trap-before-edit')
-    expect(md).toContain('Impact-ranked next')
-    expect(md).toContain('Geometry-at-intent')
-    expect(md).toContain('Always-on skill diet')
-    expect(md).toContain('Land Rho loop')
-    expect(md).toContain('One-breath install')
-    expect(md).toContain('Context cache tiers')
+    expect(md).not.toContain('Competitive dust')
+    expect(md).not.toContain('SUPERIOR')
+    expect(md).not.toContain('gentle-ai')
   })
 
   it('embeds Dynasty delta + outcomes sections when provided', () => {
@@ -74,8 +63,6 @@ describe('harness score', () => {
     })
     expect(md).toContain('Harness Δ (bare vs prjct)')
     expect(md).toContain('Dynasty outcomes (project)')
-    // Δ appears before competitive dust
-    expect(md.indexOf('Harness Δ')).toBeLessThan(md.indexOf('Competitive dust'))
   })
 
   it('can include multi-runtime organic criterion when probed', () => {

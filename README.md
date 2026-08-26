@@ -1,10 +1,27 @@
 # prjct-cli
 
 **The agentic harness for AI coding agents.** Intelligence is rented, the
-harness is owned: prjct-cli gives Claude Code, Codex, Gemini, Cursor,
-OpenCode, and any agent intent briefs, bounded RAG context, preventive
-guardrails, synthesized learning, and performance signals for each dev+LLM
-work cycle.
+harness is owned. prjct-cli gives Claude Code, Codex, Gemini, Cursor, OpenCode
+— any agent — two things that are measured, not asserted:
+
+- **Machine-verified work, in any language.** `prjct gauntlet` runs your
+  project's own verify commands and records a receipt bound to git HEAD;
+  `ship` refuses a red one. The work counts when the machine says so, not when
+  the agent says so. Commands are detected from the manifest you already have
+  (npm/yarn/pnpm/bun · Cargo · Go · Python · Maven · Gradle · Ruby · PHP ·
+  .NET · Elixir · Makefile targets) — and for anything else, declare them:
+
+  ```jsonc
+  // .prjct/prjct.config.json
+  { "gauntlet": { "commands": [{ "kind": "test", "command": "swift test" }] } }
+  ```
+- **Lookup that beats re-deriving.** Bounded, ranked project context (RRF over
+  BM25 + semantic, quality measured by `prjct harness retrieval`) instead of an
+  agent re-reading the repo to rebuild what it already established.
+
+Everything it claims is auditable from the CLI: `prjct harness audit` reports
+memory relevance and fails a threshold, `prjct harness retrieval` reports
+Recall@k/MRR/nDCG on a leak-free split.
 
 [![npm](https://img.shields.io/npm/v/prjct-cli)](https://www.npmjs.com/package/prjct-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)

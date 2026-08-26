@@ -262,46 +262,6 @@ export function computeHarnessScore(
   }
 }
 
-/**
- * Competitive dust — every row claims SUPERIOR with a measurable mechanism.
- * Field: gentle-ai, open-GSD, memory plugins (claude-mem/agentmemory/Mem0-class).
- * Mandate: not near-parity — beat on every dimension that is our job.
- */
-export function renderCompetitiveDustMd(report: HarnessScoreReport): string {
-  const grade = report.programDone ? 'SUPERIOR' : 'HOLD'
-  return [
-    '## Competitive dust (SUPERIOR mandate — gentle-ai · open-GSD · memory plugins · prjct)',
-    '',
-    '| Dimension | gentle-ai | open-GSD | memory plugins | **prjct (mechanism)** |',
-    '|---|---|---|---|---|',
-    '| Judgment memory | Engram JSONL | files / bolt-on | chat transcript | **SUPERIOR: SQLite typed WHY + SoT/SUGGEST apply-loop** |',
-    '| Enforcement | prompt-only | phase markdown | none | **SUPERIOR: code gates SDD/TDD/land/discuss/package/judgment** |',
-    '| Work graph | none | ROADMAP.md | none | **SUPERIOR: ready/next/claim/phases + switch/accept in SQLite** |',
-    '| Fresh window | optional | re-research thrash | session reset | **SUPERIOR: prime + SessionStart compound (0 re-teach OS)** |',
-    '| Token economics | unmeasured | high × agents | dump context | **SUPERIOR: telemetry + skill diet + Rho retention** |',
-    '| Discuss before code | organic | discuss-phase | none | **SUPERIOR: discuss-lock H2+ code-enforced** |',
-    '| Context pressure | soft | fresh window | none | **SUPERIOR: hard gate on ship at critical + land path** |',
-    '| Package legitimacy | none | slopcheck-ish | none | **SUPERIOR: PreToolUse install + ship `--allow-new-deps`** |',
-    '| Memory hygiene | grow forever | files pile | grow forever | **SUPERIOR: Rho excess vs R + distill-hard-delete + close** |',
-    '| Multi-runtime wire | one eco | Claude-first | plugin per host | **SUPERIOR: one install → Claude+Codex+Gemini+Cursor+Grok** |',
-    '| Organic feel | install prompts | `/plan` ceremony | manual MCP | **SUPERIOR: passive hooks; agent never re-learns the OS** |',
-    '| Public harness Δ | none / demo only | none | none | **SUPERIOR: bare vs prjct intent+footprint table in score + CI gate** |',
-    '| Content-bound approve | content-hash review | phase files | none | **SUPERIOR: path+blob treeHash on judgment approve; ship drifts re-approve** |',
-    '| SoT hard-bind H2+ | prompt BINDING | ceremony | none | **SUPERIOR: pre-edit deny on decision/gotcha/fact without supersede/override** |',
-    '| Trap-before-edit | optional heads-up | none | none | **SUPERIOR: 100% trap-id surface SLO in pre-edit inject** |',
-    '| Impact-ranked next | FIFO backlog | ROADMAP.md | none | **SUPERIOR: unblocks × world-model blast × SoT pressure + why line** |',
-    '| Geometry-at-intent | ship-only size | ceremony | none | **SUPERIOR: large H2+/H3 plans split|single before code** |',
-    '| Always-on skill diet | unmeasured dump | skill flood | dump | **SUPERIOR: ≤900 tok skill + workflows.md progressive disclosure** |',
-    '| Context cache tiers | host cache only | thrash windows | dump | **SUPERIOR: L0–L3 named contract + L0 budget + safe artifacts** |',
-    '| Land Rho loop | grow forever | files pile | grow forever | **SUPERIOR: land dry-run would archive/delete + vault mass line** |',
-    '| One-breath install | multi-path prompts | ceremony | plugin per host | **SUPERIOR: one install → board + Δ proof; doctor --fix heals** |',
-    `| Structural grade | — | — | — | **${report.grade}/5 ${grade}** |`,
-    '',
-    '_Rule: never clone skill flood or transcript memory. Crush on compound judgment, cost, enforcement, retention, multi-surface wire._',
-    '',
-  ].join('\n')
-}
-
 export function renderHarnessScoreMd(
   report: HarnessScoreReport,
   options: {
@@ -336,7 +296,6 @@ export function renderHarnessScoreMd(
     options.deltaMd ?? '',
     options.outcomesMd ?? '',
     options.coverageMd ?? '',
-    renderCompetitiveDustMd(report),
   ].join('\n')
 }
 

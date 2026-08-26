@@ -14,7 +14,7 @@
 import type { MemoryEntry } from '../memory/entries'
 import { LocalSubwordEmbeddingProvider } from '../services/embeddings'
 import { exportLedgerPairs, type LabeledPair, temporalSplit } from './ledger-pairs'
-import { evalBm25, evalProvider } from './retrieval-eval'
+import { evalBm25, evalFused, evalProvider } from './retrieval-eval'
 import {
   type AggregateMetrics,
   evaluateImprovementGate,
@@ -24,8 +24,12 @@ import {
 export interface RetrievalLeg {
   bm25: AggregateMetrics
   hashing: AggregateMetrics
+  /** RRF over both legs — the candidate that has to beat each leg alone. */
+  fused: AggregateMetrics
   /** Would swapping the lexical baseline for the hashing encoder clear the gate? */
   gate: ImprovementGateResult
+  /** The decision gate that matters: fused vs the BM25 baseline prjct serves. */
+  fusionGate: ImprovementGateResult
 }
 
 export interface RetrievalReport {
@@ -53,7 +57,14 @@ async function scoreLeg(
   const provider = new LocalSubwordEmbeddingProvider()
   const bm25 = evalBm25(projectId, pairs, k)
   const hashing = await evalProvider(entries, pairs, provider, k)
-  return { bm25, hashing, gate: evaluateImprovementGate(bm25, hashing) }
+  const fused = await evalFused(projectId, entries, pairs, provider, k)
+  return {
+    bm25,
+    hashing,
+    fused,
+    gate: evaluateImprovementGate(bm25, hashing),
+    fusionGate: evaluateImprovementGate(bm25, fused),
+  }
 }
 
 export async function buildRetrievalReport(projectId: string, k = 10): Promise<RetrievalReport> {
@@ -107,6 +118,7 @@ export function renderRetrievalReportMd(report: RetrievalReport): string {
       return [
         `| ${label} | BM25 (FTS5) | ${pct(l.bm25.recallAtK)} | ${pct(l.bm25.mrr)} | ${pct(l.bm25.ndcgAtK)} |`,
         `| ${label} | hashing (local) | ${pct(l.hashing.recallAtK)} | ${pct(l.hashing.mrr)} | ${pct(l.hashing.ndcgAtK)} |`,
+        `| ${label} | **RRF fused** | ${pct(l.fused.recallAtK)} | ${pct(l.fused.mrr)} | ${pct(l.fused.ndcgAtK)} |`,
       ]
     })
   const gate = report.heldOut?.gate ?? report.all?.gate
@@ -126,6 +138,7 @@ export function renderRetrievalReportMd(report: RetrievalReport): string {
           ...rows,
           '',
           `Swap gate (hashing vs BM25): ${gate ? gateLine(gate) : 'n/a'}`,
+          `**Fusion gate (RRF vs BM25): ${gate ? gateLine((report.heldOut ?? report.all)?.fusionGate ?? gate) : 'n/a'}**`,
         ].join('\n'),
     '',
   ].join('\n')
@@ -146,7 +159,9 @@ export function renderRetrievalReportText(report: RetrievalReport): string {
     lines.push(`  ${label}`)
     lines.push(`    BM25 (FTS5)     ${fmt(leg.bm25)}  n=${leg.bm25.queries}`)
     lines.push(`    hashing (local) ${fmt(leg.hashing)}  n=${leg.hashing.queries}`)
+    lines.push(`    RRF fused       ${fmt(leg.fused)}  n=${leg.fused.queries}`)
     lines.push(`    swap gate       ${gateLine(leg.gate)}`)
+    lines.push(`    fusion gate     ${gateLine(leg.fusionGate)}`)
   }
   if (report.pairCount === 0) lines.push('  no labeled pairs yet')
   return lines.join('\n')

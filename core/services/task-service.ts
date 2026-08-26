@@ -911,7 +911,26 @@ export async function setTaskStatus(
   const verification =
     normalized === 'done' || normalized === 'completed'
       ? await evaluateHarnessCompletion(projectPath, active)
-      : { warnings: [], diffSize: 0 }
+      : { warnings: [] as string[], diffSize: 0 }
+
+  // Done without a machine-green HEAD is narrated success, not verified
+  // success — surface it through the existing warnings channel (non-blocking).
+  if (normalized === 'done' || normalized === 'completed') {
+    try {
+      const { gauntletDoneWarning, warmGauntletInBackground } = await import('./gauntlet')
+      const warning = await gauntletDoneWarning(projectPath, projectId)
+      if (warning) verification.warnings.push(warning)
+      // Self-provisioning: done kicks a detached gauntlet so ship finds a
+      // fresh receipt without anyone remembering to run it.
+      if (await warmGauntletInBackground(projectPath, projectId)) {
+        verification.warnings.push(
+          'Gauntlet warming in background — the receipt will be fresh for ship.'
+        )
+      }
+    } catch {
+      /* advisory only */
+    }
+  }
 
   await memoryService.log(projectPath, STATUS_CHANGE_ACTION, {
     taskId: active.id,
