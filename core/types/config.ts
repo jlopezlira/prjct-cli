@@ -172,6 +172,18 @@ export interface LocalConfig {
    * reports. `off` skips the retention phase entirely.
    */
   /**
+   * Hard enforcement. Advisory instructions are ignored by models often enough
+   * to be worthless as a guarantee, so these are the places prjct BLOCKS a tool
+   * call instead of asking. Each defaults ON and can be turned off here.
+   */
+  enforce?: {
+    /**
+     * Deny a Grep/Glob whose token prjct already holds recorded judgment about
+     * (once per token per session), pointing at `prjct search` instead.
+     */
+    knowledgeFirst?: boolean
+  }
+  /**
    * Machine gauntlet. Detection covers the common ecosystems; declaring
    * commands here is the universal escape hatch — ANY language, any runner,
    * including one prjct has never heard of. Declared commands REPLACE

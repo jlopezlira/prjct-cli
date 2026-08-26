@@ -166,6 +166,8 @@ export type DeliverySurface =
   | 'prompt-state'
   | 'prompt-cues'
   | 'pre-search'
+  /** Knowledge-first deny: one block per grepped token per session. */
+  | 'pre-search-knowledge-gate'
   | 'pre-edit'
   | 'post-edit'
   | 'pre-bash-commit'

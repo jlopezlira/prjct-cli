@@ -1,12 +1,25 @@
 /**
- * PreToolUse hook (matcher: Grep|Glob) — non-blocking graph augment.
+ * PreToolUse hook (matcher: Grep|Glob) — graph augment + knowledge-first gate.
  *
- * CBM-inspired: when the agent greps/globs a token that matches indexed
- * symbols, inject those hits as additionalContext so the agent gets
- * structural context alongside search results. Never gates, never denies,
- * never blocks Read (read-before-edit invariant).
+ * Two jobs. The augment is advisory: grep a token that matches indexed symbols
+ * and the structural hits ride along as additionalContext.
  *
- * Fail-open: any error → null context → host proceeds normally.
+ * The gate is not advisory, and it exists because advisory failed. Measured on
+ * this harness: an agent TOLD it could use prjct still reached for grep, and
+ * only consulted prjct when required to — so an instruction the model may
+ * ignore is not enforcement. When prjct holds judgment-typed knowledge about
+ * the very token being grepped (decisions, gotchas, learnings — things no
+ * amount of grep can recover, because they were never written to a file), the
+ * tool call is DENIED once with the lookup command. The agent then knows what
+ * the repo already decided instead of re-deriving it, and its next grep of the
+ * same token passes.
+ *
+ * Deliberately narrow, because a gate that cries wolf gets disabled: it fires
+ * only on real stored judgment, at most once per token per session, never on
+ * Read (read-before-edit invariant), and never on a project that has no such
+ * knowledge. Off switch: `enforce.knowledgeFirst: false`.
+ *
+ * Fail-open everywhere: any error → no deny, no context, host proceeds.
  */
 
 import { hasSymbolIndex, searchSymbols } from '../domain/symbol-graph'
@@ -130,12 +143,65 @@ async function buildSearchAugment(projectPath: string, input: HookInput): Promis
   }
 }
 
+/** Knowledge that grep can never recover: it lives in judgment, not in files. */
+const KNOWLEDGE_TYPES = ['decision', 'gotcha', 'anti-pattern', 'learning', 'fact']
+/** One stray match is noise; two is a repo that has actually decided something. */
+const MIN_KNOWLEDGE_HITS = 2
+const KNOWLEDGE_LOOKUP_LIMIT = 6
+
+async function decideKnowledgeFirst(
+  projectPath: string,
+  input: HookInput
+): Promise<{ deny: string } | null> {
+  const started = Date.now()
+  try {
+    const tool = (input.tool_name ?? '').toLowerCase()
+    if (tool && !/grep|glob|search/i.test(tool)) return null
+
+    const token = extractToken(input)
+    if (!token || token.length < 4) return null
+
+    const config = await configManager.readConfig(projectPath)
+    if (!config?.projectId) return null
+    if (config.enforce?.knowledgeFirst === false) return null
+    if (Date.now() - started > HARD_CAP_MS) return null
+
+    const { projectMemory } = await import('../memory/project-memory')
+    const hits = projectMemory
+      .searchFts(config.projectId, [token], KNOWLEDGE_LOOKUP_LIMIT)
+      .filter((entry) => KNOWLEDGE_TYPES.includes(entry.type))
+    if (hits.length < MIN_KNOWLEDGE_HITS) return null
+
+    const reason = [
+      `prjct holds ${hits.length} recorded ${hits.length === 1 ? 'judgment' : 'judgments'} about \`${token}\` — decisions and gotchas that live in project memory, not in any file, so no grep will find them.`,
+      '',
+      `Run this first: \`prjct search "${token}"\``,
+      '',
+      'Then repeat this Grep/Glob if you still need the code — the same token will not be blocked again this session.',
+    ].join('\n')
+
+    // Deny ONCE per token per session; the retry after the lookup must pass.
+    const gate = await gateDelivery({
+      projectId: config.projectId,
+      projectPath,
+      sessionId: input.session_id ?? input.conversation_id,
+      surface: 'pre-search-knowledge-gate',
+      key: token,
+      content: reason,
+      noSession: { mode: 'static', ttlMs: NO_SESSION_TTL_MS },
+    })
+    return gate.suppressed ? null : { deny: reason }
+  } catch {
+    return null // enforcement never bricks a session
+  }
+}
+
 export async function runPreSearchHook(projectPath?: string, io?: HookIo): Promise<void> {
   await runHook<HookInput>(
     {
       event: 'PreToolUse',
       projectPath,
-      // Never deny — always fall through to build (or empty)
+      decide: (input, p) => decideKnowledgeFirst(p, input),
       build: (input, p) => buildSearchAugment(p, input),
     },
     io
