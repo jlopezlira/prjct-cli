@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [4.9.1] - 2026-08-26
+
+### Performance
+
+- native daemon-first client for hot read verbs (Phase 1)
+
+
 ## [4.9.0] - 2026-08-26
 
 ### Features
