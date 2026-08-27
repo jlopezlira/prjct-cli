@@ -50,10 +50,11 @@ describe('kimiHookMaps', () => {
     expect(maps.find((m) => m.subcommand === 'session-start')?.event).toBe('SessionStart')
     expect(maps.find((m) => m.subcommand === 'prompt')?.event).toBe('UserPromptSubmit')
     expect(maps.find((m) => m.subcommand === 'pre-bash')?.matcher).toBe('Bash')
-    // Plain regex alternation — Kimi matchers are regexes (docs escape dots,
-    // not pipes), so Claude's Edit|Write carries over verbatim.
-    expect(maps.find((m) => m.subcommand === 'pre-edit')?.matcher).toBe('Edit|Write')
+    const editMatcher = maps.find((m) => m.subcommand === 'pre-edit')?.matcher
+    expect(editMatcher).toContain('Edit|Write')
+    expect(editMatcher).toContain('apply_patch')
     expect(maps.find((m) => m.subcommand === 'post-edit')?.event).toBe('PostToolUse')
+    expect(maps.find((m) => m.subcommand === 'post-read')?.matcher).toContain('ReadFile')
     expect(maps.find((m) => m.subcommand === 'stop')?.event).toBe('Stop')
   })
 })
@@ -70,7 +71,7 @@ describe('installKimiHooks', () => {
     const markerCount = content.split('# prjct-managed').length - 1
     expect(markerCount).toBe(kimiHookMaps().length)
     expect(content).toContain('event = "PreToolUse"')
-    expect(content).toContain('matcher = "Edit|Write"')
+    expect(content).toContain('matcher = "Edit|Write|apply_patch')
     expect(content).toContain('PRJCT_HOOK_HOST=kimi')
     expect(content).toContain('timeout = 10')
     expect(content).not.toContain('CwdChanged')

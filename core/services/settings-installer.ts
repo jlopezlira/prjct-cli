@@ -49,10 +49,19 @@ export const PRJCT_HOOKS = [
   // starts per Bash tool call down to one.
   { event: 'PreToolUse', matcher: 'Bash', subcommand: 'pre-bash' },
   // Secret scanning is folded into pre-edit before preventive memory/deny.
-  { event: 'PreToolUse', matcher: 'Edit|Write', subcommand: 'pre-edit' },
+  {
+    event: 'PreToolUse',
+    matcher: 'Edit|Write|apply_patch|ApplyPatch|StrReplace|write_file|replace',
+    subcommand: 'pre-edit',
+  },
   // Non-blocking code-graph augment for Grep/Glob (CBM-inspired). Never denies.
   { event: 'PreToolUse', matcher: 'Grep|Glob', subcommand: 'pre-search' },
-  { event: 'PostToolUse', matcher: 'Edit|Write', subcommand: 'post-edit' },
+  {
+    event: 'PostToolUse',
+    matcher: 'Edit|Write|apply_patch|ApplyPatch|StrReplace|write_file|replace',
+    subcommand: 'post-edit',
+  },
+  { event: 'PostToolUse', matcher: 'Read|ReadFile|read_file', subcommand: 'post-read' },
   { event: 'Stop', matcher: '', subcommand: 'stop' },
   { event: 'SubagentStart', matcher: '', subcommand: 'subagent-start' },
   // Ping the user (best-effort OS notification, default on) when a subagent
@@ -202,7 +211,17 @@ export async function install(): Promise<InstallResult> {
   const present: HookSpec[] = []
 
   for (const spec of PRJCT_HOOKS) {
-    const eventEntries: HookMatcher[] = hooks[spec.event] ?? []
+    const existingEntries: HookMatcher[] = hooks[spec.event] ?? []
+    const movedStale = existingEntries.reduce((count, candidate) => {
+      if ((candidate.matcher ?? '') === spec.matcher) return count
+      const before = candidate.hooks.length
+      candidate.hooks = candidate.hooks.filter((hook) => {
+        const managed = isPrjctHook(hook) || isLegacyPrjctHook(hook)
+        return !(managed && subcommandOf(hook) === spec.subcommand)
+      })
+      return count + before - candidate.hooks.length
+    }, 0)
+    const eventEntries = existingEntries.filter((candidate) => candidate.hooks.length > 0)
     // Find an existing matcher block with the same matcher, or add one.
     const existingBlock = eventEntries.find((b) => (b.matcher ?? '') === spec.matcher)
     const block = existingBlock ?? { matcher: spec.matcher, hooks: [] }
@@ -228,7 +247,8 @@ export async function install(): Promise<InstallResult> {
         existing.command === refreshed.command &&
         existing.if === refreshed.if &&
         existing.timeout === refreshed.timeout &&
-        droppedLegacy === 0
+        droppedLegacy === 0 &&
+        movedStale === 0
       ) {
         present.push(spec)
       } else {

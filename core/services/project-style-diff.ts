@@ -57,6 +57,15 @@ export function generateProjectStyleDiff(
   diffStringArray('Frameworks', b.stack.frameworks, a.stack.frameworks, items)
   diffStringArray('Key libraries', b.stack.keyLibraries, a.stack.keyLibraries, items)
 
+  if ((b.architecture?.style ?? '') !== (a.architecture?.style ?? '')) {
+    items.push({
+      field: 'Architecture',
+      type: 'changed',
+      before: b.architecture?.style ?? '(unknown)',
+      after: a.architecture?.style ?? '(unknown)',
+    })
+  }
+
   if (b.stack.hasTests !== a.stack.hasTests) {
     items.push({
       field: 'Has tests',
@@ -69,20 +78,20 @@ export function generateProjectStyleDiff(
   // Patterns / anti / conventions by key
   diffKeyed(
     'Pattern',
-    b.patterns.map((p) => [p.key, p.name]),
-    a.patterns.map((p) => [p.key, p.name]),
+    b.patterns.map((p) => [p.key, p.name, JSON.stringify(p)]),
+    a.patterns.map((p) => [p.key, p.name, JSON.stringify(p)]),
     items
   )
   diffKeyed(
     'Anti-pattern',
-    b.antiPatterns.map((p) => [p.key, p.issue]),
-    a.antiPatterns.map((p) => [p.key, p.issue]),
+    b.antiPatterns.map((p) => [p.key, p.issue, JSON.stringify(p)]),
+    a.antiPatterns.map((p) => [p.key, p.issue, JSON.stringify(p)]),
     items
   )
   diffKeyed(
     'Convention',
-    b.conventions.map((c) => [c.key, c.rule]),
-    a.conventions.map((c) => [c.key, c.rule]),
+    b.conventions.map((c) => [c.key, c.rule, JSON.stringify(c)]),
+    a.conventions.map((c) => [c.key, c.rule, JSON.stringify(c)]),
     items
   )
 
@@ -161,27 +170,27 @@ function diffStringArray(
 
 function diffKeyed(
   field: string,
-  before: Array<[string, string]>,
-  after: Array<[string, string]>,
+  before: Array<[string, string, string?]>,
+  after: Array<[string, string, string?]>,
   items: ProjectStyleDiffItem[]
 ): void {
-  const bMap = new Map(before)
-  const aMap = new Map(after)
-  for (const [key, label] of aMap) {
+  const bMap = new Map(before.map(([key, label, fingerprint]) => [key, { label, fingerprint }]))
+  const aMap = new Map(after.map(([key, label, fingerprint]) => [key, { label, fingerprint }]))
+  for (const [key, value] of aMap) {
     if (!bMap.has(key)) {
-      items.push({ field, type: 'added', after: label })
-    } else if (bMap.get(key) !== label) {
+      items.push({ field, type: 'added', after: value.label })
+    } else if (bMap.get(key)?.fingerprint !== value.fingerprint) {
       items.push({
         field,
         type: 'changed',
-        before: bMap.get(key),
-        after: label,
+        before: bMap.get(key)?.label,
+        after: value.label,
       })
     }
   }
-  for (const [key, label] of bMap) {
+  for (const [key, value] of bMap) {
     if (!aMap.has(key)) {
-      items.push({ field, type: 'removed', before: label })
+      items.push({ field, type: 'removed', before: value.label })
     }
   }
 }

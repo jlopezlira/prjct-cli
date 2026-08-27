@@ -8,12 +8,18 @@ import { buildAlignmentBrief } from '../../services/project-alignment'
 describe('project-alignment', () => {
   it('MATCH when house patterns exist', () => {
     const b = buildAlignmentBrief({
-      patterns: [{ title: 'Use execFileAsync never shell spawns' }],
+      patterns: [
+        {
+          title: 'Process boundary',
+          content: 'Use execFileAsync, never shell spawns. [canonical: core/utils/exec.ts]',
+        },
+      ],
       neighborHint: 'core/utils/exec.ts',
     })
     expect(b.stance).toBe('match')
     expect(b.line).toMatch(/match house patterns/i)
     expect(b.line).toContain('core/utils/exec.ts')
+    expect(b.md).toContain('Use execFileAsync')
   })
 
   it('UPGRADE when only anti-patterns', () => {

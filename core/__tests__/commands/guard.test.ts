@@ -8,7 +8,7 @@
  * with nothing preventive returns success + "clear to edit".
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -69,6 +69,32 @@ describe('guard verb', () => {
     const result = await fixture.cmd.guard('core/x.ts', fixture.projectPath, { md: true })
     expect(result.success).toBe(true)
     expect(result.hits).toBe(0)
+  })
+
+  test('the shell handshake shows bounded declarations from the actual source file', async () => {
+    await fs.mkdir(path.join(fixture.projectPath, 'core'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectPath, 'core', 'existing.ts'),
+      [
+        "import { shared } from './shared'",
+        'export function existingAbstraction() {',
+        '  return shared()',
+        '}',
+      ].join('\n')
+    )
+    const logs: string[] = []
+    const log = spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')))
+    try {
+      const result = await fixture.cmd.guard('core/existing.ts', fixture.projectPath, { md: true })
+      expect(result.success).toBe(true)
+    } finally {
+      log.mockRestore()
+    }
+    const output = logs.join('\n')
+    expect(output).toContain('Source inspection')
+    expect(output).toContain("import { shared } from './shared'")
+    expect(output).toContain('export function existingAbstraction()')
+    expect(output.length).toBeLessThan(3000)
   })
 
   test('matches an absolute path against a repo-relative file tag', async () => {

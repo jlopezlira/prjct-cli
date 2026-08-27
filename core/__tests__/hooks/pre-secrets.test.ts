@@ -255,8 +255,8 @@ describe('managed hooks never depend on PPID', () => {
     expect(preTools.filter((h) => h.matcher === 'Bash').map((h) => h.subcommand)).toEqual([
       'pre-bash',
     ])
-    expect(preTools.filter((h) => h.matcher === 'Edit|Write').map((h) => h.subcommand)).toEqual([
-      'pre-edit',
-    ])
+    const preEdit = preTools.filter((h) => h.subcommand === 'pre-edit')
+    expect(preEdit.map((h) => h.subcommand)).toEqual(['pre-edit'])
+    expect(preEdit[0]?.matcher).toContain('apply_patch')
   })
 })

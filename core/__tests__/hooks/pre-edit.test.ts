@@ -12,10 +12,18 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { GuardCommands } from '../../commands/guard'
+import { runPostReadHook } from '../../hooks/post-read'
 import { runPreEditHook } from '../../hooks/pre-edit'
 import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
 import { projectMemory } from '../../memory/project-memory'
+import { _resetDeliveredLedgerForTests } from '../../services/session-context-cache'
+import {
+  markSourceInspected,
+  repoRelativeFile,
+  sourceInspectionToken,
+} from '../../services/source-first-gate'
 import { stateStorage } from '../../storage/state-storage'
 
 const fixture: {
@@ -41,7 +49,7 @@ async function freshProject(): Promise<void> {
  * Drive the hook with a captured-IO bridge (the same shape the daemon uses)
  * and return the emitted stdout payload.
  */
-async function runWith(toolInput: Record<string, unknown>, sessionId?: string): Promise<string> {
+async function runWith(toolInput: unknown, sessionId?: string): Promise<string> {
   const chunks: string[] = []
   await runPreEditHook(fixture.projectPath, {
     input: { tool_name: 'Edit', tool_input: toolInput, session_id: sessionId },
@@ -51,6 +59,16 @@ async function runWith(toolInput: Record<string, unknown>, sessionId?: string): 
     detachAfterEmit: () => {},
   })
   return chunks.join('')
+}
+
+async function runRead(toolInput: Record<string, unknown>, sessionId: string): Promise<void> {
+  await runPostReadHook(fixture.projectPath, {
+    input: { tool_name: 'Read', tool_input: toolInput, session_id: sessionId },
+    sink: () => {},
+    detachAfterEmit: () => {
+      throw new Error('post-read inspection must not be detached')
+    },
+  })
 }
 
 /**
@@ -79,6 +97,144 @@ afterEach(async () => {
 })
 
 describe('pre-edit hook', () => {
+  test('canonicalizes filesystem aliases before deciding whether a target is in-repo', async () => {
+    if (process.platform === 'win32') return
+    const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-real-root-'))
+    const aliasRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-alias-root-'))
+    const alias = path.join(aliasRoot, 'repo-link')
+    try {
+      await fs.mkdir(path.join(realRoot, 'src'), { recursive: true })
+      await fs.symlink(realRoot, alias, 'dir')
+
+      expect(repoRelativeFile(realRoot, path.join(alias, 'src', 'new-file.ts'))).toBe(
+        'src/new-file.ts'
+      )
+    } finally {
+      await fs.rm(realRoot, { recursive: true, force: true })
+      await fs.rm(aliasRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('blocks Edit until the exact repo file is inspected', async () => {
+    const file = path.join(fixture.projectPath, 'core', 'state.ts')
+    const first = await runWith({ file_path: file }, 'source-session')
+    expect(first).toContain('source-first gate')
+    expect(first).toContain('permissionDecision')
+    expect(first).toContain('prjct guard')
+
+    const stillBlocked = await runWith({ file_path: file }, 'source-session')
+    expect(stillBlocked).toContain('source-first gate')
+
+    await markSourceInspected({
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      sessionId: 'source-session',
+      filePath: file,
+    })
+    expect((await runWith({ file_path: file }, 'source-session')).trim()).toBe('{}')
+  })
+
+  test('accepts filePath/path host payload variants and a successful Read handshake', async () => {
+    const file = path.join(fixture.projectPath, 'core', 'state.ts')
+    expect(await runWith({ filePath: file }, 'variant-session')).toContain('source-first gate')
+    await runRead({ path: file }, 'variant-session')
+    expect((await runWith({ path: file }, 'variant-session')).trim()).toBe('{}')
+  })
+
+  test('blocks a multi-file apply_patch until every target was inspected', async () => {
+    const first = path.join(fixture.projectPath, 'core', 'first.ts')
+    const second = path.join(fixture.projectPath, 'core', 'second.ts')
+    await markSourceInspected({
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      sessionId: 'patch-session',
+      filePath: first,
+    })
+    const patch = [
+      '*** Begin Patch',
+      `*** Update File: ${first}`,
+      '@@',
+      '-old',
+      '+new',
+      `*** Add File: ${second}`,
+      '+export const second = true',
+      '*** End Patch',
+    ].join('\n')
+    const blocked = await runWith({ patch }, 'patch-session')
+    expect(blocked).toContain('source-first gate')
+    expect(blocked).toContain('core/second.ts')
+
+    await markSourceInspected({
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      sessionId: 'patch-session',
+      filePath: second,
+    })
+    expect((await runWith({ patch }, 'patch-session')).trim()).toBe('{}')
+  })
+
+  test('parses Codex freeform apply_patch input and nested host arguments', async () => {
+    const rawFile = path.join(fixture.projectPath, 'core', 'raw.ts')
+    const rawPatch = `*** Begin Patch\n*** Update File: ${rawFile}\n@@\n-old\n+new\n*** End Patch`
+    expect(await runWith(rawPatch, 'raw-patch-session')).toContain('core/raw.ts')
+
+    const nestedFile = path.join(fixture.projectPath, 'core', 'nested.ts')
+    const nestedPatch = `*** Begin Patch\n*** Update File: ${nestedFile}\n@@\n-old\n+new\n*** End Patch`
+    expect(await runWith({ args: { input: nestedPatch } }, 'nested-patch-session')).toContain(
+      'core/nested.ts'
+    )
+  })
+
+  test('prjct guard is the source-inspection handshake for shell-first hosts', async () => {
+    const file = path.join(fixture.projectPath, 'core', 'state.ts')
+    expect(await runWith({ file_path: file }, 'guard-session')).toContain('source-first gate')
+    const token = sourceInspectionToken({
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      sessionId: 'guard-session',
+      filePath: file,
+    })
+    expect(token).not.toBeNull()
+    const previous = process.env.PRJCT_SOURCE_INSPECTION
+    process.env.PRJCT_SOURCE_INSPECTION = token!
+    try {
+      const result = await new GuardCommands().guard('core/state.ts', fixture.projectPath, {
+        md: true,
+      })
+      expect(result.success).toBe(true)
+      expect((await runWith({ file_path: file }, 'guard-session')).trim()).toBe('{}')
+    } finally {
+      if (previous === undefined) delete process.env.PRJCT_SOURCE_INSPECTION
+      else process.env.PRJCT_SOURCE_INSPECTION = previous
+    }
+  })
+
+  test('sessionless hosts use a durable guard handshake instead of bricking or failing open', async () => {
+    const file = path.join(fixture.projectPath, 'core', 'sessionless.ts')
+    expect(await runWith({ file_path: file })).toContain('source-first gate')
+    expect(await runWith({ file_path: file })).toContain('source-first gate')
+
+    const sessionEnv = ['CLAUDE_SESSION_ID', 'CODEX_SESSION_ID', 'PRJCT_SESSION_ID'] as const
+    const previous = new Map(sessionEnv.map((key) => [key, process.env[key]]))
+    for (const key of sessionEnv) delete process.env[key]
+    try {
+      const result = await new GuardCommands().guard('core/sessionless.ts', fixture.projectPath, {
+        md: true,
+      })
+      expect(result.success).toBe(true)
+      // Simulate the next hook process: its in-memory cache starts empty, but
+      // the short-lived disk stamp from guard must still unlock the edit.
+      _resetDeliveredLedgerForTests()
+      expect((await runWith({ file_path: file })).trim()).toBe('{}')
+    } finally {
+      for (const key of sessionEnv) {
+        const value = previous.get(key)
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })
+
   test('runs the credential guard before edit memory decisions', async () => {
     const syntheticKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz'].join('-')
     const out = await runWith({

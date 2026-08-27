@@ -43,7 +43,7 @@ export const CONTRACT = {
   /** Loop-discipline parity across Claude/Codex/Gemini/Cursor/Grok (SUPERIOR multi-runtime). */
   // Kept short: Codex SKILL.md hard cap ~1024B including metadata marker.
   loop: 'Loop: land; H2+ intent; tip→user SoT; close.',
-  output: 'Output: compact; H2+ standard; full on request.',
+  output: 'Output: compact; H2+; full on request.',
   /** Multi-project isolation — skill is never project identity. Keep short (Codex ~1024B). */
   identity: 'portable; id=cwd.',
 } as const

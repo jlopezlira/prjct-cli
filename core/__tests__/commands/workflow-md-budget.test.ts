@@ -13,4 +13,19 @@ describe('work --md priority budget', () => {
     expect(output).toContain(pipeline)
     expect(output).not.toContain('noise noise')
   })
+
+  it('retains repository alignment and source scope ahead of secondary guidance', () => {
+    const header = '## Fix inline duplication\n> Status: active'
+    const alignment =
+      '### Project alignment\nMatch house patterns; open the existing implementation before writing.'
+    const scope = '### Work scope — prjct\n- `core/services/existing.ts` — existing abstraction'
+    const secondary = `### Orchestration\n${'secondary '.repeat(80)}`
+
+    const output = packWorkMarkdownSections([header, alignment, scope, secondary], [], 280)
+
+    expect(output.length).toBeLessThanOrEqual(280)
+    expect(output).toContain(alignment)
+    expect(output).toContain(scope)
+    expect(output).not.toContain('secondary secondary')
+  })
 })

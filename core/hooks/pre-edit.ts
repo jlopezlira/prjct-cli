@@ -21,14 +21,25 @@ import {
   recordConflictEvent,
 } from '../services/decision-conflict'
 import { loopGuardVerdict } from '../services/loop-guard'
-import { gateDelivery } from '../services/session-context-cache'
+import {
+  gateDelivery,
+  markRepositoryContextDeliveredThisTurn,
+  repositoryContextDeliveredThisTurn,
+} from '../services/session-context-cache'
 import { sotBindVerdict } from '../services/sot-bind'
+import {
+  repoRelativeFile,
+  sourceFirstDenyMessage,
+  sourceInspectionToken,
+  wasSourceInspected,
+} from '../services/source-first-gate'
 import { formatTrapSurfaceMessage } from '../services/trap-surface-slo'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
 import { conflictModeWithWeakModel } from '../services/weak-model-mode'
 import { stateStorage } from '../storage/state-storage'
 import { type HookIo, runHook } from './_runner'
 import { safeTruncate } from './_shared'
+import { hookFilePaths } from './_tool-input'
 import { decideSecrets, type SecretHookInput } from './pre-secrets'
 
 const MAX_CHARS = 1200
@@ -46,11 +57,20 @@ const preventiveRecallCache = new Map<string, MemoryEntry[]>()
 
 interface HookInput extends SecretHookInput {
   tool_name?: string
-  tool_input?: { file_path?: string; [key: string]: unknown }
+  tool_input?: unknown
+  toolInput?: unknown
   /** Claude/Kimi/Gemini session identity. */
   session_id?: string
   /** Cursor session identity. */
   conversation_id?: string
+}
+
+function editFilePaths(input: HookInput): string[] {
+  return hookFilePaths(input)
+}
+
+function hookSessionId(input: HookInput): string | undefined {
+  return input.session_id?.trim() || input.conversation_id?.trim() || undefined
 }
 
 function recallPreventiveOnce(projectId: string, filePath: string): MemoryEntry[] {
@@ -260,6 +280,63 @@ async function decideHardStop(
   }
 }
 
+async function decideSourceFirst(
+  projectPath: string,
+  filePath: string,
+  sessionId: string | undefined
+): Promise<{ deny: string } | null> {
+  const config = await configManager.readConfig(projectPath).catch(() => null)
+  if (!config?.projectId) return null
+  try {
+    const inspected = await wasSourceInspected({
+      projectId: config.projectId,
+      projectPath,
+      sessionId,
+      filePath,
+    })
+    if (inspected) {
+      return null
+    }
+    const token = sourceInspectionToken({
+      projectId: config.projectId,
+      projectPath,
+      sessionId,
+      filePath,
+    })
+    const repositoryAlreadyDelivered = await repositoryContextDeliveredThisTurn({
+      projectId: config.projectId,
+      projectPath,
+      sessionId: sessionId ?? 'sessionless',
+    })
+    const message = sourceFirstDenyMessage(config.projectId, projectPath, filePath, token, {
+      includeSyncedPatterns: !repositoryAlreadyDelivered,
+    })
+    if (!message) return null
+    if (!repositoryAlreadyDelivered && message.includes('Synced house patterns for this file:')) {
+      await markRepositoryContextDeliveredThisTurn({
+        projectId: config.projectId,
+        projectPath,
+        sessionId: sessionId ?? 'sessionless',
+      })
+    }
+
+    return { deny: message }
+  } catch {
+    // Source-first is the correctness boundary, unlike advisory memory recall.
+    // Once a project and target file are known, an auxiliary lookup failure
+    // cannot silently authorize a blind edit.
+    const file = repoRelativeFile(projectPath, filePath)
+    if (!file) return null
+    return {
+      deny: [
+        '# prjct: source-first gate — edit blocked',
+        `Inspection state could not be verified for \`${file}\`.`,
+        `Read the existing implementation or run \`prjct guard "${file}" --md\`, then retry the edit.`,
+      ].join('\n'),
+    }
+  }
+}
+
 export function runPreEditHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {
   return runHook<HookInput>(
     {
@@ -269,17 +346,21 @@ export function runPreEditHook(projectPath: string = process.cwd(), io?: HookIo)
         clearPreventiveCache()
         const secretDecision = decideSecrets(input)
         if (secretDecision) return secretDecision
-        return decideHardStop(p, input.tool_input?.file_path?.trim())
+        const filePaths = editFilePaths(input)
+        if (filePaths.length === 0) return decideHardStop(p)
+        for (const filePath of filePaths) {
+          const hardStop = await decideHardStop(p, filePath)
+          if (hardStop) return hardStop
+          const sourceFirst = await decideSourceFirst(p, filePath, hookSessionId(input))
+          if (sourceFirst) return sourceFirst
+        }
+        return null
       },
       build: async (input, p) => {
         try {
-          const filePath = input.tool_input?.file_path?.trim()
+          const filePath = editFilePaths(input)[0]
           if (!filePath) return null
-          return buildPreEditContext(
-            p,
-            filePath,
-            input.session_id?.trim() || input.conversation_id?.trim() || 'unknown'
-          )
+          return buildPreEditContext(p, filePath, hookSessionId(input) ?? 'unknown')
         } finally {
           clearPreventiveCache()
         }

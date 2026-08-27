@@ -18,6 +18,10 @@
 import { resolveCallerIdentity } from '../services/agent-identity'
 import { formatLikelyFileForAgent } from '../services/file-cue'
 import { formatModelOnlyGuidance } from '../services/private-skill-router'
+import {
+  projectPatternAlignmentEntries,
+  relevantProjectPatterns,
+} from '../services/project-pattern-context'
 import { condenseDeliveredDurable, gateDelivery } from '../services/session-context-cache'
 import { collectActiveTasks } from '../services/task-overview'
 import {
@@ -193,10 +197,13 @@ export class WorkflowCommands extends PrjctCommandsBase {
             ]
           : []),
       ]
-      const likelyFiles = outcome.likelyFiles ?? []
+      // The work surface is bounded. Four ranked implementations are enough
+      // to establish house style while leaving room for the worktree path and
+      // the mandatory alignment cue.
+      const likelyFiles = (outcome.likelyFiles ?? []).slice(0, 4)
       const likelyFileLines = likelyFiles.map(formatLikelyFileForAgent)
       // Predictive risk — the preventive memory for the area this cycle touches,
-      // surfaced BEFORE the edit. Higher priority than the file map, so it leads.
+      // surfaced before the edit when the bounded surface still has room.
       const risks = outcome.risks ?? []
       const riskLines = risks.map(formatRiskForAgent)
 
@@ -207,24 +214,16 @@ export class WorkflowCommands extends PrjctCommandsBase {
       const antiHits = related.filter((h) => h.type === 'anti-pattern' || h.antiPattern)
       const { stylePatterns, styleAntis } = await (async () => {
         try {
-          const { getActiveProjectStyle } = await import('../services/project-style-evolution')
-          const style = getActiveProjectStyle(projectId)
-          if (!style) return { stylePatterns: [], styleAntis: [] }
+          const selected = relevantProjectPatterns(projectId, taskDescription, {
+            targetFiles: likelyFiles.map((file) => file.path),
+            maxPatterns: 3,
+            maxConventions: 2,
+            maxAntiPatterns: 2,
+          })
+          const entries = projectPatternAlignmentEntries(selected)
           return {
-            stylePatterns: [
-              ...style.payload.patterns.map((p) => ({
-                title: p.name,
-                content: p.description,
-              })),
-              ...style.payload.conventions.map((c) => ({
-                title: c.category ?? 'convention',
-                content: c.rule,
-              })),
-            ],
-            styleAntis: style.payload.antiPatterns.map((a) => ({
-              title: a.issue,
-              content: a.suggestion,
-            })),
+            stylePatterns: entries.patterns,
+            styleAntis: entries.antiPatterns,
           }
         } catch {
           return { stylePatterns: [], styleAntis: [] }
@@ -256,16 +255,13 @@ export class WorkflowCommands extends PrjctCommandsBase {
           sessionId: caller.sessionId,
           surface: 'cli-work' as const,
           key: 'alignment',
-          content: alignment.md,
+          content: alignment.line,
           full: Boolean(options.full),
           noSession: { mode: 'static' as const, ttlMs: 15 * 60_000 },
           onRepeat: () => '_Unchanged this session — `prjct work --full` re-emits._',
         }
         const alignmentDelivery = await gateDelivery({ ...alignmentGateRequest, probe: true })
-        const alignmentSection = mdSection(
-          'Project alignment',
-          alignmentDelivery.emit ?? alignment.md
-        )
+        const alignmentSection = mdSection('Project alignment (MUST before edit)', alignment.line)
         const livingKnowledgeSection =
           relatedLines.length > 0
             ? mdSection(
@@ -376,16 +372,20 @@ export class WorkflowCommands extends PrjctCommandsBase {
           [
             workSections[0],
             workSections[1],
+            // Source alignment is a correctness gate, not optional prose.
+            // Keep it ahead of orchestration/model guidance so tight budgets
+            // cannot tell Codex how to work while hiding what to reuse.
+            workSections[8],
+            workSections[10],
             workSections[2],
             workSections[3],
             workSections[4],
             workSections[5],
             workSections[6],
             workSections[7],
-            workSections[10],
             workSections[11],
           ],
-          [workSections[8], workSections[9]]
+          [workSections[9]]
         )
         if (md.includes(alignmentSection) && !alignmentDelivery.suppressed) {
           await gateDelivery({ ...alignmentGateRequest, full: true })

@@ -68,13 +68,21 @@ describe('installCodexHooks', () => {
     expect(sessionHandlers[0]?.command).toContain('prjct hook session-start')
     expect(sessionHandlers[0]?.commandWindows).toContain('prjct hook session-start')
 
-    // Edit|Write has one consolidated pre-edit process; it runs credential
-    // scanning before the memory/loop decisions internally.
-    const preEdit = body.hooks.PreToolUse.find((b) => b.matcher === 'Edit|Write')
+    // Every supported edit surface has one consolidated pre-edit process; it
+    // runs credential and source-first checks before any write can proceed.
+    const preEdit = body.hooks.PreToolUse.find((b) =>
+      b.hooks.some((h) => String(h.command ?? '').includes('pre-edit'))
+    )
     expect(preEdit).toBeDefined()
+    expect(preEdit?.matcher).toContain('apply_patch')
     const editCmds = (preEdit!.hooks ?? []).map((h) => String(h.command ?? ''))
     expect(editCmds.some((c) => c.includes('pre-edit'))).toBe(true)
     expect(editCmds).toHaveLength(1)
+
+    const postRead = body.hooks.PostToolUse.find((b) =>
+      b.hooks.some((h) => String(h.command ?? '').includes('post-read'))
+    )
+    expect(postRead?.matcher).toContain('read_file')
 
     const preBash = body.hooks.PreToolUse.find((b) => b.matcher === 'Bash')
     expect(preBash).toBeDefined()
@@ -91,6 +99,32 @@ describe('installCodexHooks', () => {
     })
     expect(r2.hooksWritten).toBe(0)
     expect(r2.alreadyPresent).toBe(codexHookSpecs().length)
+  })
+
+  it('moves a managed pre-edit hook from the legacy matcher without duplication', async () => {
+    await installCodexHooks({ hooksPath: fixture.hooksPath, configPath: fixture.configPath })
+    const body = JSON.parse(await fs.readFile(fixture.hooksPath, 'utf-8')) as {
+      hooks: Record<
+        string,
+        Array<{ matcher?: string; hooks: Array<{ command: string; _prjctManaged?: boolean }> }>
+      >
+    }
+    const legacy = body.hooks.PreToolUse.find((block) =>
+      block.hooks.some((hook) => hook.command.includes('pre-edit'))
+    )
+    expect(legacy).toBeDefined()
+    legacy!.matcher = 'Edit|Write'
+    legacy!.hooks.push({ command: 'echo keep-user-hook' })
+    await fs.writeFile(fixture.hooksPath, JSON.stringify(body), 'utf-8')
+
+    await installCodexHooks({ hooksPath: fixture.hooksPath, configPath: fixture.configPath })
+    const after = JSON.parse(await fs.readFile(fixture.hooksPath, 'utf-8')) as typeof body
+    const preEditBlocks = after.hooks.PreToolUse.filter((block) =>
+      block.hooks.some((hook) => hook.command.includes('pre-edit'))
+    )
+    expect(preEditBlocks).toHaveLength(1)
+    expect(preEditBlocks[0]?.matcher).toContain('apply_patch')
+    expect(JSON.stringify(after.hooks.PreToolUse)).toContain('keep-user-hook')
   })
 
   it('preserves foreign (non-prjct) handlers under the same event', async () => {

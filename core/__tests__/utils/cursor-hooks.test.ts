@@ -46,6 +46,9 @@ describe('cursorHookMaps', () => {
   it('maps edit tools to Write|StrReplace|Edit', () => {
     expect(cursorHookMaps().some((m) => m.matcher === 'Write|StrReplace|Edit')).toBe(true)
     expect(cursorHookMaps().some((m) => m.matcher === 'Shell|Bash')).toBe(true)
+    expect(cursorHookMaps().find((m) => m.subcommand === 'post-read')?.matcher).toBe(
+      'Read|ReadFile'
+    )
   })
 })
 
