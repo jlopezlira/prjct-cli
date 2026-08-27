@@ -10,8 +10,11 @@ import {
 
 const ROOT = path.resolve(__dirname, '..')
 
-function trackedSourceFiles(): string[] {
-  const result = Bun.spawnSync(['git', 'ls-files', '-z'], { cwd: ROOT })
+function repositorySourceFiles(): string[] {
+  const result = Bun.spawnSync(
+    ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+    { cwd: ROOT }
+  )
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.toString().trim() || 'git ls-files failed')
   }
@@ -23,7 +26,7 @@ function trackedSourceFiles(): string[] {
 }
 
 function scanRepository(): MutableDeclaration[] {
-  return trackedSourceFiles().flatMap((file) =>
+  return repositorySourceFiles().flatMap((file) =>
     findMutableDeclarations(file, fs.readFileSync(path.join(ROOT, file), 'utf-8'))
   )
 }

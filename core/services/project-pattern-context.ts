@@ -79,28 +79,23 @@ function normalizeRepoPath(value: string): string {
 }
 
 function pathAffinity(locations: readonly string[], targets: readonly string[]): number {
-  let best = 0
-  for (const rawLocation of locations) {
-    const location = normalizeRepoPath(rawLocation)
-    if (!location) continue
-    for (const rawTarget of targets) {
-      const target = normalizeRepoPath(rawTarget)
-      if (!target) continue
-      if (target === location) best = Math.max(best, 30)
-      else if (target.startsWith(`${location}/`) || location.startsWith(`${target}/`)) {
-        best = Math.max(best, 24)
-      } else if (path.dirname(target) === path.dirname(location)) {
-        best = Math.max(best, 16)
-      } else {
+  return locations
+    .flatMap((rawLocation) => {
+      const location = normalizeRepoPath(rawLocation)
+      if (!location) return []
+      return targets.map((rawTarget) => {
+        const target = normalizeRepoPath(rawTarget)
+        if (!target) return 0
+        if (target === location) return 30
+        if (target.startsWith(`${location}/`) || location.startsWith(`${target}/`)) return 24
+        if (path.dirname(target) === path.dirname(location)) return 16
         const locationParts = new Set(location.split('/').filter((part) => part.length >= 3))
-        const shared = target
-          .split('/')
-          .filter((part) => part.length >= 3 && locationParts.has(part)).length
-        best = Math.max(best, shared * 4)
-      }
-    }
-  }
-  return best
+        return (
+          target.split('/').filter((part) => part.length >= 3 && locationParts.has(part)).length * 4
+        )
+      })
+    })
+    .reduce((best, score) => Math.max(best, score), 0)
 }
 
 function relevanceScore(
@@ -111,10 +106,7 @@ function relevanceScore(
   confidence?: number
 ): number {
   const candidateTokens = tokens(`${text} ${locations.join(' ')}`)
-  let overlap = 0
-  for (const token of queryTokens) {
-    if (candidateTokens.has(token)) overlap++
-  }
+  const overlap = [...queryTokens].filter((token) => candidateTokens.has(token)).length
   return overlap * 8 + pathAffinity(locations, targets) + (overlap > 0 ? (confidence ?? 0) : 0)
 }
 

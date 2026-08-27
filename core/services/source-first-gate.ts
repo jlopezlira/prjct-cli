@@ -32,22 +32,20 @@ const SOURCE_SHAPE_CHARS = 1200
  */
 function canonicalPath(value: string): string {
   const resolved = path.resolve(value)
+  const resolveExistingAncestor = (cursor: string, suffix: readonly string[]): string => {
+    try {
+      return path.join(realpathSync.native(cursor), ...suffix)
+    } catch {
+      const parent = path.dirname(cursor)
+      if (parent === cursor) return resolved
+      return resolveExistingAncestor(parent, [path.basename(cursor), ...suffix])
+    }
+  }
   try {
     return realpathSync.native(resolved)
   } catch {
-    const suffix: string[] = []
-    let cursor = resolved
-    for (;;) {
-      const parent = path.dirname(cursor)
-      if (parent === cursor) return resolved
-      suffix.unshift(path.basename(cursor))
-      cursor = parent
-      try {
-        return path.join(realpathSync.native(cursor), ...suffix)
-      } catch {
-        // Walk to the nearest existing ancestor, preserving the missing tail.
-      }
-    }
+    // Walk to the nearest existing ancestor, preserving the missing tail.
+    return resolveExistingAncestor(path.dirname(resolved), [path.basename(resolved)])
   }
 }
 

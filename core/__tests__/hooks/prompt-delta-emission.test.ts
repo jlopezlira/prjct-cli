@@ -226,14 +226,23 @@ describe('prompt guidance and delta emission across hook hosts', () => {
   })
 
   it('packs an auto-route as one exact-path section and dedupes it by session', async () => {
+    await stateStorage.completeTask(fixture.projectId)
+    await stateStorage.startTask(fixture.projectId, {
+      id: 'route-budget-task',
+      description: `route budget ${'scope '.repeat(75)}TAIL_SENTINEL`,
+      startedAt: new Date().toISOString(),
+      sessionId: 'delta-session',
+    } as Parameters<typeof stateStorage.startTask>[1])
     const prompt = 'Diagnose a flaky regression in AGENTS.md'
     const first = await runTurn('codex', prompt)
     expect(first).toContain(path.join(PRIVATE_SKILL_ASSET_ROOT, 'diagnosing-bugs.md'))
     expect(first).toContain(path.join(PRIVATE_SKILL_ASSET_ROOT, 'writing-for-agents.md'))
     expect(first).not.toContain('Output: standard')
+    expect(first).not.toContain('TAIL_SENTINEL')
 
     const followUp = await runTurn('codex', 'continue')
     expect(followUp).toContain('# prjct: project state')
+    expect(followUp).toContain('TAIL_SENTINEL')
     expect(followUp).not.toContain('# prjct: repository alignment (MUST before edit)')
     expect(await runTurn('codex', 'continue')).toBe('')
     expect(await runTurn('codex', prompt)).toBe('')

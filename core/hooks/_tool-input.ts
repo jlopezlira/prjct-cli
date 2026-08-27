@@ -74,13 +74,13 @@ export function hookFilePaths(input: PortableHookInput): string[] {
 /** First string value carried under one of the provider-specific field names. */
 export function hookStringField(input: PortableHookInput, keys: readonly string[]): string | null {
   const wanted = new Set(keys)
-  let hit: string | null = null
+  const hits: string[] = []
   walkPayload(
     input,
     () => {},
     (key, value) => {
-      if (!hit && wanted.has(key) && value.trim()) hit = value
+      if (hits.length === 0 && wanted.has(key) && value.trim()) hits.push(value)
     }
   )
-  return hit
+  return hits[0] ?? null
 }

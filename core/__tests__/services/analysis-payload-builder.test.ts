@@ -31,13 +31,12 @@ const git: GitData = {
 }
 
 describe('analysis payload pattern sampling', () => {
-  let projectPath = ''
-  let projectId = ''
+  const fixture = { projectPath: '', projectId: '' }
 
   beforeEach(async () => {
-    projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-analysis-payload-'))
-    projectId = `analysis-payload-${crypto.randomUUID()}`
-    await pathManager.ensureProjectStructure(projectId)
+    fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-analysis-payload-'))
+    fixture.projectId = `analysis-payload-${crypto.randomUUID()}`
+    await pathManager.ensureProjectStructure(fixture.projectId)
     const files: Record<string, string> = {
       'src/router.ts': 'export function routeHandler() { return commandService() }',
       'src/service.ts': 'export function commandService() { return runDomainWorkflow() }',
@@ -50,19 +49,19 @@ describe('analysis payload pattern sampling', () => {
         'describe("service", () => { expect(commandService()).toBeDefined() })',
     }
     for (const [file, content] of Object.entries(files)) {
-      await fs.mkdir(path.dirname(path.join(projectPath, file)), { recursive: true })
-      await fs.writeFile(path.join(projectPath, file), content)
+      await fs.mkdir(path.dirname(path.join(fixture.projectPath, file)), { recursive: true })
+      await fs.writeFile(path.join(fixture.projectPath, file), content)
     }
-    await indexProject(projectPath, projectId)
+    await indexProject(fixture.projectPath, fixture.projectId)
   })
 
   afterEach(async () => {
     prjctDb.close()
-    if (projectPath) await fs.rm(projectPath, { recursive: true, force: true })
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
   })
 
   it('collects unique canonical samples across multiple pattern lanes within a fixed budget', async () => {
-    const payload = await buildAnalysisPayload(projectId, projectPath, git, stats)
+    const payload = await buildAnalysisPayload(fixture.projectId, fixture.projectPath, git, stats)
     const lanes = payload.codeSamples.map((sample) => sample.reason)
 
     expect(new Set(payload.codeSamples.map((sample) => sample.path)).size).toBe(
