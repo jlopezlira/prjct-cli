@@ -35,8 +35,17 @@ export interface Sandbox {
    *  no prjct data leaked to `<HOME>/.prjct-cli` */
   osHome: string
   /** run the real CLI in this sandbox; never throws on non-zero exit */
-  cli: (args: string[], opts?: { cwd?: string; timeoutMs?: number }) => Promise<CliResult>
+  cli: (args: string[], opts?: CliOptions) => Promise<CliResult>
   cleanup: () => Promise<void>
+}
+
+export interface CliOptions {
+  cwd?: string
+  timeoutMs?: number
+  /** Raw hook event JSON for real `prjct hook ...` subprocess tests. */
+  stdin?: string
+  /** Per-invocation overrides layered over the hermetic base environment. */
+  env?: NodeJS.ProcessEnv
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {
@@ -56,13 +65,14 @@ function runCli(
   args: string[],
   env: NodeJS.ProcessEnv,
   cwd: string,
-  timeoutMs = 60_000
+  timeoutMs = 60_000,
+  stdin?: string
 ): Promise<CliResult> {
   return new Promise((resolve) => {
     const child = spawn('bun', [BIN, ...args], {
       cwd,
       env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     })
     const capture = { stdout: '', stderr: '', done: false }
     const finish = (code: number) => {
@@ -76,10 +86,10 @@ function runCli(
       capture.stderr += `\n[harness] timeout after ${timeoutMs}ms`
       finish(124)
     }, timeoutMs)
-    child.stdout.on('data', (d) => {
+    child.stdout?.on('data', (d) => {
       capture.stdout += d.toString()
     })
-    child.stderr.on('data', (d) => {
+    child.stderr?.on('data', (d) => {
       capture.stderr += d.toString()
     })
     child.on('error', (e) => {
@@ -87,6 +97,7 @@ function runCli(
       finish(127)
     })
     child.on('exit', (c) => finish(c ?? 0))
+    if (stdin !== undefined) child.stdin?.end(stdin)
   })
 }
 
@@ -142,7 +153,8 @@ export async function makeSandbox(opts: SandboxOpts | boolean = true): Promise<S
     dir,
     home: cliHome,
     osHome: home,
-    cli: (args, opts = {}) => runCli(args, baseEnv, opts.cwd ?? dir, opts.timeoutMs),
+    cli: (args, opts = {}) =>
+      runCli(args, { ...baseEnv, ...opts.env }, opts.cwd ?? dir, opts.timeoutMs, opts.stdin),
     cleanup: () => fs.rm(root, { recursive: true, force: true }).catch(() => {}),
   }
 }

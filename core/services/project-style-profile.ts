@@ -108,6 +108,7 @@ export function buildProjectStylePayload(input: BuildProjectStyleInput): Project
       key: stableStyleKey(c.category ? `${c.category}-${c.rule}` : c.rule),
       rule: c.rule,
       category: c.category,
+      example: c.example,
     })) ?? [],
     input.memoryConventions?.map((c) => ({
       key: stableStyleKey(c.category ? `${c.category}-${c.rule}` : c.rule),
@@ -123,6 +124,7 @@ export function buildProjectStylePayload(input: BuildProjectStyleInput): Project
       description: p.description,
       locations: p.locations,
       category: p.category,
+      confidence: p.confidence,
     })) ?? [],
     input.memoryPatterns?.map((p) => ({
       key: stableStyleKey(p.name),
@@ -137,6 +139,9 @@ export function buildProjectStylePayload(input: BuildProjectStyleInput): Project
       issue: a.issue,
       suggestion: a.suggestion,
       severity: a.severity,
+      files: a.files,
+      reasoning: a.reasoning,
+      confidence: a.confidence,
     })) ?? [],
     input.memoryAntiPatterns?.map((a) => ({
       key: stableStyleKey(a.issue),
@@ -173,6 +178,13 @@ export function buildProjectStylePayload(input: BuildProjectStyleInput): Project
     conventions,
     patterns,
     antiPatterns,
+    architecture: fromLlm
+      ? {
+          style: fromLlm.architecture.style,
+          insights: fromLlm.architecture.insights,
+          domains: fromLlm.architecture.domains,
+        }
+      : undefined,
     structural,
     metrics: { ...(input.metrics ?? {}) },
   }
@@ -371,16 +383,21 @@ export function formatProjectStyleDigest(
   if (stackParts.length > 0) {
     lines.push(`**Stack:** ${stackParts.join(' · ')}`)
   }
+  if (p.architecture?.style && p.architecture.style !== 'unknown') {
+    const domains = p.architecture.domains.slice(0, 4).join(', ')
+    lines.push(`**Architecture:** ${p.architecture.style}${domains ? ` · ${domains}` : ''}`)
+  }
   if (p.conventions.length > 0) {
     lines.push('', '**Conventions (match):**')
     for (const c of p.conventions.slice(0, maxC)) {
-      lines.push(`- ${c.rule}`)
+      lines.push(`- ${c.rule}${c.example ? ` · e.g. ${truncate(c.example, 80)}` : ''}`)
     }
   }
   if (p.patterns.length > 0) {
     lines.push('', '**Patterns (match):**')
     for (const pat of p.patterns.slice(0, maxP)) {
-      lines.push(`- **${pat.name}** — ${truncate(pat.description, 120)}`)
+      const canonical = pat.locations?.[0] ? ` · canonical: \`${pat.locations[0]}\`` : ''
+      lines.push(`- **${pat.name}** — ${truncate(pat.description, 120)}${canonical}`)
     }
   }
   if (p.antiPatterns.length > 0) {

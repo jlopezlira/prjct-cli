@@ -44,6 +44,7 @@ describe('geminiHookMaps', () => {
     expect(events.has('PreToolUse')).toBe(false)
     expect(maps.some((m) => m.matcher === 'run_shell_command')).toBe(true)
     expect(maps.some((m) => m.matcher === 'write_file|replace')).toBe(true)
+    expect(maps.find((m) => m.subcommand === 'post-read')?.matcher).toBe('read_file')
   })
 })
 

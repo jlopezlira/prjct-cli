@@ -106,6 +106,36 @@ describe('settings-installer', () => {
     }
   })
 
+  test('reinstall moves pre-edit off the legacy matcher without duplicating it', async () => {
+    await install()
+    const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
+    const parsed = JSON.parse(await fs.readFile(settingsPath, 'utf-8'))
+    const blocks = parsed.hooks.PreToolUse as Array<{
+      matcher?: string
+      hooks: Array<{ command: string; _prjctManaged?: boolean }>
+    }>
+    const current = blocks.find((block) =>
+      block.hooks.some((hook) => hook.command.includes('pre-edit'))
+    )
+    expect(current).toBeDefined()
+    current!.matcher = 'Edit|Write'
+    current!.hooks.push({ command: 'echo keep-user-hook' })
+    await fs.writeFile(settingsPath, JSON.stringify(parsed), 'utf-8')
+
+    await install()
+    const after = JSON.parse(await fs.readFile(settingsPath, 'utf-8'))
+    const afterBlocks = after.hooks.PreToolUse as Array<{
+      matcher?: string
+      hooks: Array<{ command: string }>
+    }>
+    const preEditBlocks = afterBlocks.filter((block) =>
+      block.hooks.some((hook) => hook.command.includes('pre-edit'))
+    )
+    expect(preEditBlocks).toHaveLength(1)
+    expect(preEditBlocks[0]?.matcher).toContain('apply_patch')
+    expect(JSON.stringify(afterBlocks)).toContain('keep-user-hook')
+  })
+
   test('install prunes a retired managed hook from existing settings', async () => {
     const settingsPath = path.join(fixture.home, '.claude', 'settings.json')
     await fs.mkdir(path.dirname(settingsPath), { recursive: true })

@@ -86,4 +86,20 @@ describe('project-style-diff', () => {
     const diff = generateProjectStyleDiff(a, b)
     expect(diff.hasChanges).toBe(false)
   })
+
+  test('treats new canonical evidence as a style change even when the pattern name is stable', () => {
+    const before = buildProjectStyleSnapshot({ stats, stack, commitHash: 'aaa' })
+    before.payload.patterns = [
+      { key: 'service-boundary', name: 'Service boundary', description: 'Commands delegate.' },
+    ]
+    const after = structuredClone(before)
+    after.payload.patterns[0]!.locations = ['core/services']
+
+    const diff = generateProjectStyleDiff(before, after)
+
+    expect(diff.hasChanges).toBe(true)
+    expect(diff.items.some((item) => item.field === 'Pattern' && item.type === 'changed')).toBe(
+      true
+    )
+  })
 })

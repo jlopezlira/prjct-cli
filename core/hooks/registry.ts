@@ -61,6 +61,10 @@ const HOOK_LOADERS: Record<string, { load: HookLoader; exportName: string }> = {
     load: () => import('./post-edit'),
     exportName: 'runPostEditHook',
   },
+  'post-read': {
+    load: () => import('./post-read'),
+    exportName: 'runPostReadHook',
+  },
   stop: {
     load: () => import('./stop'),
     exportName: 'runStopHook',

@@ -439,6 +439,11 @@ export async function runBinCommand(args: string[], ctx: BinCommandContext): Pro
           await runPostEditHook(projectPath)
           break
         }
+        case 'post-read': {
+          const { runPostReadHook } = await import('../hooks/post-read')
+          await runPostReadHook(projectPath)
+          break
+        }
         case 'stop': {
           const { runStopHook } = await import('../hooks/stop')
           await runStopHook(projectPath)

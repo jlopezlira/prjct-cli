@@ -18,10 +18,10 @@ import type { AnalysisPayload } from '../types/llm-analysis'
 import type { GitData, ProjectStats } from '../types/project-sync'
 import log from '../utils/logger'
 
-/** Max characters per code sample — keep tight, LLM has repo access */
-const MAX_SAMPLE_CHARS = 800
-/** Max number of code samples — just enough to detect architecture */
-const MAX_SAMPLES = 6
+/** Max characters per canonical sample — enough to expose imports + one implementation shape. */
+const MAX_SAMPLE_CHARS = 700
+/** Stratified samples replace a repo-wide reread while keeping the payload bounded. */
+const MAX_SAMPLES = 9
 /** Max recent commits — enough for context, not history */
 const MAX_COMMITS = 8
 /** Max task history entries */
@@ -71,8 +71,11 @@ export async function buildAnalysisPayload(
 }
 
 /**
- * Select the most important code samples using BM25 scoring.
- * Queries for architecture-relevant terms to find key files.
+ * Select representative code samples by pattern lane. One global BM25 query
+ * over-selected routers/config files and gave the LLM too little evidence to
+ * learn testing, persistence, error, and service conventions. Stratification
+ * spends roughly the same token budget but covers the repeated shapes agents
+ * must reuse later.
  */
 async function selectCodeSamples(
   projectId: string,
@@ -81,45 +84,45 @@ async function selectCodeSamples(
 ): Promise<AnalysisPayload['codeSamples']> {
   const samples: AnalysisPayload['codeSamples'] = []
 
-  // Build query terms from project context
-  const queryTerms = [
-    ...stats.frameworks.map((f) => f.toLowerCase()),
-    'config',
-    'router',
-    'middleware',
-    'service',
-    'model',
-    'schema',
-    'database',
-    'api',
-    'auth',
-  ].join(' ')
-
-  const topFiles = queryFiles(projectId, queryTerms, MAX_SAMPLES * 2)
-
-  for (const file of topFiles) {
+  const probes = [
+    // Reserve narrowly identifiable evidence before broad architectural queries
+    // can consume the same file. This keeps each lane represented without
+    // increasing the payload or rereading the repository.
+    { lane: 'testing', query: 'test describe expect fixture mock integration' },
+    { lane: 'data-access', query: 'repository storage database query transaction model schema' },
+    { lane: 'error-handling', query: 'error result failure exception catch validation' },
+    { lane: 'configuration', query: 'config settings environment options defaults' },
+    { lane: 'dependency-boundary', query: 'adapter client provider gateway integration' },
+    { lane: 'public-contract', query: 'interface type schema response request command manifest' },
+    { lane: 'service-domain-flow', query: 'service domain usecase workflow orchestration' },
+    {
+      lane: 'architecture-boundary',
+      query: `${stats.frameworks.join(' ')} router command handler controller service`,
+    },
+  ]
+  const selected = new Set<string>()
+  for (const probe of probes) {
     if (samples.length >= MAX_SAMPLES) break
-
-    try {
-      const fullPath = path.join(projectPath, file.path)
-      const content = await fs.readFile(fullPath, 'utf-8')
-
-      // Skip very large or binary files
-      if (content.length > MAX_SAMPLE_CHARS * 3) {
+    const candidates = queryFiles(projectId, probe.query, 6).filter(
+      (file) => !selected.has(file.path)
+    )
+    for (const candidate of candidates) {
+      try {
+        const fullPath = path.join(projectPath, candidate.path)
+        const content = await fs.readFile(fullPath, 'utf-8')
+        selected.add(candidate.path)
         samples.push({
-          path: file.path,
-          content: `${content.slice(0, MAX_SAMPLE_CHARS)}\n// ... truncated`,
-          reason: `BM25 score: ${file.score.toFixed(2)} (truncated, ${content.length} chars)`,
+          path: candidate.path,
+          content:
+            content.length > MAX_SAMPLE_CHARS
+              ? `${content.slice(0, MAX_SAMPLE_CHARS)}\n// ... truncated`
+              : content,
+          reason: `pattern lane: ${probe.lane}; BM25 ${candidate.score.toFixed(2)}`,
         })
-      } else {
-        samples.push({
-          path: file.path,
-          content: content.slice(0, MAX_SAMPLE_CHARS),
-          reason: `BM25 score: ${file.score.toFixed(2)}`,
-        })
+        break
+      } catch {
+        // Try the next indexed candidate in this lane; never walk the repo.
       }
-    } catch {
-      // File unreadable — skip
     }
   }
 

@@ -227,7 +227,17 @@ export async function installCodexHooks(opts?: {
   const outcomes: Array<'written' | 'present'> = []
 
   for (const spec of codexHookSpecs()) {
-    const eventEntries: CodexMatcherGroup[] = hooks[spec.event] ?? []
+    const existingEntries: CodexMatcherGroup[] = hooks[spec.event] ?? []
+    const movedStale = existingEntries.reduce((count, candidate) => {
+      if ((candidate.matcher ?? '') === (spec.matcher ?? '')) return count
+      const before = candidate.hooks.length
+      candidate.hooks = candidate.hooks.filter((handler) => {
+        const managed = isPrjctHandler(handler) || isLegacyPrjctHandler(handler)
+        return !(managed && subcommandOf(handler) === spec.subcommand)
+      })
+      return count + before - candidate.hooks.length
+    }, 0)
+    const eventEntries = existingEntries.filter((candidate) => candidate.hooks.length > 0)
     const matchingBlock = eventEntries.find((b) => (b.matcher ?? '') === (spec.matcher ?? ''))
     const block = matchingBlock ?? { matcher: spec.matcher || undefined, hooks: [] }
     if (!matchingBlock) {
@@ -247,7 +257,8 @@ export async function installCodexHooks(opts?: {
       if (
         existing.command === desired.command &&
         existing.commandWindows === desired.commandWindows &&
-        existing.timeout === desired.timeout
+        existing.timeout === desired.timeout &&
+        movedStale === 0
       ) {
         outcomes.push('present')
       } else {

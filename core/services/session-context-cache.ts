@@ -17,7 +17,7 @@
  * full=true to bypass the ledger.
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { DAEMON_PATHS } from '../daemon/protocol'
@@ -169,6 +169,7 @@ export type DeliverySurface =
   /** Knowledge-first deny: one block per grepped token per session. */
   | 'pre-search-knowledge-gate'
   | 'pre-edit'
+  | 'source-inspection'
   | 'post-edit'
   | 'pre-bash-commit'
   | 'cwd-changed'
@@ -212,6 +213,7 @@ export interface GateResult {
 const GATE_STAMP_PREFIX = 'scc-'
 const GATE_L1_MAX = 256
 const GATE_KEYED_MAX_ENTRIES = 200
+const TURN_CONTEXT_PREFIX = 'turn-context-'
 
 /** In-process fast path over the disk stamps (warm daemon). */
 const gateL1 = new Map<string, string>()
@@ -219,6 +221,81 @@ const gateL1 = new Map<string, string>()
 interface GateStampEntry {
   h: string
   t: number
+}
+
+interface TurnContextStamp {
+  turnId: string
+  repositoryContextDelivered: boolean
+  startedAt: number
+}
+
+function turnContextPath(projectId: string, projectPath: string, sessionId: string): string {
+  const key = sessionStampKey(projectId, projectPath, sessionId)
+  return path.join(DAEMON_PATHS.runDir(), `${TURN_CONTEXT_PREFIX}${key}.json`)
+}
+
+/** Start a new host prompt turn, clearing cross-hook delivery for that turn. */
+export async function beginPromptTurn(input: {
+  projectId: string
+  projectPath: string
+  sessionId: string | undefined
+}): Promise<string | null> {
+  if (!input.sessionId) return null
+  const turnId = randomUUID()
+  const stamp: TurnContextStamp = {
+    turnId,
+    repositoryContextDelivered: false,
+    startedAt: Date.now(),
+  }
+  await fs
+    .mkdir(DAEMON_PATHS.runDir(), { recursive: true })
+    .then(() =>
+      fs.writeFile(
+        turnContextPath(input.projectId, input.projectPath, input.sessionId!),
+        JSON.stringify(stamp)
+      )
+    )
+    .catch(() => undefined)
+  return turnId
+}
+
+/** Mark the repository-pattern block as delivered by one hook this turn. */
+export async function markRepositoryContextDeliveredThisTurn(input: {
+  projectId: string
+  projectPath: string
+  sessionId: string | undefined
+  turnId?: string | null
+}): Promise<void> {
+  if (!input.sessionId) return
+  const target = turnContextPath(input.projectId, input.projectPath, input.sessionId)
+  try {
+    const stamp = JSON.parse(await fs.readFile(target, 'utf-8')) as TurnContextStamp
+    if (input.turnId && stamp.turnId !== input.turnId) return
+    await fs.writeFile(target, JSON.stringify({ ...stamp, repositoryContextDelivered: true }))
+  } catch {
+    // Missing prompt stamp/session races are fail-soft; the content gate still
+    // prevents repeat delivery across messages.
+  }
+}
+
+/** Cross-process check used by edit hooks to avoid a second injection. */
+export async function repositoryContextDeliveredThisTurn(input: {
+  projectId: string
+  projectPath: string
+  sessionId: string | undefined
+}): Promise<boolean> {
+  if (!input.sessionId) return false
+  try {
+    const stamp = JSON.parse(
+      await fs.readFile(
+        turnContextPath(input.projectId, input.projectPath, input.sessionId),
+        'utf-8'
+      )
+    ) as TurnContextStamp
+    return stamp.repositoryContextDelivered === true
+  } catch {
+    return false
+  }
 }
 
 function gateStampPath(stampKey: string, surface: DeliverySurface, keyed: boolean): string {

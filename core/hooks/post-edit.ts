@@ -12,34 +12,22 @@ import { memoryService } from '../services/memory-service'
 import { resolvePrivateSkillPath } from '../services/private-skill-router'
 import { gateDelivery } from '../services/session-context-cache'
 import { type HookIo, runHook } from './_runner'
-
-interface EditOrWriteToolInput {
-  file_path?: string
-  filePath?: string
-  path?: string
-  new_string?: string
-  newString?: string
-  content?: string
-  text?: string
-}
+import { hookFilePaths, hookStringField } from './_tool-input'
 
 interface HookInput {
   tool_name?: string
-  tool_input?: EditOrWriteToolInput
+  tool_input?: unknown
+  toolInput?: unknown
   session_id?: string
   conversation_id?: string
 }
 
 function editPath(input: HookInput): string | null {
-  const toolInput = input.tool_input
-  return (toolInput?.file_path ?? toolInput?.filePath ?? toolInput?.path)?.trim() || null
+  return hookFilePaths(input)[0] ?? null
 }
 
 function changedText(input: HookInput): string | null {
-  const toolInput = input.tool_input
-  const text =
-    toolInput?.new_string ?? toolInput?.newString ?? toolInput?.content ?? toolInput?.text
-  return typeof text === 'string' && text.trim() ? text : null
+  return hookStringField(input, ['new_string', 'newString', 'content', 'text', 'patch', 'input'])
 }
 
 /**
@@ -131,18 +119,20 @@ export function runPostEditHook(projectPath: string = process.cwd(), io?: HookIo
       projectPath,
       build: buildCommentSignal,
       afterEmit: async (input, p) => {
-        const file = editPath(input)
-        if (!file) return
+        const files = hookFilePaths(input)
+        if (files.length === 0) return
         const config = await configManager.readConfig(p)
         if (!config?.projectId) return
         // Event-sourced — downstream consumers query the events table
         // (`memoryService.getRecentEvents`). Fire and forget; any
         // failure is non-critical.
         try {
-          await memoryService.log(p, 'post_edit', {
-            file,
-            tool: input.tool_name ?? 'unknown',
-          })
+          for (const file of files) {
+            await memoryService.log(p, 'post_edit', {
+              file,
+              tool: input.tool_name ?? 'unknown',
+            })
+          }
         } catch {
           /* swallow — hook must never surface errors */
         }

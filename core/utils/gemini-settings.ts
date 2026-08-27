@@ -98,17 +98,24 @@ export function geminiHookMaps(): GeminiHookMap[] {
         subcommand: spec.subcommand,
         name: `prjct-${spec.subcommand}`,
       })
-    } else if (spec.event === 'PreToolUse' && spec.matcher === 'Edit|Write') {
+    } else if (spec.event === 'PreToolUse' && spec.subcommand === 'pre-edit') {
       maps.push({
         geminiEvent: 'BeforeTool',
         matcher: 'write_file|replace',
         subcommand: spec.subcommand,
         name: `prjct-${spec.subcommand}`,
       })
-    } else if (spec.event === 'PostToolUse' && spec.matcher === 'Edit|Write') {
+    } else if (spec.event === 'PostToolUse' && spec.subcommand === 'post-edit') {
       maps.push({
         geminiEvent: 'AfterTool',
         matcher: 'write_file|replace',
+        subcommand: spec.subcommand,
+        name: `prjct-${spec.subcommand}`,
+      })
+    } else if (spec.event === 'PostToolUse' && spec.subcommand === 'post-read') {
+      maps.push({
+        geminiEvent: 'AfterTool',
+        matcher: 'read_file',
         subcommand: spec.subcommand,
         name: `prjct-${spec.subcommand}`,
       })

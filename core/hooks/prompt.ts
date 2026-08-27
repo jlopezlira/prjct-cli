@@ -29,7 +29,7 @@ import { deriveTitle } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
 import { buildAlignmentCard } from '../services/alignment-card'
 import { contextPressureVerdict } from '../services/context-pressure'
-import { buildIndexedFileCue } from '../services/file-cue'
+import { buildRepositoryAlignmentCard } from '../services/file-cue'
 import {
   buildDeliveryGuidance,
   classifyDeliveryIntent,
@@ -43,7 +43,12 @@ import {
   tddRoutingMode,
 } from '../services/private-skill-router'
 import { detectRepositoryWorkflowState } from '../services/repository-workflow-state'
-import { gateDelivery, normalizeStateForMaterialChange } from '../services/session-context-cache'
+import {
+  beginPromptTurn,
+  gateDelivery,
+  markRepositoryContextDeliveredThisTurn,
+  normalizeStateForMaterialChange,
+} from '../services/session-context-cache'
 import { buildTaskHarness } from '../services/task-harness'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
@@ -93,6 +98,7 @@ const GUIDANCE_MAX_ENTRIES = 2
 const GIT_SNAPSHOT_TTL_MS = 15_000
 
 export { buildDeliveryGuidance, classifyDeliveryIntent, type DeliveryIntent }
+export { buildIndexedFileCue } from '../services/file-cue'
 
 const GENERIC_GUIDANCE_TOKENS = new Set([
   'address',
@@ -150,6 +156,10 @@ export interface ProjectStateParts {
   /** Transient signals (loop cue, budget, delegation, alignment, handoff) —
    *  each emitted when it appears or escalates, silent while unchanged. */
   events: StateEvent[]
+  /** Stable delivery scope for task-level context; null outside a work cycle. */
+  scopeId: string | null
+  /** Stable task intent for relevance even after standing state is deduped. */
+  scopeDescription: string | null
 }
 
 /**
@@ -176,12 +186,15 @@ export async function buildProjectStateParts(
 
   const lines: string[] = ['# prjct: project state']
   const events: StateEvent[] = []
+  const scope = { id: null as string | null, description: null as string | null }
   // Active work — most useful single fact. Resolved PER worktree so a parallel
   // agent sees its own work, not a sibling's. Falls back to singular outside a
   // worktree.
   try {
     const overview = await collectActiveTasks(config.projectId, projectPath)
     if (overview.current) {
+      scope.id = overview.current.id
+      scope.description = overview.current.description
       const startedAgo = formatRelative(overview.current.startedAt)
       lines.push(
         `- Active work cycle: "${overview.current.description}" (${startedAgo}) [${overview.current.label}]`
@@ -325,7 +338,12 @@ export async function buildProjectStateParts(
   }
 
   if (lines.length === 1 && events.length === 0) return null
-  return { standing: lines.length > 1 ? lines.join('\n') : null, events }
+  return {
+    standing: lines.length > 1 ? lines.join('\n') : null,
+    events,
+    scopeId: scope.id,
+    scopeDescription: scope.description,
+  }
 }
 
 /** Joined standing+events block — the sessionless fallback payload shape. */
@@ -825,8 +843,9 @@ interface PromptGuidanceComputation {
   cuePrioritized: string
   /** Auto-routed private guidance, packed atomically and gated by route identity. */
   modelGuidance: string | null
-  modelGuidanceKey: string | null
   modelGuidanceIncluded: boolean
+  privateGuidance: string | null
+  privateGuidanceKey: string | null
   /** Only the per-prompt cue sections that made the budget — the delta
    *  payload for non-caching hosts when the state block is unchanged. */
   cueOnly: string
@@ -848,16 +867,28 @@ function computePromptGuidance(
   state: string,
   budget = STATE_BUDGET,
   tddMode?: 'off' | 'assist' | 'strict',
-  hasMergeConflicts = false
+  hasMergeConflicts = false,
+  repositoryAlignmentOverride?: string | null,
+  privateGuidanceOverride?: string | null
 ): PromptGuidanceComputation {
   const cueResult = buildTopicalCueResult(projectId, prompt)
-  const files = buildIndexedFileCue(projectId, prompt)
+  const harness = buildTaskHarness(prompt)
+  // Provider- and task-classification-independent. An unknown/terse prompt is
+  // not permission to ignore the repository; the same source-first contract
+  // applies on every project turn and dedupes when its content is unchanged.
+  // Standing state carries the active work intent on terse follow-ups such as
+  // "continue". Use it only for pattern retrieval; file ranking still uses
+  // the user's current prompt so unrelated state does not distort scope.
+  const repositoryAlignment =
+    repositoryAlignmentOverride === undefined
+      ? buildRepositoryAlignmentCard(projectId, prompt, `${prompt}\n${state}`)?.content
+      : repositoryAlignmentOverride
   const delivery = buildDeliveryGuidance(prompt)
   const guidance = buildSelectiveGuidance(projectId, prompt)
   const deliveryIntent = classifyDeliveryIntent(prompt)
   const routingInput = {
     intent: prompt,
-    harness: buildTaskHarness(prompt),
+    harness,
     // Task start already auto-routes TDD for a truly absent preference.
     // Prompt turns repeat it only for an explicit config/env assist|strict.
     tddMode: tddRoutingMode(tddMode) ?? 'off',
@@ -865,24 +896,35 @@ function computePromptGuidance(
     ...(deliveryIntent === 'review' ? { purpose: 'review' as const } : {}),
   }
   const route = routePrivateSkills(routingInput)
-  const modelGuidance = formatPrivateSkillPointers(route)
-  const cueSections = [cueResult?.cue, delivery, guidance?.text, files].filter(
+  const privateGuidance =
+    privateGuidanceOverride === undefined
+      ? formatPrivateSkillPointers(route)
+      : privateGuidanceOverride
+  // Repository alignment is required whenever the code index has a concrete
+  // implementation to inspect. It must coexist with routed workflows: the old
+  // either/or branch dropped file scope exactly on bug/TDD/review turns.
+  const modelGuidance = [repositoryAlignment, privateGuidance].filter(Boolean).join('\n\n') || null
+  const cueSections = [cueResult?.cue, delivery, guidance?.text].filter(
     (section): section is string => Boolean(section)
   )
   const cuePrioritized = cueSections.reduce<string>(
     (payload, section) => appendPromptSection(payload, section, budget) ?? payload,
     safeTruncate(state, budget)
   )
-  // A routed private workflow/reference is the complete on-demand pointer for
-  // this turn. Do not stack topical/file/delivery cues beside it; they are
-  // optional and can surface on an unrouted turn without taxing this one.
-  const prioritized = modelGuidance
+  // Source alignment/private workflows reserve the required lane first.
+  // Optional cues may still coexist when whole sections fit; previously the
+  // mere presence of a private route discarded delivery and repository cues.
+  const requiredPrioritized = modelGuidance
     ? packRequiredPromptSection(state, modelGuidance, budget)
-    : cuePrioritized
+    : state
+  const prioritized = cueSections.reduce<string>(
+    (payload, section) => appendPromptSection(payload, section, budget) ?? payload,
+    requiredPrioritized
+  )
   const cueOnly = cueSections.filter((section) => prioritized.includes(section)).join('\n\n')
   const modelGuidanceIncluded = Boolean(modelGuidance && prioritized.includes(modelGuidance))
-  const modelGuidanceKey = modelGuidance
-    ? `private-skill:${route.workflow?.id ?? 'none'}:${route.reference?.id ?? 'none'}`
+  const privateGuidanceKey = privateGuidance
+    ? `private-guidance:${route.workflow?.id ?? 'none'}:${route.reference?.id ?? 'none'}`
     : null
   const guidanceIncluded = Boolean(guidance?.text && prioritized.includes(guidance.text))
   const deliveryIncluded = Boolean(delivery && prioritized.includes(delivery))
@@ -895,8 +937,9 @@ function computePromptGuidance(
     prioritized,
     cuePrioritized,
     modelGuidance,
-    modelGuidanceKey,
     modelGuidanceIncluded,
+    privateGuidance,
+    privateGuidanceKey,
     cueOnly,
     cueResult,
     guidance,
@@ -915,6 +958,13 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         if (!prompt) return null
         const config = await configManager.readConfig(p)
         if (!config?.projectId) return null
+        const sessionId = input.session_id ?? input.conversation_id
+        const deliverySessionId = sessionId ?? 'sessionless'
+        const promptTurnId = await beginPromptTurn({
+          projectId: config.projectId,
+          projectPath: p,
+          sessionId: deliverySessionId,
+        })
         const { hasMergeConflicts } = detectRepositoryWorkflowState(p)
         // Kimi: SessionStart stdout never reaches the model, so the persona /
         // cold-start digest parked by the session-start hook is injected HERE,
@@ -945,7 +995,6 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 () => null
               )
           : null
-        const sessionId = input.session_id ?? input.conversation_id
         const budget = sessionContext ? KIMI_FIRST_PROMPT_BUDGET : STATE_BUDGET
         const bumpTurn = Boolean(parts?.standing?.includes('Active work cycle:'))
 
@@ -1042,41 +1091,75 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 ? packed.blocks.join('\n')
                 : `# prjct: signals\n${packed.blocks.join('\n')}`
           const base = [sessionContext, stateBlock].filter(Boolean).join('\n\n')
+          const repositoryAlignment = buildRepositoryAlignmentCard(
+            config.projectId,
+            prompt,
+            `${prompt}\n${parts?.scopeDescription ?? base}`
+          )
+          const repositoryScope = parts?.scopeId ?? 'session'
+          const repositoryGate = repositoryAlignment
+            ? await gateDelivery({
+                ...gateBase,
+                surface: 'prompt-cues',
+                key: `repository-alignment:${repositoryScope}`,
+                content: repositoryAlignment.content,
+                normalize: () => `${repositoryScope}:${repositoryAlignment.revision}`,
+                full: force,
+                probe: true,
+              })
+            : null
+          const repositoryFresh = repositoryGate?.suppressed === false
           // Narrow push exceptions: one preventive cue plus selective delivery
           // and authored guidance — gated as one blob by content so a repeat
           // of the same cue ships once per session, not once per prompt.
           // appendPromptSection only adds whole sections that fit, so nothing
           // below ever needs a post-hoc truncation.
-          const {
-            prioritized,
-            cuePrioritized,
-            modelGuidance,
-            modelGuidanceKey,
-            modelGuidanceIncluded,
-            cueOnly,
-            cueResult,
-            guidance,
-            guidanceIncluded,
-            guidanceRuleId,
-          } = computePromptGuidance(
+          const preview = computePromptGuidance(
             config.projectId,
             prompt,
             base,
             budget,
             config.tdd?.mode,
-            hasMergeConflicts
+            hasMergeConflicts,
+            repositoryFresh ? repositoryAlignment?.content : null
           )
-          const modelGuidanceGate =
-            modelGuidance && modelGuidanceKey && modelGuidanceIncluded
+          const privateGuidanceGate =
+            preview.privateGuidance && preview.privateGuidanceKey
               ? await gateDelivery({
                   ...gateBase,
                   surface: 'prompt-cues',
-                  key: modelGuidanceKey,
-                  content: modelGuidance,
+                  key: preview.privateGuidanceKey,
+                  content: preview.privateGuidance,
                   full: force,
                   probe: true,
                 })
               : null
+          const privateGuidanceFresh = privateGuidanceGate?.suppressed === false
+          const computed = privateGuidanceFresh
+            ? preview
+            : computePromptGuidance(
+                config.projectId,
+                prompt,
+                base,
+                budget,
+                config.tdd?.mode,
+                hasMergeConflicts,
+                repositoryFresh ? repositoryAlignment?.content : null,
+                null
+              )
+          const {
+            prioritized,
+            cuePrioritized,
+            modelGuidance,
+            modelGuidanceIncluded,
+            privateGuidance,
+            privateGuidanceKey,
+            cueOnly,
+            cueResult,
+            guidance,
+            guidanceIncluded,
+            guidanceRuleId,
+          } = computed
           const cueGate = cueOnly
             ? await gateDelivery({
                 ...gateBase,
@@ -1087,9 +1170,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
                 probe: true,
               })
             : null
-          const modelGuidanceFresh =
-            Boolean(modelGuidance && modelGuidanceIncluded) &&
-            modelGuidanceGate?.suppressed === false
+          const modelGuidanceFresh = Boolean(modelGuidance && modelGuidanceIncluded)
           const cueFresh = Boolean(cueOnly) && cueGate?.suppressed === false
           const emitted = (() => {
             if (modelGuidanceFresh && cueFresh) return prioritized || null
@@ -1123,14 +1204,43 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
               full: true,
             })
           }
-          if (modelGuidanceFresh && modelGuidance && modelGuidanceKey) {
+          if (
+            privateGuidanceFresh &&
+            privateGuidance &&
+            privateGuidanceKey &&
+            emitted?.includes(privateGuidance)
+          ) {
             await gateDelivery({
               ...gateBase,
               surface: 'prompt-cues',
-              key: modelGuidanceKey,
-              content: modelGuidance,
+              key: privateGuidanceKey,
+              content: privateGuidance,
               full: true,
             })
+          }
+          if (repositoryAlignment && repositoryFresh) {
+            const deliveredThisTurn = Boolean(emitted?.includes(repositoryAlignment.content))
+            // A combined guidance gate may already know the exact payload from
+            // an earlier version. Either way, stamp the stable task+snapshot
+            // identity so changing prompt wording cannot resend the patterns.
+            if (deliveredThisTurn) {
+              await gateDelivery({
+                ...gateBase,
+                surface: 'prompt-cues',
+                key: `repository-alignment:${repositoryScope}`,
+                content: repositoryAlignment.content,
+                normalize: () => `${repositoryScope}:${repositoryAlignment.revision}`,
+                full: true,
+              })
+            }
+            if (deliveredThisTurn) {
+              await markRepositoryContextDeliveredThisTurn({
+                projectId: config.projectId,
+                projectPath: p,
+                sessionId: deliverySessionId,
+                turnId: promptTurnId,
+              })
+            }
           }
           // Attribution must credit only what the model actually received:
           // a turn whose cues were suppressed surfaced nothing. bumpTurn
@@ -1160,18 +1270,85 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         }
 
         // Sessionless floor: assemble the full block and dedupe the whole
-        // payload — identical repeats collapse, any byte change re-emits.
+        // payload. A stable pseudo-session also gates project state separately:
+        // when repository guidance disappears after its one delivery, that
+        // subtraction must not make unchanged standing state look new again.
         const state = parts ? joinStateParts(parts, parts.events) : null
-        const base = [sessionContext, state].filter(Boolean).join('\n\n')
-        const { prioritized, cueResult, guidance, guidanceIncluded, guidanceRuleId } =
-          computePromptGuidance(
-            config.projectId,
-            prompt,
-            base,
-            budget,
-            config.tdd?.mode,
-            hasMergeConflicts
-          )
+        const stateGate = state
+          ? await gateDelivery({
+              projectId: config.projectId,
+              projectPath: p,
+              sessionId: deliverySessionId,
+              surface: 'prompt-state',
+              content: state,
+              normalize: normalizeStateForMaterialChange,
+              probe: true,
+            })
+          : null
+        const freshState = stateGate?.suppressed === false ? state : null
+        const base = [sessionContext, freshState].filter(Boolean).join('\n\n')
+        const repositoryAlignment = buildRepositoryAlignmentCard(
+          config.projectId,
+          prompt,
+          `${prompt}\n${parts?.scopeDescription ?? base}`
+        )
+        const repositoryScope = parts?.scopeId ?? 'session'
+        const repositoryGate = repositoryAlignment
+          ? await gateDelivery({
+              projectId: config.projectId,
+              projectPath: p,
+              sessionId: deliverySessionId,
+              surface: 'prompt-cues',
+              key: `repository-alignment:${repositoryScope}`,
+              content: repositoryAlignment.content,
+              normalize: () => `${repositoryScope}:${repositoryAlignment.revision}`,
+              probe: true,
+            })
+          : null
+        const repositoryFresh = repositoryGate?.suppressed === false
+        const preview = computePromptGuidance(
+          config.projectId,
+          prompt,
+          base,
+          budget,
+          config.tdd?.mode,
+          hasMergeConflicts,
+          repositoryFresh ? repositoryAlignment?.content : null
+        )
+        const privateGuidanceGate =
+          preview.privateGuidance && preview.privateGuidanceKey
+            ? await gateDelivery({
+                projectId: config.projectId,
+                projectPath: p,
+                sessionId: deliverySessionId,
+                surface: 'prompt-cues',
+                key: preview.privateGuidanceKey,
+                content: preview.privateGuidance,
+                probe: true,
+              })
+            : null
+        const privateGuidanceFresh = privateGuidanceGate?.suppressed === false
+        const computed = privateGuidanceFresh
+          ? preview
+          : computePromptGuidance(
+              config.projectId,
+              prompt,
+              base,
+              budget,
+              config.tdd?.mode,
+              hasMergeConflicts,
+              repositoryFresh ? repositoryAlignment?.content : null,
+              null
+            )
+        const {
+          prioritized,
+          cueResult,
+          guidance,
+          guidanceIncluded,
+          guidanceRuleId,
+          privateGuidance,
+          privateGuidanceKey,
+        } = computed
         const afterEmitRecord: PromptAfterEmit = {
           projectId: config.projectId,
           projectPath: p,
@@ -1186,6 +1363,55 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         // Resolve the dedupe BEFORE building the record so emittedChars
         // reflects what the model actually received (0 when deduped).
         const deduped = await dedupePromptPayload(config.projectId, p, prioritized)
+        if (freshState && deduped?.includes(freshState)) {
+          await gateDelivery({
+            projectId: config.projectId,
+            projectPath: p,
+            sessionId: deliverySessionId,
+            surface: 'prompt-state',
+            content: freshState,
+            normalize: normalizeStateForMaterialChange,
+            full: true,
+          })
+        }
+        if (
+          privateGuidanceFresh &&
+          privateGuidance &&
+          privateGuidanceKey &&
+          deduped?.includes(privateGuidance)
+        ) {
+          await gateDelivery({
+            projectId: config.projectId,
+            projectPath: p,
+            sessionId: deliverySessionId,
+            surface: 'prompt-cues',
+            key: privateGuidanceKey,
+            content: privateGuidance,
+            full: true,
+          })
+        }
+        if (
+          repositoryAlignment &&
+          repositoryFresh &&
+          deduped?.includes(repositoryAlignment.content)
+        ) {
+          await gateDelivery({
+            projectId: config.projectId,
+            projectPath: p,
+            sessionId: deliverySessionId,
+            surface: 'prompt-cues',
+            key: `repository-alignment:${repositoryScope}`,
+            content: repositoryAlignment.content,
+            normalize: () => `${repositoryScope}:${repositoryAlignment.revision}`,
+            full: true,
+          })
+          await markRepositoryContextDeliveredThisTurn({
+            projectId: config.projectId,
+            projectPath: p,
+            sessionId: deliverySessionId,
+            turnId: promptTurnId,
+          })
+        }
         const record: PromptAfterEmit = { ...afterEmitRecord, emittedChars: deduped?.length ?? 0 }
         promptAfterEmit.set(input as object, record)
         // Hand the record to the cold path's detached afterEmit worker (a

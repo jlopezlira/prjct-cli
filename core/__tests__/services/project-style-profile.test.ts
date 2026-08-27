@@ -56,7 +56,7 @@ function richAnalysis(): LLMAnalysis {
     riskAreas: [],
     refactorSuggestions: [],
     projectInsights: [],
-    conventions: [{ category: 'imports', rule: 'No barrel files' }],
+    conventions: [{ category: 'imports', rule: 'No barrel files', example: 'import from source' }],
     stack: { languages: ['TypeScript'], frameworks: ['Hono'] },
   }
 }
@@ -101,6 +101,10 @@ describe('project-style-profile', () => {
     expect(snap.antiPatternCount).toBe(1)
     expect(snap.summary).toContain('patterns')
     expect(snap.payload.patterns[0]?.name).toBe('Command registry')
+    expect(snap.payload.patterns[0]?.locations).toEqual(['core/commands'])
+    expect(snap.payload.conventions[0]?.example).toBe('import from source')
+    expect(snap.payload.antiPatterns[0]?.reasoning).toBe('breaks tree-shake')
+    expect(snap.payload.architecture?.style).toBe('modular-monolith')
   })
 
   test('thin analysis alone does not invent patterns', () => {

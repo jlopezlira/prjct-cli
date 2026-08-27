@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.11.0] - 2026-08-26
+
+### Added
+- codex ignores repository source duplicat
+
 ## [4.10.0] - 2026-08-26
 
 ### Features
@@ -30,13 +35,11 @@
 
 - Phase 2: memory that earns its place + the machine gauntlet (Uncle Bob discipline) (#634)
 
-
 ## [4.9.1] - 2026-08-26
 
 ### Performance
 
 - native daemon-first client for hot read verbs (Phase 1)
-
 
 ## [4.9.0] - 2026-08-26
 

@@ -90,17 +90,24 @@ export function cursorHookMaps(): CursorHookMap[] {
         subcommand: spec.subcommand,
         name: `prjct-${spec.subcommand}`,
       })
-    } else if (spec.event === 'PreToolUse' && spec.matcher === 'Edit|Write') {
+    } else if (spec.event === 'PreToolUse' && spec.subcommand === 'pre-edit') {
       maps.push({
         cursorEvent: 'preToolUse',
         matcher: 'Write|StrReplace|Edit',
         subcommand: spec.subcommand,
         name: `prjct-${spec.subcommand}`,
       })
-    } else if (spec.event === 'PostToolUse' && spec.matcher === 'Edit|Write') {
+    } else if (spec.event === 'PostToolUse' && spec.subcommand === 'post-edit') {
       maps.push({
         cursorEvent: 'postToolUse',
         matcher: 'Write|StrReplace|Edit',
+        subcommand: spec.subcommand,
+        name: `prjct-${spec.subcommand}`,
+      })
+    } else if (spec.event === 'PostToolUse' && spec.subcommand === 'post-read') {
+      maps.push({
+        cursorEvent: 'postToolUse',
+        matcher: 'Read|ReadFile',
         subcommand: spec.subcommand,
         name: `prjct-${spec.subcommand}`,
       })

@@ -29,6 +29,8 @@ export interface ProjectStyleConvention {
   key: string
   rule: string
   category?: string
+  /** Concrete repository example captured by sync analysis. */
+  example?: string
 }
 
 export interface ProjectStylePattern {
@@ -37,6 +39,7 @@ export interface ProjectStylePattern {
   description: string
   locations?: string[]
   category?: string
+  confidence?: number
 }
 
 export interface ProjectStyleAntiPattern {
@@ -44,6 +47,16 @@ export interface ProjectStyleAntiPattern {
   issue: string
   suggestion: string
   severity?: string
+  /** Concrete files where sync observed the anti-pattern. */
+  files?: string[]
+  reasoning?: string
+  confidence?: number
+}
+
+export interface ProjectStyleArchitecture {
+  style: string
+  insights: string[]
+  domains: string[]
 }
 
 export interface ProjectStyleStructural {
@@ -60,6 +73,8 @@ export interface ProjectStylePayload {
   conventions: ProjectStyleConvention[]
   patterns: ProjectStylePattern[]
   antiPatterns: ProjectStyleAntiPattern[]
+  /** Optional for snapshots written before architecture evidence was retained. */
+  architecture?: ProjectStyleArchitecture
   structural: ProjectStyleStructural
   /** Extensible bag for future measurement without migrations. */
   metrics: Record<string, number | string>

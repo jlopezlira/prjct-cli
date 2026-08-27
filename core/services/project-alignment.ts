@@ -93,6 +93,11 @@ export function buildAlignmentBrief(input: {
 }
 
 function summarize(e: { title?: string; content?: string }): string {
-  const t = (e.title || e.content || '').replace(/\s+/g, ' ').trim()
+  const title = (e.title ?? '').replace(/\s+/g, ' ').trim()
+  const content = (e.content ?? '').replace(/\s+/g, ' ').trim()
+  const t =
+    title && content && title.toLowerCase() !== content.toLowerCase()
+      ? `${title} — ${content}`
+      : title || content
   return t.length > 90 ? `${t.slice(0, 89)}…` : t || '(untitled)'
 }

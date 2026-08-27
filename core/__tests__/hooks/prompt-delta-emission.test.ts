@@ -13,6 +13,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { DAEMON_PATHS } from '../../daemon/protocol'
+import { indexProject } from '../../domain/bm25'
 import type { HookHost } from '../../hooks/_shared'
 import {
   _resetGitSnapshotCacheForTests,
@@ -22,6 +23,8 @@ import {
 import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
 import { PRIVATE_SKILL_ASSET_ROOT } from '../../services/private-skill-router'
+import { persistProjectStyleSnapshot } from '../../services/project-style-evolution'
+import { buildProjectStyleSnapshot } from '../../services/project-style-profile'
 import prjctDb from '../../storage/database'
 import { stateStorage } from '../../storage/state-storage'
 import { execFileAsync } from '../../utils/exec'
@@ -92,13 +95,116 @@ async function runTurn(host: HookHost, prompt: string): Promise<string> {
   if (!line || line === '{}') return ''
   if (!line.startsWith('{')) return line
   const parsed = JSON.parse(line) as {
-    hookSpecificOutput?: { additionalContext?: string }
+    additional_context?: string
+    hookSpecificOutput?: { additionalContext?: string; additional_context?: string }
     systemMessage?: string
   }
-  return parsed.hookSpecificOutput?.additionalContext ?? parsed.systemMessage ?? ''
+  return (
+    parsed.hookSpecificOutput?.additionalContext ??
+    parsed.hookSpecificOutput?.additional_context ??
+    parsed.additional_context ??
+    parsed.systemMessage ??
+    ''
+  )
 }
 
-describe('delta emission (kimi/codex)', () => {
+describe('prompt guidance and delta emission across hook hosts', () => {
+  for (const host of ['claude', 'gemini', 'codex', 'cursor', 'kimi'] as const) {
+    it(`enforces repository alignment for an unclassified turn on ${host}`, async () => {
+      const first = await runTurn(host, 'continue')
+
+      expect(first).toContain('# prjct: repository alignment (MUST before edit)')
+      expect(first).toContain('Reuse existing abstractions and patterns')
+      expect(first).toContain('No indexed hit')
+    })
+  }
+
+  it('requires source discovery for code work when indexes are cold', async () => {
+    const first = await runTurn('codex', 'Fix a regression in the app')
+
+    expect(first).toContain('diagnosing-bugs.md')
+    expect(first).toContain('# prjct: repository alignment (MUST before edit)')
+    expect(first).toContain('No indexed hit')
+    expect(first).toContain('prjct_relevant_files')
+  })
+
+  it('keeps repository alignment beside an auto-routed private workflow', async () => {
+    await indexProject(fixture.projectPath, fixture.projectId)
+
+    const first = await runTurn('codex', 'Diagnose a flaky regression in the app')
+
+    expect(first).toContain('diagnosing-bugs.md')
+    expect(first).toContain('# prjct: repository alignment (MUST before edit)')
+    expect(first).toContain('Reuse existing abstractions and patterns')
+    expect(first).toContain('Do not duplicate logic inline')
+    expect(first).toContain('app.ts')
+    expect(first.length).toBeLessThanOrEqual(700)
+  })
+
+  it('injects only task-relevant synced patterns with canonical evidence', async () => {
+    const snapshot = buildProjectStyleSnapshot({
+      stats: {
+        fileCount: 1,
+        version: '1.0.0',
+        name: 'prompt-pattern-test',
+        ecosystem: 'JavaScript',
+        projectType: 'simple',
+        languages: ['TypeScript'],
+        frameworks: [],
+      },
+      stack: {
+        hasFrontend: false,
+        hasBackend: true,
+        hasDatabase: false,
+        hasDocker: false,
+        hasTesting: true,
+        frontendType: null,
+        frameworks: [],
+      },
+    })
+    snapshot.payload.patterns = [
+      {
+        key: 'result-boundary',
+        name: 'Result boundary',
+        description: 'API commands return CommandResult and delegate error normalization.',
+        locations: ['app.ts'],
+        category: 'error-handling',
+      },
+      {
+        key: 'unrelated-ui',
+        name: 'UI composition',
+        description: 'Compose visual panels from view components.',
+        locations: ['src/components'],
+        category: 'frontend',
+      },
+    ]
+    snapshot.patternCount = snapshot.payload.patterns.length
+    persistProjectStyleSnapshot(fixture.projectId, snapshot)
+
+    const first = await runTurn('codex', 'continue')
+
+    expect(first).toContain('Synced patterns relevant to this task')
+    expect(first).toContain('Result boundary')
+    expect(first).toContain('app.ts')
+    expect(first).not.toContain('UI composition')
+    expect(first.length).toBeLessThanOrEqual(700)
+
+    const nextMessage = await runTurn('codex', 'Now adjust the visual component composition')
+    expect(nextMessage).not.toContain('# prjct: repository alignment')
+    expect(nextMessage).not.toContain('Synced patterns relevant to this task')
+    expect(nextMessage).not.toContain('UI composition')
+
+    const updated = structuredClone(snapshot)
+    updated.id = `${snapshot.id}-updated`
+    updated.capturedAt = '2026-08-27T06:00:00.000Z'
+    updated.payload.patterns[0]!.description =
+      'UPDATED: API commands return CommandResult through the shared boundary.'
+    persistProjectStyleSnapshot(fixture.projectId, updated)
+
+    const afterSyncChange = await runTurn('codex', 'continue')
+    expect(afterSyncChange).toContain('UPDATED: API commands return CommandResult')
+  })
+
   it('re-emits whole state omitted for required guidance instead of stamping it delivered', async () => {
     await stateStorage.completeTask(fixture.projectId)
     // Prime session-start context so the routed turn uses the normal 700-char budget.
@@ -120,12 +226,24 @@ describe('delta emission (kimi/codex)', () => {
   })
 
   it('packs an auto-route as one exact-path section and dedupes it by session', async () => {
+    await stateStorage.completeTask(fixture.projectId)
+    await stateStorage.startTask(fixture.projectId, {
+      id: 'route-budget-task',
+      description: `route budget ${'scope '.repeat(75)}TAIL_SENTINEL`,
+      startedAt: new Date().toISOString(),
+      sessionId: 'delta-session',
+    } as Parameters<typeof stateStorage.startTask>[1])
     const prompt = 'Diagnose a flaky regression in AGENTS.md'
     const first = await runTurn('codex', prompt)
     expect(first).toContain(path.join(PRIVATE_SKILL_ASSET_ROOT, 'diagnosing-bugs.md'))
     expect(first).toContain(path.join(PRIVATE_SKILL_ASSET_ROOT, 'writing-for-agents.md'))
     expect(first).not.toContain('Output: standard')
+    expect(first).not.toContain('TAIL_SENTINEL')
 
+    const followUp = await runTurn('codex', 'continue')
+    expect(followUp).toContain('# prjct: project state')
+    expect(followUp).toContain('TAIL_SENTINEL')
+    expect(followUp).not.toContain('# prjct: repository alignment (MUST before edit)')
     expect(await runTurn('codex', 'continue')).toBe('')
     expect(await runTurn('codex', prompt)).toBe('')
   })

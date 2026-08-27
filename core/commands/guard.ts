@@ -18,6 +18,12 @@
 import type { MemoryEntry } from '../memory/entries'
 import { deriveTitle, flatDetail, preventiveLabel } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
+import { resolveCallerIdentity } from '../services/agent-identity'
+import {
+  buildSourceInspectionBrief,
+  markSourceInspected,
+  markSourceInspectionToken,
+} from '../services/source-first-gate'
 import { recordSurfacedForActiveTask } from '../services/usefulness/surface-attribution'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
@@ -83,11 +89,32 @@ export class GuardCommands extends PrjctCommandsBase {
         return { impactBlock: formatImpactMd(impact), impactLine: impact.line }
       })
       .catch(() => ({ impactBlock: '', impactLine: '' }))
+    const sourceBrief = await buildSourceInspectionBrief(guard.value, projectPath, file)
+
+    // `guard` is the provider-agnostic inspection handshake for agents whose
+    // host exposes shell reads instead of a first-class Read tool (notably
+    // Codex). Await the durable stamp before printing success so an immediate
+    // Edit retry cannot race it.
+    await markSourceInspected({
+      projectId: guard.value,
+      projectPath,
+      sessionId: resolveCallerIdentity('guard').sessionId,
+      filePath: file,
+    })
+    const sourceToken = process.env.PRJCT_SOURCE_INSPECTION?.trim()
+    if (sourceToken) {
+      await markSourceInspectionToken({
+        projectId: guard.value,
+        projectPath,
+        token: sourceToken,
+        filePath: file,
+      })
+    }
 
     if (hits.length === 0) {
       const msg = `No preventive memory recorded against \`${base}\` — clear to edit.`
       if (options.md) {
-        console.log(impactBlock ? `> ${msg}\n\n${impactBlock}` : `> ${msg}`)
+        console.log([`> ${msg}`, impactBlock, sourceBrief].filter(Boolean).join('\n\n'))
       } else {
         out.done(`No preventive memory for ${base} — clear to edit.`)
         if (impactLine) out.info(impactLine)
@@ -109,6 +136,7 @@ export class GuardCommands extends PrjctCommandsBase {
       }
       lines.push('', '> Surfaced as prevention. Apply if relevant; ignore if not.')
       if (impactBlock) lines.push('', impactBlock)
+      if (sourceBrief) lines.push('', sourceBrief)
       console.log(lines.join('\n'))
     } else {
       out.info(
