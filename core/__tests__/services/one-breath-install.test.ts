@@ -10,7 +10,6 @@ describe('one-breath-install', () => {
     const r = buildOneBreathReport({
       claudeHooksNew: 2,
       claudeHooksPresent: 10,
-      projectSurface: true,
       runtimesWired: ['claude', 'codex', 'gemini'],
       liveCount: 3,
       detectedCount: 3,
@@ -29,7 +28,6 @@ describe('one-breath-install', () => {
     const r = buildOneBreathReport({
       claudeHooksNew: 0,
       claudeHooksPresent: 0,
-      projectSurface: false,
       runtimesWired: [],
       liveCount: 0,
       detectedCount: 3,

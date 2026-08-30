@@ -1,28 +1,21 @@
 /**
- * PRJCT.md — the canonical per-project hub. `AGENTS.md`/`CLAUDE.md` shrink to
- * pointers at this file (see host-agents-md.ts / host-claude-md.ts) instead
- * of each duplicating the same static block. This file carries the routing
- * map (previously duplicated verbatim across all three surfaces) plus a
- * small, budget-capped, *verified-only* slice of per-project facts — real
- * `package.json` commands (never guessed), a one-line stack summary when a
- * project style snapshot exists. Everything narrative (patterns,
- * conventions, anti-patterns, architecture) deliberately stays out — that
- * remains pull-on-demand via `prjct context --md` / MCP, same L0/L2
- * discipline as `context-tiers.ts`.
+ * Project facts formatter used by global context previews and MCP tools.
  *
- * Written only through the explicit-opt-in path (`writeProjectAgentSurfaces`,
- * clean-repo doctrine) — this module has no automatic trigger of its own.
+ * Builds a small, budget-capped, *verified-only* slice of per-project facts —
+ * real `package.json` commands (never guessed), a one-line stack summary when a
+ * project style snapshot exists. Everything narrative (patterns, conventions,
+ * anti-patterns, architecture) deliberately stays out — that remains
+ * pull-on-demand via `prjct context --md` / MCP, same L0/L2 discipline as
+ * `context-tiers.ts`.
+ *
+ * prjct never writes a `PRJCT.md` file into the client's repository. The
+ * formatting helpers below are used only for live global surfaces (skills,
+ * context commands, MCP responses).
  */
 
 import configManager from '../infrastructure/config-manager'
 import { detectVerifiedCommands, type VerifiedCommand } from './project-command-facts'
-import {
-  MINIMAL_ROUTING_BODY,
-  ROUTING_END_MARKER,
-  ROUTING_START_MARKER,
-  type RoutingWriteResult,
-  writeRoutingBlock,
-} from './routing-block'
+import { MINIMAL_ROUTING_BODY } from './routing-block'
 
 const MAX_FRAMEWORKS = 6
 const MAX_LANGUAGES = 3
@@ -33,9 +26,7 @@ const MAX_COMMAND_CHARS = 80
  * order — node, cargo, go, python). A polyglot repo with several ecosystems
  * would otherwise surface multiple commands per kind (e.g. three different
  * "format" commands) — one representative real command per kind is enough
- * for PRJCT.md; this is what keeps the body's byte footprint structurally
- * bounded regardless of how many ecosystems a repo mixes, not just a hope
- * the budget test happens to catch it.
+ * to keep the byte footprint structurally bounded.
  */
 function dedupeByKind(commands: readonly VerifiedCommand[]): VerifiedCommand[] {
   const seen = new Set<string>()
@@ -71,9 +62,9 @@ async function buildStackLine(projectPath: string): Promise<string | null> {
 
 /**
  * Build the bounded "this project" section — stack line + verified
- * commands, deduped by kind. Shared by the written PRJCT.md body and the
+ * commands, deduped by kind. Shared by the PRJCT.md-style body and the
  * live-preview surfaces (`prjct context project --md`, the
- * `prjct_project_facts` MCP tool) so all three stay in lockstep with one
+ * `prjct_project_facts` MCP tool) so all stay in lockstep with one
  * formatter. Returns null when there's nothing verified yet (no project
  * style snapshot, no recognized manifest).
  */
@@ -96,10 +87,10 @@ export async function buildProjectFactsSection(projectPath: string): Promise<str
 }
 
 /**
- * Build the PRJCT.md body: routing map + the bounded "this project" section.
- * Never embeds anything that changes on every call (timestamps, commit
- * hashes) — `writeRoutingBlock`'s idempotency check is byte-exact, so
- * volatile content would make every refresh report a spurious `updated`.
+ * Build the PRJCT.md-style body: routing map + the bounded "this project"
+ * section. Never embeds anything that changes on every call (timestamps,
+ * commit hashes). Used only for global skill/context previews, never written
+ * to the client repo.
  */
 export async function buildPrjctMdBody(projectPath: string): Promise<string> {
   const section = await buildProjectFactsSection(projectPath)
@@ -108,18 +99,11 @@ export async function buildPrjctMdBody(projectPath: string): Promise<string> {
   return lines.join('\n')
 }
 
-/** Write or refresh the PRJCT.md hub at `<projectPath>/PRJCT.md`. */
-export async function writeProjectPrjctMd(projectPath: string): Promise<RoutingWriteResult> {
-  const body = await buildPrjctMdBody(projectPath)
-  const fullBlock = `${ROUTING_START_MARKER}\n${body}\n${ROUTING_END_MARKER}\n`
-  return writeRoutingBlock(projectPath, 'PRJCT.md', fullBlock)
-}
-
 /**
  * Live preview of the "this project" facts — no write, always fresh.
  * Used by `prjct context project --md` and the `prjct_project_facts` MCP
- * tool, so repos that never opt into a written PRJCT.md still get verified
- * facts on demand.
+ * tool, so projects still get verified facts on demand without any file
+ * footprint in the repo.
  */
 export async function formatProjectFactsMd(projectPath: string): Promise<string> {
   const section = await buildProjectFactsSection(projectPath)

@@ -15,8 +15,8 @@ output, so an agent (or a human) can predict prjct's behavior in any context.
 
 | You run prjct in… | How it's detected | What the output looks like |
 |---|---|---|
-| **Claude Code / Claude Desktop** | env var, MCP capability, `CLAUDE.md`, or `~/.claude/` (see below) | Rich text, colors, **static** one-line status (no animation), prompts suppressed |
-| **OpenAI Codex** sandbox | `codex` CLI binary on PATH; context file `AGENTS.md` | Same non-interactive static output as any agent; pass `--md` for fully structured markdown |
+| **Claude Code / Claude Desktop** | env var, MCP capability, `CLAUDE.md` in cwd, or `~/.claude/` (see below) | Rich text, colors, **static** one-line status (no animation), prompts suppressed |
+| **OpenAI Codex** sandbox | `codex` CLI binary on PATH; `~/.codex/` config dir | Same non-interactive static output as any agent; pass `--md` for fully structured markdown |
 | **Plain terminal (TTY)** | default fallback | Branded **animated** spinner, full colors, interactive prompts |
 | **CI / pipes / non-TTY** | `process.stdout.isTTY === false` | Static one-line status, no animation, no prompts |
 | **Any of the above with `--md`** | explicit flag | Branding stripped, machine-structured markdown |
@@ -28,12 +28,12 @@ No configuration is required for any row. The detection is silent and automatic.
 prjct's universal layer is not a promise that every agent supports the same
 native features. The portable baseline is:
 
-1. `AGENTS.md` for repo instructions.
-2. `prjct <command> --md` for agent-readable CLI output.
-3. MCP `prjct_*` tools when the runtime supports MCP.
+1. `prjct <command> --md` for agent-readable CLI output.
+2. MCP `prjct_*` tools when the runtime supports MCP.
+3. Global skills/hooks when the runtime supports them.
 
-Runtime-specific surfaces such as Claude hooks, Codex skills, Cursor rules, or
-Windsurf rules are adapters on top of that baseline. Run:
+Runtime-specific surfaces such as Claude hooks, Codex skills, or Kimi hooks are
+adapters on top of that baseline. Run:
 
 ```bash
 prjct agents doctor --md
@@ -45,8 +45,9 @@ prjct ships and verifies a deep native adapter for that runtime; other runtimes
 are reported as `good`, `baseline`, or `hosted` according to their portable
 surfaces.
 
-Inside a prjct project, `prjct agents doctor --fix` refreshes the portable
-`AGENTS.md` surface and repo-local rule adapters. For model handoff, use
+Inside a prjct project, `prjct agents doctor --fix` repairs the user's global
+agent wiring (hooks, MCP, skills). prjct never writes `AGENTS.md`, `CLAUDE.md`,
+`PRJCT.md`, or IDE rule files into the client repository. For model handoff, use
 `prjct handoff <agent> --md`; it produces a takeover prompt that tells the next
 agent to run `status`, `value`, `memory-doctor`, and `guardrails` before
 editing.
@@ -91,7 +92,6 @@ Codex the primary setup provider.
 
 Codex specifics prjct relies on:
 
-- **Context file:** `AGENTS.md` (Codex's equivalent of `CLAUDE.md`).
 - **Skills:** `.agents/skills/` for the project, or `~/.codex/skills/` globally;
   the prjct skill marker is `~/.codex/skills/prjct/SKILL.md`.
 - **Config dir:** `~/.codex`; `prjct install`/`setup` ensure the prjct MCP server
@@ -121,7 +121,6 @@ never targets it).
 
 Kimi specifics prjct relies on:
 
-- **Context file:** `AGENTS.md` (portable routing block).
 - **MCP:** `~/.kimi-code/mcp.json`, standard `mcpServers` JSON (same shape as
   Claude); `prjct install` upserts the `prjct` and `context7` servers there.
 - **Hooks:** `[[hooks]]` entries in `~/.kimi-code/config.toml` (only

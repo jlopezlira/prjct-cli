@@ -697,10 +697,6 @@ export function listAgentRuntimes(): readonly AgentRuntimeDefinition[] {
   return AGENT_RUNTIME_REGISTRY
 }
 
-export function listProjectRuleTargets(): AgentRuntimeRuleTarget[] {
-  return AGENT_RUNTIME_REGISTRY.flatMap((runtime) => runtime.projectRuleTargets ?? [])
-}
-
 export async function detectAgentRuntimes(projectPath: string): Promise<AgentRuntimeStatus[]> {
   return Promise.all(
     AGENT_RUNTIME_REGISTRY.map(async (runtime): Promise<AgentRuntimeStatus> => {

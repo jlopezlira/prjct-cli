@@ -88,25 +88,23 @@ describe('e2e: install/upgrade onboarding contract', () => {
     expect(r.stdout + r.stderr).toContain(REPO_VERSION)
   })
 
-  test('`prjct init` then `prjct setup` reach a configured state and write the agent surfaces for real', async () => {
-    // `init`'s wizard step is literally labeled "Generating agents..." — it
-    // must actually write PRJCT.md/AGENTS.md/CLAUDE.md, not silently no-op
-    // while claiming to (the bug behind "I say ship and the agent doesn't
-    // know what it means" for any freshly-initialized project).
+  test('`prjct init` then `prjct setup` reach a configured state and leave the repo clean', async () => {
+    // prjct never writes AGENTS.md / CLAUDE.md / PRJCT.md / IDE rule files
+    // into the client repository. The project is configured through `.prjct/`
+    // and global agent config only.
     const init = await fixture.sb.cli(['init'], { timeoutMs: 90_000 })
     expect(init.code).toBe(0)
-    expect(existsSync(path.join(fixture.sb.dir, 'AGENTS.md'))).toBe(true)
-    expect(existsSync(path.join(fixture.sb.dir, 'PRJCT.md'))).toBe(true)
-    expect(existsSync(path.join(fixture.sb.dir, 'CLAUDE.md'))).toBe(true)
-    const agentsAfterInit = readFileSync(path.join(fixture.sb.dir, 'AGENTS.md'), 'utf-8')
-    expect(agentsAfterInit).toContain('prjct work --md')
-    const claudeAfterInit = readFileSync(path.join(fixture.sb.dir, 'CLAUDE.md'), 'utf-8')
-    expect(claudeAfterInit).toContain('@PRJCT.md')
+    expect(existsSync(path.join(fixture.sb.dir, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(path.join(fixture.sb.dir, 'PRJCT.md'))).toBe(false)
+    expect(existsSync(path.join(fixture.sb.dir, 'CLAUDE.md'))).toBe(false)
+    expect(existsSync(path.join(fixture.sb.dir, '.cursor'))).toBe(false)
 
     const setup = await fixture.sb.cli(['setup'], { timeoutMs: 90_000 })
     expect(setup.code).toBe(0)
-    // Idempotent re-run: already current, so setup's own second pass reports nothing new.
-    expect(setup.stdout + setup.stderr).not.toContain('Project AGENTS.md ready')
+    // Re-running setup still must not create repo-local agent surfaces.
+    expect(existsSync(path.join(fixture.sb.dir, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(path.join(fixture.sb.dir, 'PRJCT.md'))).toBe(false)
+    expect(existsSync(path.join(fixture.sb.dir, 'CLAUDE.md'))).toBe(false)
 
     // Configured ⇒ a normal command no longer hits the "not configured" gate.
     const task = await fixture.sb.cli(['task', 'post-setup smoke', '--md'])
@@ -118,8 +116,10 @@ describe('e2e: install/upgrade onboarding contract', () => {
     const r = await fixture.sb.cli(['sync', '--md', '--yes'], { timeoutMs: 120_000 })
     expect(r.code).toBe(0)
     expect(r.stdout.toLowerCase()).toMatch(/sync|indexed|analysis/)
-    // Already adopted (by `init` above) — sync keeps it present, not remove it.
-    expect(existsSync(path.join(fixture.sb.dir, 'AGENTS.md'))).toBe(true)
+    // Sync must never create repo-local agent surfaces.
+    expect(existsSync(path.join(fixture.sb.dir, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(path.join(fixture.sb.dir, 'PRJCT.md'))).toBe(false)
+    expect(existsSync(path.join(fixture.sb.dir, 'CLAUDE.md'))).toBe(false)
   })
 
   test('`prjct doctor` reports health without crashing', async () => {

@@ -26,7 +26,6 @@ export interface OneBreathReport {
 export function buildOneBreathReport(input: {
   claudeHooksNew: number
   claudeHooksPresent: number
-  projectSurface: boolean
   runtimesWired: string[]
   liveCount: number
   detectedCount: number
@@ -62,10 +61,9 @@ export function buildOneBreathReport(input: {
     {
       id: 'surface',
       label: 'Project surface',
-      status: input.projectSurface ? 'done' : 'skip',
-      detail: input.projectSurface
-        ? 'AGENTS.md / adapters refreshed'
-        : 'skipped (not inside initialized prjct project)',
+      status: 'skip',
+      detail:
+        'repo stays clean — prjct never writes AGENTS.md / CLAUDE.md / PRJCT.md / IDE rules into the client repository',
     },
     {
       id: 'board',

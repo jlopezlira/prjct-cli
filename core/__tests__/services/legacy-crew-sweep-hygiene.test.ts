@@ -1,10 +1,9 @@
 /**
  * Worktree hygiene: every `prjct sync` must purge `.prjct/sessions|audits|deploy`
- * from the customer working tree and rewrite crew agent files that still
- * instruct disk writes there.
+ * from the customer working tree and enforce `.prjct/` config-only.
  *
- * Customer #3 (2026-07): templates were fixed years ago, but customized
- * agent files kept telling agents to dump plan.md under `.prjct/sessions/`.
+ * Crew agent files are no longer written to the client repo, so the legacy
+ * disk-repair path has been removed.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -20,27 +19,6 @@ import {
 } from '../../services/legacy-crew-sweep'
 import { prjctDb } from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
-
-const STALE_LEADER = `---
-name: leader
-description: stale
----
-
-# Leader
-
-Write a plan to \`.prjct/sessions/<task-slug>/plan.md\` then hand off.
-Subagents write to \`.prjct/sessions/<task-slug>/<role>.md\`.
-`
-
-const CLEAN_LEADER = `---
-name: leader
-description: clean
----
-
-# Leader
-
-Never write reports to disk. Use prjct CLI verbs only.
-`
 
 describe('legacyCrewSweep — worktree hygiene', () => {
   const fixture: {
@@ -148,81 +126,33 @@ describe('legacyCrewSweep — worktree hygiene', () => {
     expect(configStat.isFile()).toBe(true)
   })
 
-  test('repairs stale crew agent files that instruct .prjct/sessions/ writes', async () => {
-    const leaderPath = path.join(fixture.projectPath, '.claude', 'agents', 'leader.md')
-    await fs.mkdir(path.dirname(leaderPath), { recursive: true })
-    await fs.writeFile(leaderPath, STALE_LEADER, 'utf-8')
-
-    // Clean sibling must be left alone
-    const implPath = path.join(fixture.projectPath, '.claude', 'agents', 'implementer.md')
-    await fs.writeFile(implPath, CLEAN_LEADER, 'utf-8')
-
-    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
-
-    expect(result.agentFilesRepaired).toContain('.claude/agents/leader.md')
-    expect(result.agentFilesRepaired).not.toContain('.claude/agents/implementer.md')
-
-    const repaired = await fs.readFile(leaderPath, 'utf-8')
-    expect(repaired).not.toContain('.prjct/sessions/')
-    // Current template hard law is present
-    expect(repaired.toLowerCase()).toMatch(/sqlite|never write|prjct/)
-
-    const untouched = await fs.readFile(implPath, 'utf-8')
-    expect(untouched).toBe(CLEAN_LEADER)
-  })
-
-  test('repairs CLAUDE.md crew block that still points at .prjct/sessions/', async () => {
-    const claude = [
-      '# My project',
-      '',
-      '<!-- prjct:crew:start - DO NOT REMOVE THIS MARKER -->',
-      'Write results to `.prjct/sessions/<task-slug>/<role>.md`.',
-      '<!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->',
-      '',
-    ].join('\n')
-    await fs.writeFile(path.join(fixture.projectPath, 'CLAUDE.md'), claude, 'utf-8')
-
-    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
-
-    expect(result.agentFilesRepaired).toContain('CLAUDE.md')
-    const next = await fs.readFile(path.join(fixture.projectPath, 'CLAUDE.md'), 'utf-8')
-    expect(next).toContain('# My project')
-    expect(next).toContain('<!-- prjct:crew:start')
-    expect(next).not.toContain('.prjct/sessions/')
-    expect(next).toMatch(/Hard persistence rule|Never write/i)
-  })
-
   test('does not touch a clean tree', async () => {
     const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
     expect(result.ghostDirsPurged).toEqual([])
-    expect(result.agentFilesRepaired).toEqual([])
     expect(result.errors).toEqual([])
   })
 
-  test('collapses duplicate CLAUDE.md crew blocks (short end marker + append)', async () => {
-    const claude = [
-      '# My project',
-      '',
-      '<!-- prjct:crew:start - DO NOT REMOVE THIS MARKER -->',
-      'Write results to `.prjct/sessions/<task-slug>/<role>.md`.',
-      '<!-- prjct:crew:end -->',
-      '',
-      '<!-- prjct:crew:start - DO NOT REMOVE THIS MARKER -->',
-      'Second block already clean.',
-      '<!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->',
-      '',
-    ].join('\n')
-    await fs.writeFile(path.join(fixture.projectPath, 'CLAUDE.md'), claude, 'utf-8')
+  test('does not repair crew files in the client repo', async () => {
+    // Pre-existing crew files may still exist in old worktrees, but the sweep
+    // must NOT rewrite them — product law forbids touching the customer repo.
+    const leaderPath = path.join(fixture.projectPath, '.claude', 'agents', 'leader.md')
+    await fs.mkdir(path.dirname(leaderPath), { recursive: true })
+    const stale = `---\nname: leader\n---\n\nWrite a plan to \`.prjct/sessions/<task-slug>/plan.md\`.\n`
+    await fs.writeFile(leaderPath, stale, 'utf-8')
 
-    const result = await legacyCrewSweep(fixture.projectPath, fixture.projectId)
-    expect(result.agentFilesRepaired).toContain('CLAUDE.md')
+    const claudePath = path.join(fixture.projectPath, 'CLAUDE.md')
+    await fs.writeFile(
+      claudePath,
+      '<!-- prjct:crew:start -->\nWrite results to `.prjct/sessions/<task-slug>`.\n<!-- prjct:crew:end -->\n',
+      'utf-8'
+    )
 
-    const next = await fs.readFile(path.join(fixture.projectPath, 'CLAUDE.md'), 'utf-8')
-    expect(next).toContain('# My project')
-    expect((next.match(/prjct:crew:start/g) ?? []).length).toBe(1)
-    expect((next.match(/prjct:crew:end/g) ?? []).length).toBe(1)
-    expect(next).not.toContain('.prjct/sessions/<task')
-    expect(next).toMatch(/Hard persistence rule|Never write/i)
+    await legacyCrewSweep(fixture.projectPath, fixture.projectId)
+
+    const untouchedLeader = await fs.readFile(leaderPath, 'utf-8')
+    expect(untouchedLeader).toBe(stale)
+    const untouchedClaude = await fs.readFile(claudePath, 'utf-8')
+    expect(untouchedClaude).toContain('.prjct/sessions/')
   })
 })
 

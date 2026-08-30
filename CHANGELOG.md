@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.12.0] - 2026-08-30
+
+### Added
+- enforce the no-client-repo-writes invariant: drop the team.json mirror and --enforce, report legacy crew files instead of touching them
+
 ## [4.11.0] - 2026-08-26
 
 ### Added

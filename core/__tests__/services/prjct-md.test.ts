@@ -1,23 +1,17 @@
 /**
- * PRJCT.md — the canonical per-project hub.
+ * Project facts formatter used by global context previews and MCP tools.
  *
  * Pins the contract:
  *   1. Body always carries the routing map, even with no package.json.
  *   2. Verified (real) commands appear, tagged read-only/mutating.
- *   3. writeProjectPrjctMd follows the same create/append/replace/idempotent
- *      contract as writeRoutingBlock (host-claude-md.ts's contract).
+ *   3. Nothing is ever written to the client repository.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import {
-  buildPrjctMdBody,
-  formatProjectFactsMd,
-  writeProjectPrjctMd,
-} from '../../services/prjct-md'
-import { ROUTING_END_MARKER, ROUTING_START_MARKER } from '../../services/routing-block'
+import { buildPrjctMdBody, formatProjectFactsMd } from '../../services/prjct-md'
 
 const fixture: { dir: string } = { dir: '' }
 
@@ -34,10 +28,6 @@ async function writePkg(scripts: Record<string, string>): Promise<void> {
     path.join(fixture.dir, 'package.json'),
     JSON.stringify({ name: 'fixture', scripts }, null, 2)
   )
-}
-
-async function readPrjctMd(): Promise<string> {
-  return fs.readFile(path.join(fixture.dir, 'PRJCT.md'), 'utf-8')
 }
 
 describe('buildPrjctMdBody', () => {
@@ -96,33 +86,5 @@ describe('formatProjectFactsMd', () => {
     expect(md).toContain('# Project facts')
     expect(md).toContain('- test: `bun test` (read-only)')
     expect(md).toContain('- lint: `biome check --write` (mutating)')
-  })
-})
-
-describe('writeProjectPrjctMd', () => {
-  it('creates PRJCT.md when none exists', async () => {
-    const r = await writeProjectPrjctMd(fixture.dir)
-    expect(r.action).toBe('created')
-    const body = await readPrjctMd()
-    expect(body).toContain(ROUTING_START_MARKER)
-    expect(body).toContain(ROUTING_END_MARKER)
-    expect(body).toContain('## prjct')
-  })
-
-  it('preserves user content outside markers and replaces stale block content', async () => {
-    const initial = `# Notes\n\nHand-written notes.\n\n${ROUTING_START_MARKER}\nold stale content\n${ROUTING_END_MARKER}\n`
-    await fs.writeFile(path.join(fixture.dir, 'PRJCT.md'), initial)
-    const r = await writeProjectPrjctMd(fixture.dir)
-    expect(r.action).toBe('updated')
-    const body = await readPrjctMd()
-    expect(body).toContain('Hand-written notes.')
-    expect(body).not.toContain('old stale content')
-    expect(body).toContain('## prjct')
-  })
-
-  it('is idempotent — second run on a current file reports unchanged', async () => {
-    await writeProjectPrjctMd(fixture.dir)
-    const second = await writeProjectPrjctMd(fixture.dir)
-    expect(second.action).toBe('unchanged')
   })
 })

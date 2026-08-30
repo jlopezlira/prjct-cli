@@ -101,7 +101,7 @@ export const RIGS: readonly RigTemplate[] = [
       {
         organ: 'agent-catalog',
         install:
-          'prjct crew install — on a non-Claude rig this writes the emulated CREW.md protocol.',
+          'prjct crew install — on a non-Claude rig this stores the emulated crew protocol in project SQLite (no repo files).',
       },
       {
         organ: 'knowledge-base',

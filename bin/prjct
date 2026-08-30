@@ -2,8 +2,9 @@
 
 # prjct CLI - Runtime-agnostic entry point
 #
-# Detects available runtime (bun preferred, node fallback)
-# and executes the appropriate entry point.
+# Detects available runtime and executes the appropriate entry point.
+# Defaults: node-first when installed via npm/pnpm/yarn (node_modules/.bin),
+# bun-first only in dev/source checkouts or when PRJCT_RUNTIME=bun.
 #
 # CRITICAL: Also ensures p.md is installed (self-healing)
 #
@@ -134,6 +135,31 @@ check_node() {
   command -v node >/dev/null 2>&1
 }
 
+# prjct uses node's built-in `node:sqlite`, which requires Node >=22.5.
+# Returns 0 only when a node that new is on PATH. Sets NODE_VER as a side
+# effect so callers can build an actionable error message.
+node_supported() {
+  check_node || return 1
+  NODE_VER="$(node -v 2>/dev/null | sed 's/^v//')"
+  NODE_MAJ="${NODE_VER%%.*}"
+  NODE_MIN_REST="${NODE_VER#*.}"
+  NODE_MIN="${NODE_MIN_REST%%.*}"
+  if [ "${NODE_MAJ:-0}" -lt 22 ] || { [ "${NODE_MAJ:-0}" -eq 22 ] && [ "${NODE_MIN:-0}" -lt 5 ]; }; then
+    return 1
+  fi
+  return 0
+}
+
+# Check if this shim was installed via npm/pnpm/yarn (node_modules/.bin).
+# In that context the user already has Node and the package manager runtime;
+# preferring bun breaks pnpm installs where bun is not present.
+is_node_modules_install() {
+  case "$SCRIPT_PATH" in
+    */node_modules/*) return 0 ;;
+  esac
+  return 1
+}
+
 # Run with bun (compiled dist preferred, TypeScript only for explicit dev)
 run_with_bun() {
   # Always prefer compiled dist — works for npm install, npm link, bun link
@@ -174,11 +200,7 @@ run_with_node() {
   # which requires Node >=22.5. Below that — and since we no longer auto-install
   # Bun (MAL-2026-4647) — prjct can't run: fail with a clear, actionable message
   # instead of a cryptic `--experimental-sqlite` flag error.
-  NODE_VER="$(node -v 2>/dev/null | sed 's/^v//')"
-  NODE_MAJ="${NODE_VER%%.*}"
-  NODE_MIN_REST="${NODE_VER#*.}"
-  NODE_MIN="${NODE_MIN_REST%%.*}"
-  if [ "${NODE_MAJ:-0}" -lt 22 ] || { [ "${NODE_MAJ:-0}" -eq 22 ] && [ "${NODE_MIN:-0}" -lt 5 ]; }; then
+  if ! node_supported; then
     echo "Error: prjct needs Node >=22.5 (for node:sqlite) or Bun — found Node ${NODE_VER:-unknown}."
     echo "  Upgrade Node (https://nodejs.org) or install Bun (https://bun.sh)."
     exit 1
@@ -229,23 +251,65 @@ main() {
     ensure_setup
   fi
 
-  # Prefer bun if available (faster, native TS support); otherwise fall back to
-  # node. We deliberately do NOT auto-install bun: fetching an unpinned
+  # Runtime selection, in order of precedence:
+  # 1. PRJCT_RUNTIME env var (bun|node) for explicit override.
+  # 2. Installed via npm/pnpm/yarn (node_modules/.bin) -> node first, because
+  #    that package manager/runtime is what the user already has.
+  # 3. Dev/source checkout -> bun first for faster iteration, if available.
+  # 4. Fall back to whichever runtime is available.
+  # We deliberately do NOT auto-install bun: fetching an unpinned
   # `curl | bash` installer at runtime is a supply-chain risk (it triggered the
-  # MAL-2026-4647 false-positive). Node is a first-class runtime here — if a
-  # user wants bun for speed, they install it themselves (https://bun.sh).
-  if check_bun; then
-    run_with_bun "$@"
-  elif check_node; then
-    run_with_node "$@"
+  # MAL-2026-4647 false-positive).
+  _runtime="${PRJCT_RUNTIME:-}"
+  case "$_runtime" in
+    bun)
+      if check_bun; then
+        run_with_bun "$@"
+      fi
+      echo "Error: PRJCT_RUNTIME=bun requested but bun is not installed." >&2
+      exit 1
+      ;;
+    node)
+      if check_node; then
+        run_with_node "$@"
+      fi
+      echo "Error: PRJCT_RUNTIME=node requested but node is not installed." >&2
+      exit 1
+      ;;
+    '') ;;
+    *)
+      echo "Error: PRJCT_RUNTIME must be 'bun' or 'node' (got '$_runtime')." >&2
+      exit 1
+      ;;
+  esac
+
+  if is_node_modules_install; then
+    # Node first, but only a node that can actually run prjct. A too-old node
+    # would exit 1 from run_with_node and never reach the bun fallback, so a
+    # pnpm/npm install on Node <22.5 with bun present must still start.
+    if node_supported; then
+      run_with_node "$@"
+    elif check_bun; then
+      run_with_bun "$@"
+    elif check_node; then
+      # Node present but too old and no bun — run_with_node prints the
+      # actionable version error.
+      run_with_node "$@"
+    fi
   else
-    echo "Error: Neither bun nor node is installed."
-    echo ""
-    echo "Please install one of:"
-    echo "  - Bun (recommended): https://bun.sh"
-    echo "  - Node.js 18+: https://nodejs.org"
-    exit 1
+    if check_bun; then
+      run_with_bun "$@"
+    elif check_node; then
+      run_with_node "$@"
+    fi
   fi
+
+  echo "Error: Neither bun nor node is installed." >&2
+  echo "" >&2
+  echo "Please install one of:" >&2
+  echo "  - Node.js >=22.5: https://nodejs.org" >&2
+  echo "  - Bun: https://bun.sh" >&2
+  exit 1
 }
 
 main "$@"

@@ -8,11 +8,9 @@
  */
 
 import { detectAgentRuntimes } from '../infrastructure/agent-runtime-registry'
-import configManager from '../infrastructure/config-manager'
 import { installGrokSkill } from '../infrastructure/grok-skill'
 import { installPiSkill } from '../infrastructure/pi-skill'
 import { probeHarnessCoverage, renderHarnessCoverageMd } from '../services/harness-coverage'
-import { writeProjectAgentSurfaces } from '../services/project-agent-surfaces'
 import {
   status as hookStatus,
   install as installHooks,
@@ -46,20 +44,12 @@ export class InstallCommands extends PrjctCommandsBase {
   ): Promise<CommandResult> {
     try {
       const result = await installHooks()
-      const config = await configManager.readConfig(projectPath).catch(() => null)
       const runtimes = await detectAgentRuntimes(projectPath)
       const detected = runtimes.filter((runtime) => runtime.detected)
       // `prjct install` wires Claude Code hooks by definition — 'claude' is
       // always relevant here even before detection would otherwise notice
       // (installHooks() above is what CREATES ~/.claude/, so a detection
       // call made before it would miss a first-time install).
-      const detectedAgentIds = [...new Set(['claude', ...detected.map((r) => r.runtime.id)])]
-      const projectSurfaces = config?.projectId
-        ? await writeProjectAgentSurfaces(projectPath, {
-            explicit: true,
-            agents: detectedAgentIds,
-          })
-        : null
       const codexDetected = detected.some((runtime) => runtime.runtime.id === 'codex')
       const codexConfig = codexDetected ? await ensureCodexMcpServer() : null
       // Always install Codex hooks when Codex is present; also install when
@@ -102,7 +92,6 @@ export class InstallCommands extends PrjctCommandsBase {
       const ritual = buildOneBreathReport({
         claudeHooksNew: result.hooksWritten,
         claudeHooksPresent: result.alreadyPresent,
-        projectSurface: Boolean(projectSurfaces),
         runtimesWired: [...new Set(runtimesWired)],
         liveCount: coverage.liveCount,
         detectedCount: coverage.detectedCount,
@@ -113,17 +102,6 @@ export class InstallCommands extends PrjctCommandsBase {
         console.log(
           [
             ritual.md,
-            `## Universal project surface`,
-            projectSurfaces
-              ? `- PRJCT.md: ${projectSurfaces.prjctMd.action}`
-              : `- skipped: not inside an initialized prjct project`,
-            ...(projectSurfaces ? [`- AGENTS.md: ${projectSurfaces.agentsMd.action}`] : []),
-            ...(projectSurfaces?.claudeMd && projectSurfaces.claudeMd.action !== 'unchanged'
-              ? [`- CLAUDE.md adapter: ${projectSurfaces.claudeMd.action}`]
-              : []),
-            ...(projectSurfaces?.ideRules.length
-              ? projectSurfaces.ideRules.map((rule) => `- project rule adapter: \`${rule}\``)
-              : []),
             ...(codexConfig
               ? [
                   `- Codex MCP: ${
@@ -218,12 +196,6 @@ export class InstallCommands extends PrjctCommandsBase {
         out.done(ritual.line)
         out.info(msg)
         out.info(`settings: ${result.settingsPath}`)
-        if (projectSurfaces) {
-          out.info(`AGENTS.md: ${projectSurfaces.agentsMd.action}`)
-          for (const rule of projectSurfaces.ideRules) out.info(`adapter: ${rule}`)
-        } else {
-          out.info('project surface: skipped (not inside an initialized prjct project)')
-        }
         if (codexConfig) {
           const action =
             codexConfig.skipped === 'user-managed'
@@ -312,7 +284,6 @@ export class InstallCommands extends PrjctCommandsBase {
       return {
         success: true,
         hooksWritten: result.hooksWritten,
-        projectSurface: projectSurfaces?.agentsMd.action ?? 'skipped',
         detectedRuntimes: detected.length,
         organicPct: coverage.organicPct,
         liveRuntimes: coverage.liveCount,

@@ -200,24 +200,6 @@ export async function writeFile(filePath: string, content: string): Promise<void
 }
 
 /**
- * Atomic write: write to `<filePath>.tmp`, then rename onto `filePath`.
- * `fs.promises.rename` is atomic-overwrite on POSIX and Windows (Node 18+).
- *
- * Used when an external reader (e.g. the pre-commit hook reading
- * `.prjct/team.json`) must never observe a half-written file. The DB
- * row is the source of truth; this is the mirror writer.
- */
-export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
-  await withWriteErrorContext(filePath, 'file', async () => {
-    const dir = path.dirname(filePath)
-    await fs.mkdir(dir, { recursive: true })
-    const tmpPath = `${filePath}.tmp`
-    await fs.writeFile(tmpPath, content, 'utf-8')
-    await fs.rename(tmpPath, filePath)
-  })
-}
-
-/**
  * Check if file exists
  */
 export async function fileExists(filePath: string): Promise<boolean> {

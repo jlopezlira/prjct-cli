@@ -41,7 +41,6 @@ async function setupGitProject(): Promise<void> {
 }
 
 async function createHealthyProject(): Promise<void> {
-  await writeFile('AGENTS.md', '# Agent contract\n')
   await writeFile('.prjct/prjct.config.json', '{"projectId":"eval-test"}\n')
   await writeFile(
     'package.json',
@@ -80,7 +79,7 @@ describe('eval-service', () => {
     expect(run.runner.source).toBe('agent')
     expect(run.project.repo).toBe('acme/prjct-evals')
     expect(run.summary.score).toBeGreaterThan(0)
-    expect(run.scenarios.length).toBeGreaterThanOrEqual(5)
+    expect(run.scenarios.length).toBeGreaterThanOrEqual(4)
     expect(run.scenarios.every((scenario) => scenario.actionables.length > 0)).toBe(true)
     expect(latest?.runId).toBe(run.runId)
     expect(run.artifacts?.jsonPath).toBeTruthy()
@@ -102,45 +101,6 @@ describe('eval-service', () => {
     expect(staleScenario?.status).toBe('warn')
     expect(staleScenario?.metrics.staleHits).toBe(1)
     expect(staleScenario?.actionables[0]?.files).toContain('docs/usage.md')
-  })
-
-  test('project-facts-freshness warns when PRJCT.md was never opted into', async () => {
-    await createHealthyProject()
-
-    const run = await runEval(fixture.projectPath, { candidate: 'no-prjct-md' })
-    const scenario = run.scenarios.find((s) => s.id === 'project-facts-freshness')
-
-    expect(scenario?.status).toBe('warn')
-    expect(scenario?.metrics.prjctMd).toBe(false)
-  })
-
-  test('project-facts-freshness passes when PRJCT.md matches verified facts, warns when stale', async () => {
-    await createHealthyProject()
-    const { writeProjectPrjctMd } = await import('../../services/prjct-md')
-    await writeProjectPrjctMd(fixture.projectPath)
-
-    const fresh = await runEval(fixture.projectPath, { candidate: 'fresh-prjct-md' })
-    const freshScenario = fresh.scenarios.find((s) => s.id === 'project-facts-freshness')
-    expect(freshScenario?.status).toBe('pass')
-    expect(freshScenario?.metrics.stale).toBe(false)
-
-    // Manifest changes (a new verified command) without re-running --fix.
-    await writeFile(
-      'package.json',
-      JSON.stringify(
-        {
-          name: 'eval-test',
-          version: '1.0.0',
-          scripts: { test: 'bun test', lint: 'biome check .', build: 'tsc -p .' },
-        },
-        null,
-        2
-      )
-    )
-    const stale = await runEval(fixture.projectPath, { candidate: 'stale-prjct-md' })
-    const staleScenario = stale.scenarios.find((s) => s.id === 'project-facts-freshness')
-    expect(staleScenario?.status).toBe('warn')
-    expect(staleScenario?.metrics.stale).toBe(true)
   })
 
   test('compares baseline and candidate runs with actionable version deltas', async () => {

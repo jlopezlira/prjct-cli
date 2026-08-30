@@ -119,10 +119,13 @@ SQLite database. Subsequent `prjct work` and the MCP `prjct_related` /
 
 ## Agent surfaces are routers, not memory stores
 
-Always-loaded files such as `AGENTS.md`, `CLAUDE.md`, editor rules, and tiny
-agent skills must stay compact. Their job is to route Claude, Codex, Gemini,
+Always-loaded global agent config — `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`,
+`~/.codex/skills/prjct/SKILL.md`, editor hooks, MCP servers, and tiny agent
+skills — must stay compact. Their job is to route Claude, Codex, Gemini,
 Cursor, Windsurf, Antigravity, and future agents into prjct's RAG-backed
-project memory; they do not carry project history.
+project memory; they do not carry project history. prjct never writes
+`AGENTS.md`, `CLAUDE.md`, `PRJCT.md`, editor rules, or other agent instruction
+files into the client's repository.
 
 The source of truth is SQLite, and agents read it **through tools, not files**.
 When a work cycle needs prior knowledge, the agent pulls bounded, ranked context

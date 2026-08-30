@@ -404,7 +404,7 @@ class PrjctCommands {
   async team(
     input: string | null = null,
     projectPath: string = process.cwd(),
-    options: { md?: boolean; required?: boolean; minVersion?: string; enforce?: boolean } = {}
+    options: { md?: boolean; required?: boolean; minVersion?: string } = {}
   ): Promise<CommandResult> {
     return (await this.teamCmdsG()).team(input, projectPath, options)
   }

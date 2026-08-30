@@ -13,7 +13,6 @@ describe('doctor-heal plan', () => {
       liveCount: 3,
       detectedCount: 3,
       organicPct: 100,
-      hasProject: true,
     })
     expect(p.actions.find((a) => a.id === 'claude-hooks')?.needed).toBe(true)
     expect(p.neededCount).toBeGreaterThan(0)
@@ -27,10 +26,8 @@ describe('doctor-heal plan', () => {
       liveCount: 1,
       detectedCount: 4,
       organicPct: 25,
-      hasProject: false,
     })
     expect(p.actions.find((a) => a.id === 'multi-runtime-wire')?.needed).toBe(true)
-    expect(p.actions.find((a) => a.id === 'agent-surfaces')?.needed).toBe(false)
     expect(p.actions.find((a) => a.id === 'organic-board')?.needed).toBe(true)
   })
 
@@ -41,7 +38,6 @@ describe('doctor-heal plan', () => {
       liveCount: 4,
       detectedCount: 4,
       organicPct: 100,
-      hasProject: true,
     })
     expect(p.actions.find((a) => a.id === 'claude-hooks')?.needed).toBe(false)
   })
@@ -53,7 +49,6 @@ describe('doctor-heal plan', () => {
       liveCount: 4,
       detectedCount: 4,
       organicPct: 100,
-      hasProject: true,
       skillPoisoned: true,
     })
     expect(p.actions.find((a) => a.id === 'portable-skills')?.needed).toBe(true)
@@ -66,7 +61,6 @@ describe('doctor-heal plan', () => {
       liveCount: 4,
       detectedCount: 4,
       organicPct: 100,
-      hasProject: true,
       skillPoisoned: false,
     })
     expect(p.actions.find((a) => a.id === 'portable-skills')?.needed).toBe(false)
