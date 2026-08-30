@@ -11,7 +11,11 @@
  */
 
 import fs from 'node:fs'
-import { _routing } from '../core/services/host-agents-md'
+import {
+  MINIMAL_ROUTING_BODY,
+  ROUTING_END_MARKER,
+  ROUTING_START_MARKER,
+} from '../core/services/routing-block'
 import { selectReviewers } from '../core/services/spec-audit-dispatch'
 import { countTokens } from '../core/tools/context/token-counter'
 import { emptySpecContent } from '../core/types/spec'
@@ -19,6 +23,7 @@ import type { DomainDefinition } from '../core/types/storage/extended'
 
 const line = (s = '') => console.log(s)
 const usd = (n: number) => `$${n.toFixed(5)}`
+const FULL_BLOCK = `${ROUTING_START_MARKER}\n${MINIMAL_ROUTING_BODY}\n${ROUTING_END_MARKER}\n`
 /** "N× cheaper" when ratio>1, "N× pricier" when <1 — never the confusing "0.2× cheaper". */
 const factor = (base: number, c: number) =>
   c <= base
@@ -29,7 +34,7 @@ const factor = (base: number, c: number) =>
 line('## 1. Token footprint — recurring harness cost')
 const skill = fs.readFileSync('templates/skills/prjct/SKILL.md', 'utf8')
 const skillTok = countTokens(skill)
-const mapTok = countTokens(_routing.FULL_BLOCK)
+const mapTok = countTokens(FULL_BLOCK)
 // Representative per-turn state block (active cycle + git + queue). The loop
 // discipline cue is cadenced (every 10 turns), not per-turn, so it's excluded.
 const stateBlock = [
@@ -41,7 +46,7 @@ const stateBlock = [
 ].join('\n')
 const stateTok = countTokens(stateBlock)
 line(`SKILL.md (loaded once/session):     ${skillTok} tok  (${skill.length} bytes)`)
-line(`AGENTS/CLAUDE map (once/session):   ${mapTok} tok  (${_routing.FULL_BLOCK.length} bytes)`)
+line(`AGENTS/CLAUDE map (once/session):   ${mapTok} tok  (${FULL_BLOCK.length} bytes)`)
 line(`Per-turn state block (every turn):  ${stateTok} tok  (${stateBlock.length} bytes)`)
 line(
   `→ Cold-start fixed cost: ${skillTok + mapTok} tok. Per-turn marginal: ${stateTok} tok (10-turn session ≈ ${skillTok + mapTok + stateTok * 10} tok total harness overhead).`

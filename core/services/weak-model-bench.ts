@@ -429,7 +429,6 @@ export function runWeakModelBench(): WeakBenchReport {
     const ritual = buildOneBreathReport({
       claudeHooksNew: 1,
       claudeHooksPresent: 10,
-      projectSurface: true,
       runtimesWired: ['claude', 'codex'],
       liveCount: 2,
       detectedCount: 2,
@@ -447,7 +446,6 @@ export function runWeakModelBench(): WeakBenchReport {
       liveCount: 1,
       detectedCount: 3,
       organicPct: 33,
-      hasProject: true,
     })
     push(
       'doctor heal plans repairs',

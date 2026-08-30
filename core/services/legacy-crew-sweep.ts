@@ -18,20 +18,18 @@
  *        (text → `prjct remember` context, topic worktree-ghost-ingest)
  *   3. **Belt**: delete ANY remaining entry under `.prjct/` except
  *        `prjct.config.json` (ingest text first when possible)
- *   4. **Repair** crew agent files that still instruct disk writes
+ *   4. Sanitize kv_store checkpoints so no forbidden worktree-write paths
+ *      survive in the source-of-truth row.
  *
  * See product invariant "SQLite only / nothing in client repo".
  */
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { getTemplateContent } from '../agentic/template-loader'
-import type { AgentRole } from '../schemas/model'
 import checkpointsStorage from '../storage/checkpoints-storage'
 import prjctDb from '../storage/database'
 import teamEnrollmentStorage, { type TeamEnrollment } from '../storage/team-enrollment-storage'
 import log from '../utils/logger'
-import { CREW_ROLES } from './agent-dispatch'
 
 const LEGACY_CHECKPOINTS_PATH = '.prjct/CHECKPOINTS.md'
 const LEGACY_TEAM_PATH = '.prjct/team.json'
@@ -40,8 +38,6 @@ const FLAG_CHECKPOINTS = 'migration:v2.19.8:last-flagged-checkpoints'
 const FLAG_TEAM = 'migration:v2.19.8:last-flagged-team'
 /** One-shot inbox warn after a worktree ghost purge (avoids SessionStart spam). */
 const FLAG_GHOST_PURGE_WARN = 'migration:v3.77:last-ghost-purge-warn'
-/** One-shot inbox warn after repairing agent files that instructed disk writes. */
-const FLAG_AGENT_REPAIR_WARN = 'migration:v3.77:last-agent-repair-warn'
 
 /**
  * Subdirectories of `.prjct/` that must NEVER exist in a customer worktree.
@@ -83,25 +79,6 @@ export const FORBIDDEN_WORKTREE_WRITE_NEEDLES = [
   '.prjct/deploy/',
 ] as const
 
-const CREW_AGENT_FILES: Array<{ destRelative: string; templateKey: string }> = CREW_ROLES.map(
-  (r) => ({
-    destRelative: `.claude/agents/${r.name}.md`,
-    templateKey: `crew/roles/${r.name}.md`,
-  })
-)
-
-const CLAUDE_FILE = 'CLAUDE.md'
-const CREW_MD_FILE = 'CREW.md'
-const CLAUDE_SNIPPET_TEMPLATE = 'crew/leader-mode.md'
-const SNIPPET_START = '<!-- prjct:crew:start - DO NOT REMOVE THIS MARKER -->'
-/** Canonical end marker (current templates). */
-const SNIPPET_END = '<!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->'
-/** Older installs used a short end marker without the DO-NOT-REMOVE suffix. */
-const SNIPPET_END_SHORT = '<!-- prjct:crew:end -->'
-const CHECKPOINTS_START =
-  '<!-- prjct:checkpoints:start - DO NOT EDIT (managed by `prjct crew checkpoints set|reset`) -->'
-const CHECKPOINTS_END = '<!-- prjct:checkpoints:end -->'
-
 interface FlagRow {
   mtime_ms: number
   migrated_at: string
@@ -116,8 +93,10 @@ export interface LegacySweepResult {
   teamHandEditWarned: boolean
   /** Ghost dirs purged from the customer worktree this run (e.g. `sessions`). */
   ghostDirsPurged: string[]
-  /** Relative paths of crew agent / CLAUDE files force-refreshed this run. */
-  agentFilesRepaired: string[]
+  /**
+   * @deprecated Crew agent files are no longer written to the client repo,
+   * so this list is always empty. Kept in the interface for log compat.
+   */
   /** Number of ghost text files ingested into SQLite before purge. */
   ghostFilesIngested: number
   /**
@@ -202,81 +181,6 @@ async function captureInboxWarning(
 
 export function containsForbiddenWriteInstruction(content: string): boolean {
   return FORBIDDEN_WORKTREE_WRITE_PATTERNS.some((re) => re.test(content))
-}
-
-/**
- * Strip a legacy `model:` pin from an installed crew agent so it inherits the
- * user's model. Old installs stamped opus/sonnet/haiku per role; that policy
- * is gone (see `core/schemas/model.ts`) and the sweep un-stamps it.
- */
-function stripCrewModelPin(content: string, destRelative: string): string {
-  const roleName = CREW_ROLES.find((r) => `.claude/agents/${r.name}.md` === destRelative)?.role as
-    | AgentRole
-    | undefined
-  if (!roleName) return content
-  return content.replace(/^model:[ \t].*(?:\r?\n)?/m, '')
-}
-
-function spliceCheckpoints(reviewerTemplate: string, checkpointsContent: string): string {
-  const startIdx = reviewerTemplate.indexOf(CHECKPOINTS_START)
-  const endIdx = reviewerTemplate.indexOf(CHECKPOINTS_END)
-  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
-    // Template without markers (older bundle) — return as-is.
-    return reviewerTemplate
-  }
-  const before = reviewerTemplate.slice(0, startIdx + CHECKPOINTS_START.length)
-  const after = reviewerTemplate.slice(endIdx)
-  return `${before}\n${checkpointsContent.trimEnd()}\n${after}`
-}
-
-/**
- * Strip EVERY crew marker block (handles short end markers + duplicates from
- * partial repairs), then append exactly one fresh snippet.
- */
-function replaceCrewSnippet(claudeContent: string, snippet: string): string {
-  // Loop: remove start→end pairs until none remain (covers duplicate blocks).
-  // Prefer the long end marker; fall back to the short historical form.
-  const stripMarkerBlocks = (body: string): string => {
-    const startIdx = body.indexOf(SNIPPET_START)
-    if (startIdx < 0) return body
-    const afterStart = body.slice(startIdx + SNIPPET_START.length)
-    const longEndRel = afterStart.indexOf(SNIPPET_END)
-    const shortEndRel = afterStart.indexOf(SNIPPET_END_SHORT)
-    const ending =
-      longEndRel >= 0 && (shortEndRel < 0 || longEndRel <= shortEndRel)
-        ? { relative: longEndRel, length: SNIPPET_END.length }
-        : shortEndRel >= 0
-          ? { relative: shortEndRel, length: SNIPPET_END_SHORT.length }
-          : null
-    if (!ending) {
-      // Orphan start marker — drop from start to EOF and stop.
-      return body.slice(0, startIdx)
-    }
-    const endAbs = startIdx + SNIPPET_START.length + ending.relative
-    return stripMarkerBlocks(`${body.slice(0, startIdx)}${body.slice(endAbs + ending.length)}`)
-  }
-  const body = stripMarkerBlocks(claudeContent)
-    .replace(/\n{3,}/g, '\n\n')
-    .trimEnd()
-  const sep = body.length > 0 ? '\n\n' : ''
-  return `${body}${sep}${snippet.trimEnd()}\n`
-}
-
-/**
- * Custom checkpoints that still list session artifact paths re-inject the
- * forbidden instruction into reviewer.md on every splice. Strip those lines
- * (and any other affirmative worktree-write paths) before splicing / storing.
- */
-function sanitizeCheckpointsContent(content: string): string {
-  if (!containsForbiddenWriteInstruction(content)) return content
-  const cleaned = content
-    .split('\n')
-    .filter((line) => !containsForbiddenWriteInstruction(line))
-    .join('\n')
-    // Collapse runs of blank lines left by removals.
-    .replace(/\n{3,}/g, '\n\n')
-    .trimEnd()
-  return `${cleaned}\n`
 }
 
 async function sweepCheckpoints(
@@ -537,140 +441,6 @@ async function purgeWorktreeGhostDirs(
 }
 
 /**
- * If installed crew agent files (or CLAUDE.md / CREW.md) still instruct
- * writing into `.prjct/sessions|audits|deploy/`, force-refresh them from the
- * current templates. This is the only way to stop agents from re-creating
- * the ghost dirs we just purged — stale customized agents keep the bug alive.
- */
-async function repairCrewDiskWriteInstructions(
-  projectPath: string,
-  projectId: string,
-  out: LegacySweepResult
-): Promise<void> {
-  // 0. Sanitize kv_store checkpoints if they still list session-artifact paths.
-  //    Otherwise every reviewer.md splice re-injects the forbidden instruction.
-  try {
-    const row = checkpointsStorage.get(projectId)
-    const sanitized = sanitizeCheckpointsContent(row.content)
-    if (sanitized !== row.content) {
-      // Persist sanitized text. 'default' rows aren't on disk — writing
-      // 'migrated' is correct (we adopted+cleaned the content). User rows
-      // keep 'user' so hand-customization provenance is preserved.
-      const source = row.source === 'user' ? 'user' : 'migrated'
-      checkpointsStorage.set(projectId, sanitized, source)
-      out.agentFilesRepaired.push('kv_store[crew:checkpoints]')
-    }
-  } catch (error) {
-    out.errors.push({
-      file: 'kv_store[crew:checkpoints]',
-      reason: error instanceof Error ? error.message : String(error),
-    })
-  }
-
-  // 1. Native crew agents under .claude/agents/
-  for (const agent of CREW_AGENT_FILES) {
-    const abs = path.join(projectPath, agent.destRelative)
-    const existing = await tryReadFile(abs)
-    if (existing === null) continue
-    if (!containsForbiddenWriteInstruction(existing)) continue
-
-    const template = getTemplateContent(agent.templateKey)
-    if (!template) {
-      out.errors.push({ file: agent.destRelative, reason: 'template missing' })
-      continue
-    }
-    try {
-      const next = stripCrewModelPin(
-        agent.destRelative === '.claude/agents/reviewer.md'
-          ? spliceCheckpoints(
-              template,
-              sanitizeCheckpointsContent(checkpointsStorage.get(projectId).content)
-            )
-          : template,
-        agent.destRelative
-      )
-      await fs.mkdir(path.dirname(abs), { recursive: true })
-      await fs.writeFile(abs, next, 'utf-8')
-      out.agentFilesRepaired.push(agent.destRelative)
-    } catch (error) {
-      out.errors.push({
-        file: agent.destRelative,
-        reason: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  // 2. CLAUDE.md crew block (leader-mode snippet). Also collapse duplicates
-  //    left by partial historical repairs (short end-marker + append).
-  const claudePath = path.join(projectPath, CLAUDE_FILE)
-  const claude = await tryReadFile(claudePath)
-  if (claude !== null) {
-    const startCount = (claude.match(/prjct:crew:start/g) ?? []).length
-    const needsRepair =
-      containsForbiddenWriteInstruction(claude) ||
-      startCount > 1 ||
-      claude.includes(SNIPPET_END_SHORT)
-    if (needsRepair) {
-      const snippet = getTemplateContent(CLAUDE_SNIPPET_TEMPLATE)?.trim()
-      if (!snippet) {
-        out.errors.push({ file: CLAUDE_FILE, reason: 'leader-mode template missing' })
-      } else {
-        try {
-          const next = replaceCrewSnippet(claude, snippet)
-          await fs.writeFile(claudePath, next, 'utf-8')
-          out.agentFilesRepaired.push(CLAUDE_FILE)
-        } catch (error) {
-          out.errors.push({
-            file: CLAUDE_FILE,
-            reason: error instanceof Error ? error.message : String(error),
-          })
-        }
-      }
-    }
-  }
-
-  // 3. Emulated CREW.md (non-Claude providers)
-  const crewMdPath = path.join(projectPath, CREW_MD_FILE)
-  const crewMd = await tryReadFile(crewMdPath)
-  if (crewMd !== null && containsForbiddenWriteInstruction(crewMd)) {
-    // Emulated protocol is rebuilt on next `prjct crew install`. For sync we
-    // only strip the forbidden paths so agents stop following them: replace
-    // the whole file with a short ban pointing operators at reinstall.
-    try {
-      const ban = [
-        '# CREW.md — reinstall required',
-        '',
-        'This file previously instructed agents to write plans/reports under',
-        '`.prjct/sessions/` (or other worktree paths). That is forbidden.',
-        '',
-        'Run `prjct crew install` to regenerate the emulated crew protocol.',
-        'Durable state goes through `prjct` CLI verbs only (SQLite).',
-        '',
-      ].join('\n')
-      await fs.writeFile(crewMdPath, ban, 'utf-8')
-      out.agentFilesRepaired.push(CREW_MD_FILE)
-    } catch (error) {
-      out.errors.push({
-        file: CREW_MD_FILE,
-        reason: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  if (out.agentFilesRepaired.length === 0) return
-
-  const flag = readFlag(projectId, FLAG_AGENT_REPAIR_WARN)
-  if (flag === null) {
-    await captureInboxWarning(
-      projectPath,
-      `Repaired crew instruction files that still told agents to write plans/reports to disk (${out.agentFilesRepaired.join(', ')}). Refreshed from current prjct templates. Product law: plans + work data ONLY in project SQLite via prjct plan / prjct spec / prjct remember / prjct crew record-run — physical files are not traceable.`,
-      { 'migration:v3.77': '1', topic: 'crew-disk-write-repair' }
-    )
-    writeFlag(projectId, FLAG_AGENT_REPAIR_WARN, Date.now())
-  }
-}
-
-/**
  * Final belt: `.prjct/` may contain ONLY `prjct.config.json`.
  * Any leftover file/dir is ingested (text) then deleted.
  */
@@ -730,6 +500,31 @@ async function enforcePrjctConfigOnly(
 }
 
 /**
+ * Sanitize kv_store checkpoints so no forbidden worktree-write instruction
+ * survives in the source of truth. Cheap inline guard — no disk writes.
+ */
+function sanitizeKvCheckpoints(projectId: string, out: LegacySweepResult): void {
+  try {
+    const row = checkpointsStorage.get(projectId)
+    if (!containsForbiddenWriteInstruction(row.content)) return
+    const cleaned = row.content
+      .split('\n')
+      .filter((line) => !containsForbiddenWriteInstruction(line))
+      .join('\n')
+      // Collapse runs of blank lines left by removals.
+      .replace(/\n{3,}/g, '\n\n')
+      .trimEnd()
+    const source = row.source === 'user' ? 'user' : 'migrated'
+    checkpointsStorage.set(projectId, `${cleaned}\n`, source)
+  } catch (error) {
+    out.errors.push({
+      file: 'kv_store[crew:checkpoints]',
+      reason: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
  * Run the legacy sweep. Best-effort: errors are collected and returned
  * but never thrown (sync must not fail on this — it runs every session
  * start and should be a quiet no-op once the client tree is clean).
@@ -744,7 +539,6 @@ export async function legacyCrewSweep(
     teamMigrated: false,
     teamHandEditWarned: false,
     ghostDirsPurged: [],
-    agentFilesRepaired: [],
     ghostFilesIngested: 0,
     clientPrjctJunkPurged: [],
     errors: [],
@@ -775,11 +569,7 @@ export async function legacyCrewSweep(
       reason: error instanceof Error ? error.message : String(error),
     })
   })
-  await repairCrewDiskWriteInstructions(projectPath, projectId, out).catch((error) => {
-    out.errors.push({
-      file: '.claude/agents/*',
-      reason: error instanceof Error ? error.message : String(error),
-    })
-  })
+  // Source-of-truth hygiene: remove forbidden paths from kv_store checkpoints.
+  sanitizeKvCheckpoints(projectId, out)
   return out
 }

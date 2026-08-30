@@ -1,9 +1,9 @@
 /**
  * prjct crew — install/uninstall/status the crew-mode bundle.
  *
- * Crew mode is an opinionated multi-agent setup: a leader/implementer/reviewer
- * trio in `.claude/agents/`, a project-level `CHECKPOINTS.md`, and a CLAUDE.md
- * snippet that locks the main session into leader role. Strictly opt-in.
+ * Crew state is stored entirely in the project SQLite kv_store (key
+ * `crew:state`). No agent-facing files (`.claude/agents/`, `CLAUDE.md`,
+ * `CREW.md`) are ever written into the client repository. Strictly opt-in.
  *
  * Inspired by https://github.com/betta-tech/ejemplo-harness-subagentes
  */
@@ -20,16 +20,13 @@ import {
 } from '../services/agent-dispatch'
 import { checkpointsStorage } from '../storage/checkpoints-storage'
 import crewRunStorage from '../storage/crew-run-storage'
+import { type CrewState, crewStateStorage } from '../storage/crew-state-storage'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
-import { fileExists } from '../utils/file-helper'
 import { failHard, failWith } from '../utils/md-aware'
 import out from '../utils/output'
 import { PrjctCommandsBase } from './base'
-
-const SNIPPET_START = '<!-- prjct:crew:start - DO NOT REMOVE THIS MARKER -->'
-const SNIPPET_END = '<!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->'
 
 const CHECKPOINTS_START =
   '<!-- prjct:checkpoints:start - DO NOT EDIT (managed by `prjct crew checkpoints set|reset`) -->'
@@ -37,9 +34,9 @@ const CHECKPOINTS_END = '<!-- prjct:checkpoints:end -->'
 
 /**
  * Splice the current checkpoints content into the reviewer agent
- * template between the marker pair. Anchored regex — refuses to write
- * if markers are missing or duplicated (defensive against template
- * drift). Content outside the markers is preserved verbatim.
+ * template between the marker pair. Anchored regex — refuses to build
+ * the agent if markers are missing or duplicated (defensive against
+ * template drift). Content outside the markers is preserved verbatim.
  *
  * See spec a50b32d1 AC #7.
  */
@@ -61,63 +58,37 @@ function spliceCheckpoints(reviewerTemplate: string, checkpointsContent: string)
   return `${before}\n${checkpointsContent.trimEnd()}\n${after}`
 }
 
-interface CrewFile {
+interface CrewAgentFile {
   /** Path inside the templates/crew/ tree */
   templateKey: string
-  /** Destination relative to the project root */
-  destRelative: string
+  /** Agent name as stored in the crew state row */
+  name: 'leader' | 'implementer' | 'reviewer'
 }
 
-// Native `.claude/agents/` files + their model-policy role — both DERIVED from
-// the single crew roster (CREW_ROLES), so the native crew, the emulated
-// protocol, and the model policy can never drift apart.
-const AGENT_FILES: CrewFile[] = CREW_ROLES.map((r) => ({
+// Native agent templates — derived from CREW_ROLES so the native crew,
+// the emulated protocol, and the model policy can never drift apart.
+const AGENT_FILES: CrewAgentFile[] = CREW_ROLES.map((r) => ({
   templateKey: `crew/roles/${r.name}.md`,
-  destRelative: `.claude/agents/${r.name}.md`,
+  name: r.name as 'leader' | 'implementer' | 'reviewer',
 }))
 
 const CREW_AGENT_ROLES: Record<string, AgentRole> = Object.fromEntries(
-  CREW_ROLES.map((r) => [`.claude/agents/${r.name}.md`, r.role])
+  CREW_ROLES.map((r) => [r.name, r.role])
 )
 
 /**
  * Strip any `model:` frontmatter from a crew agent at install time so the
  * subagent inherits whatever model the user is driving. prjct does not pick
- * models for roles — see `core/schemas/model.ts`. No-op for files not mapped
- * to a role, or templates with no `model:` line.
+ * models for roles — see `core/schemas/model.ts`. No-op for a name that maps
+ * to no crew role, or a template with no `model:` line.
+ *
+ * Keyed on the role NAME, not a `.claude/agents/<name>.md` path: crew state
+ * lives in SQLite and prjct writes no agent files into the client repo, so a
+ * path here would only be a fiction a future reader could mistake for one.
  */
-export function stripCrewModelPin(content: string, destRelative: string): string {
-  if (!CREW_AGENT_ROLES[destRelative]) return content
+export function stripCrewModelPin(content: string, roleName: string): string {
+  if (!CREW_AGENT_ROLES[roleName]) return content
   return content.replace(/^model:[ \t].*(?:\r?\n)?/m, '')
-}
-
-const CHECKPOINTS_FILE: CrewFile = {
-  templateKey: 'crew/CHECKPOINTS.md',
-  destRelative: '.prjct/CHECKPOINTS.md',
-}
-
-const CLAUDE_SNIPPET_TEMPLATE = 'crew/leader-mode.md'
-/** Destination file name in the *user's* project (host-specific, not this repo). */
-const CLAUDE_FILE = 'CLAUDE.md'
-
-interface PieceStatus {
-  path: string
-  installed: boolean
-}
-
-interface CrewStatus {
-  agents: PieceStatus[]
-  checkpoints: PieceStatus
-  claudeSnippet: PieceStatus
-  complete: boolean
-}
-
-async function readSnippet(): Promise<string> {
-  const content = getTemplateContent(CLAUDE_SNIPPET_TEMPLATE)
-  if (!content) {
-    throw new Error(`Missing crew template: ${CLAUDE_SNIPPET_TEMPLATE}`)
-  }
-  return content.trim()
 }
 
 async function readTemplate(key: string): Promise<string> {
@@ -128,91 +99,66 @@ async function readTemplate(key: string): Promise<string> {
   return content
 }
 
-async function writeFileEnsureDir(absPath: string, content: string): Promise<void> {
-  await fs.mkdir(path.dirname(absPath), { recursive: true })
-  await fs.writeFile(absPath, content, 'utf-8')
-}
-
-function snippetPresent(claudeContent: string): boolean {
-  return claudeContent.includes(SNIPPET_START) && claudeContent.includes(SNIPPET_END)
-}
-
-function appendSnippet(claudeContent: string, snippet: string): string {
-  // Idempotent: if markers exist, replace the block; otherwise append.
-  if (snippetPresent(claudeContent)) {
-    const startIdx = claudeContent.indexOf(SNIPPET_START)
-    const endIdx = claudeContent.indexOf(SNIPPET_END) + SNIPPET_END.length
-    return `${claudeContent.slice(0, startIdx)}${snippet}${claudeContent.slice(endIdx)}`
+async function buildNativeAgents(
+  checkpointsContent: string
+): Promise<Record<'leader' | 'implementer' | 'reviewer', string>> {
+  const agents: Partial<Record<'leader' | 'implementer' | 'reviewer', string>> = {}
+  for (const f of AGENT_FILES) {
+    const template = await readTemplate(f.templateKey)
+    const content =
+      f.name === 'reviewer' ? spliceCheckpoints(template, checkpointsContent) : template
+    agents[f.name] = stripCrewModelPin(content, f.name)
   }
-  const sep = claudeContent.length > 0 && !claudeContent.endsWith('\n') ? '\n\n' : '\n'
-  return `${claudeContent}${sep}${snippet}\n`
+  return agents as Record<'leader' | 'implementer' | 'reviewer', string>
 }
 
-function stripSnippet(claudeContent: string): string {
-  if (!snippetPresent(claudeContent)) return claudeContent
-  const startIdx = claudeContent.indexOf(SNIPPET_START)
-  const endIdx = claudeContent.indexOf(SNIPPET_END) + SNIPPET_END.length
-  // Trim leading whitespace gap left by the removal.
-  const result = `${claudeContent.slice(0, startIdx)}${claudeContent.slice(endIdx)}`
-    .replace(/\n{3,}/g, '\n\n')
-    .trimEnd()
-  return result.length > 0 ? `${result}\n` : ''
-}
-
-async function readClaudeMd(projectPath: string): Promise<string | null> {
-  const claudePath = path.join(projectPath, CLAUDE_FILE)
-  try {
-    return await fs.readFile(claudePath, 'utf-8')
-  } catch {
-    return null
-  }
+interface CrewStatus {
+  state: CrewState | null
+  checkpoints: { path: string; installed: boolean }
+  complete: boolean
 }
 
 async function getStatus(projectPath: string): Promise<CrewStatus> {
-  const agents = await Promise.all(
-    AGENT_FILES.map(async (f) => ({
-      path: f.destRelative,
-      installed: await fileExists(path.join(projectPath, f.destRelative)),
-    }))
-  )
+  const state = await (async (): Promise<CrewState | null> => {
+    try {
+      const projectId = await configManager.getProjectId(projectPath)
+      if (!projectId) return null
+      return crewStateStorage.get(projectId)
+    } catch {
+      return null
+    }
+  })()
 
-  // Checkpoints moved from `.prjct/CHECKPOINTS.md` to kv_store
-  // `crew:checkpoints` per spec a50b32d1. "Installed" means a project
-  // exists with the row present (or the bundled default is reachable —
-  // which it always is, since the template is in the bundle).
-  const checkpointsInstalled = await (async () => {
+  const checkpointsInstalled = await (async (): Promise<boolean> => {
     try {
       const projectId = await configManager.getProjectId(projectPath)
       if (!projectId) return false
-      // We always return SOMETHING from get() (bundled default fallback),
-      // so installed == has-customization-OR-bundled-default-available.
+      // get() always returns something (bundled default fallback), so
+      // installed == a project exists with the row available.
       checkpointsStorage.get(projectId)
       return true
     } catch {
       return false
     }
   })()
-  const checkpoints: PieceStatus = {
-    path: 'kv_store[crew:checkpoints]',
-    installed: checkpointsInstalled,
+
+  const complete = state?.enabled === true && checkpointsInstalled
+
+  return {
+    state,
+    checkpoints: { path: 'kv_store[crew:checkpoints]', installed: checkpointsInstalled },
+    complete,
   }
-
-  const claudeContent = await readClaudeMd(projectPath)
-  const claudeSnippet: PieceStatus = {
-    path: CLAUDE_FILE,
-    installed: claudeContent !== null && snippetPresent(claudeContent),
-  }
-
-  const complete =
-    agents.every((a) => a.installed) && checkpoints.installed && claudeSnippet.installed
-
-  return { agents, checkpoints, claudeSnippet, complete }
 }
 
 export class CrewCommands extends PrjctCommandsBase {
   /**
-   * `prjct crew install` — copy the trio + CHECKPOINTS into the project,
-   * append the leader-mode snippet to CLAUDE.md (idempotent).
+   * `prjct crew install` — persist crew state to the project kv_store.
+   *
+   * No files are written into the client repository. Native (Claude) rigs
+   * store generated agent contents in the state row; emulated rigs store the
+   * emulated protocol string. A future global hook can print/inject these
+   * without touching the repo.
    */
   async install(
     _arg: string | null = null,
@@ -220,13 +166,6 @@ export class CrewCommands extends PrjctCommandsBase {
     options: MdOption = {}
   ): Promise<CommandResult> {
     try {
-      const written: string[] = []
-      const skipped: string[] = []
-
-      // Resolve projectId so we can read user-customized checkpoints from
-      // kv_store and splice them into the reviewer template at install
-      // time. Required for the new (post-spec-a50b32d1) reviewer flow —
-      // no more `.prjct/CHECKPOINTS.md` on disk.
       const initResult = await this.ensureProjectInit(projectPath)
       if (!initResult.success) return initResult
       const projectId = await configManager.getProjectId(projectPath)
@@ -235,89 +174,57 @@ export class CrewCommands extends PrjctCommandsBase {
       }
 
       const checkpointsRow = checkpointsStorage.get(projectId)
-
-      // Provider-aware crew. Claude has a native subagent tool, so the crew is
-      // real `.claude/agents/` files dispatched via the Agent tool. Every other
-      // rig has no subagent tool — install the EMULATED crew protocol instead
-      // (one agent plays the roles in fresh passes with the per-role model), so
-      // the multi-agent architecture runs there too rather than dropping dead
-      // Claude-only files into the repo.
       const mechanism = await resolveDispatchMechanism()
-      if (!mechanism.native) {
-        const dest = path.join(projectPath, 'CREW.md')
-        const existed = await fileExists(dest)
-        await writeFileEnsureDir(dest, buildEmulatedCrewProtocol(mechanism, checkpointsRow.content))
-        ;(existed ? skipped : written).push('CREW.md (emulated crew protocol)')
-        const note = `crew installed for ${mechanism.provider} (emulated — no native subagent tool). One agent plays the roles per CREW.md.`
-        if (options.md) {
-          console.log(
-            [
-              '# prjct crew installed (emulated)',
-              '',
-              note,
-              '',
-              `Wrote \`CREW.md\` to \`${projectPath}\`.`,
-            ].join('\n')
-          )
-        } else {
-          out.done(note)
-        }
-        return { success: true, written, skipped }
+
+      const baseState: CrewState = {
+        enabled: true,
+        mechanism: mechanism.native ? 'native' : 'emulated',
+        provider: mechanism.provider,
+        installedAt: new Date().toISOString(),
       }
 
-      // 1. Agents — write each. For reviewer.md, splice the current
-      // checkpoints content into the marker region.
-      for (const f of AGENT_FILES) {
-        const dest = path.join(projectPath, f.destRelative)
-        const template = await readTemplate(f.templateKey)
-        const content = stripCrewModelPin(
-          f.destRelative === '.claude/agents/reviewer.md'
-            ? spliceCheckpoints(template, checkpointsRow.content)
-            : template,
-          f.destRelative
-        )
-        const exists = await fileExists(dest)
-        await writeFileEnsureDir(dest, content)
-        if (exists) skipped.push(`${f.destRelative} (overwritten)`)
-        else written.push(f.destRelative)
-      }
+      // Native and emulated differ only in which payload the row carries;
+      // build the finished row per branch so `state` stays const.
+      const { state, writtenLabel } = mechanism.native
+        ? {
+            state: {
+              ...baseState,
+              agents: await buildNativeAgents(checkpointsRow.content),
+            } as CrewState,
+            writtenLabel: 'crew:state with native agent contents',
+          }
+        : {
+            state: {
+              ...baseState,
+              emulatedProtocol: buildEmulatedCrewProtocol(mechanism, checkpointsRow.content),
+            } as CrewState,
+            writtenLabel: 'crew:state with emulated protocol',
+          }
 
-      // 2. CLAUDE.md snippet — append/replace marker block, idempotent
-      const snippet = await readSnippet()
-      const claudePath = path.join(projectPath, CLAUDE_FILE)
-      const existingClaude = (await readClaudeMd(projectPath)) ?? ''
-      const wasPresent = snippetPresent(existingClaude)
-      const nextClaude = appendSnippet(existingClaude, snippet)
-      if (nextClaude !== existingClaude) {
-        await fs.writeFile(claudePath, nextClaude, 'utf-8')
-        written.push(`${CLAUDE_FILE} (${wasPresent ? 'snippet refreshed' : 'snippet appended'})`)
-      } else {
-        skipped.push(`${CLAUDE_FILE} (snippet already current)`)
-      }
+      crewStateStorage.set(projectId, state)
 
-      const summary = `crew installed (${written.length} written, ${skipped.length} kept)`
-      const hookHint = [
-        'Suggested next step — wire verification hooks into .claude/settings.json:',
-        '  PostToolUse(Edit|Write) → run your test command',
-        '  Stop → run your project test command and record the outcome',
-        'Use the /update-config skill or edit settings.json manually.',
-      ].join('\n')
+      const mechanismLabel = mechanism.native
+        ? `native (${mechanism.provider})`
+        : `emulated (${mechanism.provider})`
+      const note = `crew installed (${mechanismLabel}). State stored in project SQLite; no files were written to the repository.`
 
       if (options.md) {
-        const lines = ['# prjct crew installed', '', `Wrote to \`${projectPath}\`.`, '', '## Files']
-        for (const f2 of written) lines.push(`- written: \`${f2}\``)
-        for (const f3 of skipped) lines.push(`- kept: \`${f3}\``)
-        lines.push('', '## Next step', '', hookHint)
-        console.log(lines.join('\n'))
+        console.log(
+          [
+            '# prjct crew installed',
+            '',
+            note,
+            '',
+            '## Stored',
+            `- \`${writtenLabel}\` in kv_store`,
+            '- Checkpoints remain in `kv_store[crew:checkpoints]`',
+          ].join('\n')
+        )
       } else {
-        out.done(summary)
-        for (const f4 of written) out.info(`written: ${f4}`)
-        for (const f5 of skipped) out.info(`kept:    ${f5}`)
-        console.log('')
-        console.log(hookHint)
+        out.done(note)
       }
 
-      return { success: true, written, skipped }
+      return { success: true, written: [writtenLabel], skipped: [] }
     } catch (error) {
       const msg = getErrorMessage(error)
       return failHard(msg)
@@ -325,8 +232,8 @@ export class CrewCommands extends PrjctCommandsBase {
   }
 
   /**
-   * `prjct crew uninstall` — remove the trio + CHECKPOINTS,
-   * strip the leader-mode snippet from CLAUDE.md.
+   * `prjct crew uninstall` — remove crew state from the project kv_store
+   * and reset crew-specific data. No client-repo files are touched.
    */
   async uninstall(
     _arg: string | null = null,
@@ -334,53 +241,61 @@ export class CrewCommands extends PrjctCommandsBase {
     options: MdOption = {}
   ): Promise<CommandResult> {
     try {
+      const projectId = await configManager.getProjectId(projectPath)
+      if (!projectId) {
+        const note = 'No prjct project; nothing to uninstall.'
+        if (options.md) {
+          console.log(`# prjct crew uninstalled\n\n${note}`)
+        } else {
+          out.done(note)
+        }
+        return { success: true, removed: [], missing: [] }
+      }
+
       const removed: string[] = []
       const missing: string[] = []
 
-      // AGENT_FILES + legacy .prjct/CHECKPOINTS.md if still present on disk
-      // (older installs wrote it before spec a50b32d1 moved checkpoints to
-      // kv_store). The file is no longer written by install.
-      const toRemove: CrewFile[] = [...AGENT_FILES, CHECKPOINTS_FILE]
-      for (const f of toRemove) {
-        const dest = path.join(projectPath, f.destRelative)
-        if (await fileExists(dest)) {
-          await fs.rm(dest)
-          removed.push(f.destRelative)
-        } else {
-          missing.push(f.destRelative)
-        }
+      const hadState = crewStateStorage.get(projectId) !== null
+      if (hadState) {
+        crewStateStorage.clear(projectId)
+        removed.push('crew:state (SQLite)')
+      } else {
+        missing.push('crew:state (SQLite)')
       }
 
-      // Clean up empty .claude/agents (only if it ended up empty after removal)
-      const agentsDir = path.join(projectPath, '.claude/agents')
-      try {
-        const entries = await fs.readdir(agentsDir)
-        if (entries.length === 0) await fs.rmdir(agentsDir)
-      } catch {
-        // Either doesn't exist or not empty — leave it.
+      // Only reset checkpoints when crew was actually installed. Resetting
+      // unconditionally would silently discard a `crew checkpoints set`
+      // customization on a project that never had crew mode at all.
+      if (hadState && checkpointsStorage.hasCustomization(projectId)) {
+        checkpointsStorage.reset(projectId)
+        removed.push('kv_store[crew:checkpoints] reset')
+      } else {
+        missing.push('kv_store[crew:checkpoints] (already default)')
       }
 
-      // Strip CLAUDE.md snippet if present
-      const claudePath = path.join(projectPath, CLAUDE_FILE)
-      const existingClaude = await readClaudeMd(projectPath)
-      if (existingClaude !== null && snippetPresent(existingClaude)) {
-        const next = stripSnippet(existingClaude)
-        await fs.writeFile(claudePath, next, 'utf-8')
-        removed.push(`${CLAUDE_FILE} (snippet stripped)`)
-      }
+      // An older prjct wrote crew files into the repo. Uninstall is when the
+      // user most wants them gone, but they are not ours to delete — name
+      // them so "uninstalled" does not read as "nothing left behind".
+      const { scanLegacyRepoCrewFiles, formatLegacyRepoCrewLine } = await import(
+        '../services/legacy-repo-crew-scan'
+      )
+      const legacy = await scanLegacyRepoCrewFiles(projectPath)
+      const legacyLine = formatLegacyRepoCrewLine(legacy)
 
       const summary = `crew uninstalled (${removed.length} removed)`
       if (options.md) {
-        const lines = ['# prjct crew uninstalled', '']
-        for (const f2 of removed) lines.push(`- removed: \`${f2}\``)
+        const lines = ['# prjct crew uninstalled', '', summary, '', '## Removed']
+        for (const f2 of removed) lines.push(`- ${f2}`)
         for (const f3 of missing) lines.push(`- not present: \`${f3}\``)
+        if (legacyLine !== null) lines.push('', '## Left in your repo', `- ${legacyLine}`)
         console.log(lines.join('\n'))
       } else {
         out.done(summary)
         for (const f4 of removed) out.info(`removed: ${f4}`)
+        if (legacyLine !== null) out.warn(legacyLine)
       }
 
-      return { success: true, removed, missing }
+      return { success: true, removed, missing, legacyRepoFiles: legacy.staleFiles }
     } catch (error) {
       const msg = getErrorMessage(error)
       return failHard(msg)
@@ -388,7 +303,7 @@ export class CrewCommands extends PrjctCommandsBase {
   }
 
   /**
-   * `prjct crew status` — report which pieces of the bundle are installed.
+   * `prjct crew status` — report crew state from the project kv_store.
    */
   async status(
     _arg: string | null = null,
@@ -397,7 +312,7 @@ export class CrewCommands extends PrjctCommandsBase {
   ): Promise<CommandResult> {
     try {
       const status = await getStatus(projectPath)
-      const tag = (s: PieceStatus) => (s.installed ? 'installed' : 'missing')
+      const tag = (installed: boolean) => (installed ? 'installed' : 'missing')
 
       if (options.md) {
         const lines = [
@@ -406,18 +321,30 @@ export class CrewCommands extends PrjctCommandsBase {
           `Project: \`${projectPath}\``,
           `Complete: **${status.complete ? 'yes' : 'no'}**`,
           '',
-          '## Pieces',
+          '## State',
         ]
-        for (const a of status.agents) lines.push(`- ${tag(a)}: \`${a.path}\``)
-        lines.push(`- ${tag(status.checkpoints)}: \`${status.checkpoints.path}\``)
-        lines.push(`- ${tag(status.claudeSnippet)}: \`${status.claudeSnippet.path}\` (snippet)`)
+        if (status.state) {
+          lines.push(`- enabled: **${status.state.enabled}**`)
+          lines.push(`- mechanism: \`${status.state.mechanism}\``)
+          lines.push(`- provider: \`${status.state.provider ?? 'unknown'}\``)
+          lines.push(`- installedAt: \`${status.state.installedAt}\``)
+        } else {
+          lines.push('- _no crew:state row — crew is not installed_')
+        }
+        lines.push(`- ${tag(status.checkpoints.installed)}: \`${status.checkpoints.path}\``)
         console.log(lines.join('\n'))
       } else {
         const label = status.complete ? 'complete' : 'partial'
         out.info(`crew: ${label}`)
-        for (const a2 of status.agents) out.info(`  ${tag(a2)}: ${a2.path}`)
-        out.info(`  ${tag(status.checkpoints)}: ${status.checkpoints.path}`)
-        out.info(`  ${tag(status.claudeSnippet)}: ${status.claudeSnippet.path} (snippet)`)
+        if (status.state) {
+          out.info(`  enabled: ${status.state.enabled}`)
+          out.info(`  mechanism: ${status.state.mechanism}`)
+          out.info(`  provider: ${status.state.provider ?? 'unknown'}`)
+          out.info(`  installedAt: ${status.state.installedAt}`)
+        } else {
+          out.info('  crew:state: missing')
+        }
+        out.info(`  ${tag(status.checkpoints.installed)}: ${status.checkpoints.path}`)
       }
 
       return { success: true, complete: status.complete, status }
@@ -501,6 +428,14 @@ export class CrewCommands extends PrjctCommandsBase {
         }
         if (typeof options.file === 'string' && options.file.length > 0) {
           const target = path.resolve(projectPath, options.file)
+          const rel = path.relative(projectPath, target)
+          const insideProject = !rel.startsWith('..') && !path.isAbsolute(rel)
+          if (insideProject) {
+            return failWith(
+              'prjct never writes files into the client repository. Pass an absolute path outside the project or omit --file to print to stdout.',
+              options
+            )
+          }
           await fs.mkdir(path.dirname(target), { recursive: true })
           await fs.writeFile(target, row.content, 'utf-8')
           if (options.md) console.log(`✓ exported to \`${options.file}\``)

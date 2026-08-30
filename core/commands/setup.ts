@@ -615,7 +615,7 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
   /**
    * The tail both `start()` and `setup()` run once the command router (and,
    * for `setup()`, global config) is installed: Codex/Antigravity skill
-   * surfaces, MCP servers, project agent surfaces, and the version stamp.
+   * surfaces, MCP servers, and the version stamp.
    * `codexSuccessLabel` is the one thing that differs between the two
    * flows' console output.
    */
@@ -629,7 +629,6 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
     await this.installAntigravitySurface(antigravityDetection.installed)
 
     await this.setupMcpServers()
-    await this.installProjectAgentSurfacesIfConfigured()
     await this.saveSetupStamp(
       activeProvider?.name ??
         (codexDetection.installed
@@ -649,31 +648,6 @@ margin:1.25rem 0;font-size:.875rem;color:#f87171}
       await editorsConfig.saveConfig(VERSION, installPath, provider)
     } catch (error) {
       console.log(`⚠️  Setup stamp failed (non-blocking): ${getErrorMessage(error)}`)
-    }
-  }
-
-  private async installProjectAgentSurfacesIfConfigured(): Promise<void> {
-    try {
-      const projectPath = process.cwd()
-      const isConfigured = await configManager.isConfigured(projectPath)
-      if (!isConfigured) return
-
-      const { writeProjectAgentSurfaces } = await import('../services/project-agent-surfaces')
-      const { detectInstalledAgents } = await import('../workflows/onboarding/detection')
-      const result = await writeProjectAgentSurfaces(projectPath, {
-        agents: await detectInstalledAgents(projectPath),
-        explicit: true,
-      })
-      if (result.prjctMd.action !== 'unchanged') console.log('✅ Project PRJCT.md ready')
-      if (result.agentsMd.action !== 'unchanged') console.log('✅ Project AGENTS.md ready')
-      if (result.claudeMd && result.claudeMd.action !== 'unchanged') {
-        console.log('✅ Project CLAUDE.md ready')
-      }
-      if (result.ideRules.length > 0) {
-        console.log(`✅ Project IDE rules ready: ${result.ideRules.join(', ')}`)
-      }
-    } catch (error) {
-      console.log(`⚠️  Project agent surface setup failed (non-blocking): ${getErrorMessage(error)}`)
     }
   }
 

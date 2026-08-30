@@ -2,19 +2,18 @@
  * Doctor auto-heal — Dynasty D6 / E3.
  *
  * `prjct doctor --fix` repairs dead hooks, multi-runtime wire gaps, and
- * project agent surfaces. Pure plan + thin apply (reuses install paths).
+ * portable skills. Pure plan + thin apply (reuses install paths).
+ * prjct never writes AGENTS.md / CLAUDE.md / PRJCT.md / IDE rules into the
+ * client repository; agent-facing context lives only in global config.
  */
 
 import { detectAgentRuntimes } from '../infrastructure/agent-runtime-registry'
-import configManager from '../infrastructure/config-manager'
 import { probeHarnessCoverage } from './harness-coverage'
-import { writeProjectAgentSurfaces } from './project-agent-surfaces'
 import { status as hookStatus, install as installHooks } from './settings-installer'
 
 export type HealActionId =
   | 'claude-hooks'
   | 'multi-runtime-wire'
-  | 'agent-surfaces'
   | 'portable-skills'
   | 'organic-board'
 
@@ -51,7 +50,6 @@ export function planDoctorHeal(input: {
   liveCount: number
   detectedCount: number
   organicPct: number
-  hasProject: boolean
   /** True when global Claude skill embeds project identity (poison). */
   skillPoisoned?: boolean
 }): HealPlan {
@@ -75,14 +73,6 @@ export function planDoctorHeal(input: {
         input.detectedCount === 0
           ? 'no runtimes detected'
           : `organic ${input.liveCount}/${input.detectedCount} (${input.organicPct}%)`,
-    },
-    {
-      id: 'agent-surfaces',
-      label: 'Refresh project AGENTS.md / adapters',
-      needed: input.hasProject,
-      reason: input.hasProject
-        ? 'explicit surface refresh (clean-repo opt-in)'
-        : 'no project — skip surfaces',
     },
     {
       id: 'portable-skills',
@@ -124,7 +114,6 @@ export async function applyDoctorHeal(
     })
 
   const coverageSnapshots = [await probeHarnessCoverage(projectPath).catch(() => null)]
-  const projectId = await configManager.getProjectId(projectPath).catch(() => null)
 
   const skillPoisoned = await (async () => {
     try {
@@ -146,13 +135,12 @@ export async function applyDoctorHeal(
     liveCount: coverage?.liveCount ?? 0,
     detectedCount: coverage?.detectedCount ?? 0,
     organicPct: coverage?.organicPct ?? 0,
-    hasProject: Boolean(projectId),
     skillPoisoned,
   })
 
-  // Computed once, reused by multi-runtime-wire and agent-surfaces below —
-  // both need "which runtimes are actually present" and detectAgentRuntimes
-  // does real filesystem probing, not worth calling twice in one heal pass.
+  // Computed once, reused by multi-runtime-wire below — it needs "which
+  // runtimes are actually present" and detectAgentRuntimes does real filesystem
+  // probing, not worth calling twice in one heal pass.
   const runtimeIdsCache: { value: string[] | null } = { value: null }
   async function detectedIds(): Promise<string[]> {
     if (!runtimeIdsCache.value) {
@@ -216,12 +204,6 @@ export async function applyDoctorHeal(
         }
         // Always ensure Claude hooks too when multi-runtime runs
         await installHooks()
-        applied.push(action.id)
-      } else if (action.id === 'agent-surfaces') {
-        // Same detection-gated CLAUDE.md rule as agents.ts/install.ts: only
-        // write it when Claude is actually present, never unconditionally.
-        const detected = await detectedIds()
-        await writeProjectAgentSurfaces(projectPath, { explicit: true, agents: detected })
         applied.push(action.id)
       } else if (action.id === 'organic-board') {
         coverageSnapshots.push(await probeHarnessCoverage(projectPath))

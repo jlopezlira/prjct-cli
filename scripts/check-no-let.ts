@@ -22,7 +22,15 @@ function repositorySourceFiles(): string[] {
   return result.stdout
     .toString()
     .split('\0')
-    .filter((file) => file.length > 0 && isJavaScriptOrTypeScript(file))
+    .filter(
+      (file) =>
+        file.length > 0 &&
+        isJavaScriptOrTypeScript(file) &&
+        // `git ls-files --cached` still lists a file whose deletion is not
+        // staged yet; reading it would throw ENOENT and take the whole gate
+        // down. A file that is gone has no source to scan.
+        fs.existsSync(path.join(ROOT, file))
+    )
 }
 
 function scanRepository(): MutableDeclaration[] {

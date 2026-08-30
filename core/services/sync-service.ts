@@ -40,7 +40,6 @@ import {
 } from './code-graph-artifact'
 import { repairContextQuality } from './context-quality-service'
 import context7Service from './context7-service'
-import { writeProjectAgentSurfaces } from './project-agent-surfaces'
 import { skillGenerator } from './skill-generator'
 import { emptyCommands, emptyGitData, emptyStack, emptyStats } from './sync/defaults'
 import { detectIncrementalChanges } from './sync/incremental'
@@ -178,7 +177,6 @@ class SyncService {
               result.checkpointsHandEditWarned ||
               result.teamHandEditWarned ||
               result.ghostDirsPurged.length > 0 ||
-              result.agentFilesRepaired.length > 0 ||
               result.clientPrjctJunkPurged.length > 0 ||
               result.errors.length > 0
             ) {
@@ -188,7 +186,6 @@ class SyncService {
                 checkpointsHandEditWarned: result.checkpointsHandEditWarned,
                 teamHandEditWarned: result.teamHandEditWarned,
                 ghostDirsPurged: result.ghostDirsPurged,
-                agentFilesRepaired: result.agentFilesRepaired,
                 ghostFilesIngested: result.ghostFilesIngested,
                 clientPrjctJunkPurged: result.clientPrjctJunkPurged,
                 errors: result.errors.length,
@@ -469,26 +466,6 @@ class SyncService {
         async () => {
           await commandInstaller.installGlobalConfig(activeProvider ?? undefined)
           await commandInstaller.syncCommands(activeProvider ?? undefined)
-        },
-        () => {}
-      )
-
-      floatPhase(
-        'install-agent-surfaces',
-        async () => {
-          // Never creates the FIRST PRJCT.md/AGENTS.md/CLAUDE.md (that still
-          // requires explicit `prjct agents doctor --fix` — clean-repo
-          // doctrine). But once a project has opted in, every sync now keeps
-          // that surface current and migrates any stale/legacy inline block
-          // to the pointer shape, so agents never read a drifted contract.
-          // CLAUDE.md specifically stays gated on actual detection (never
-          // forced on a project that doesn't use Claude) — re-detecting on
-          // every sync means it appears once Claude actually shows up on this
-          // machine/project, not just at whatever moment the surface was
-          // first adopted.
-          const { detectInstalledAgents } = await import('../workflows/onboarding/detection')
-          const agents = await detectInstalledAgents(this.projectPath).catch(() => [])
-          await writeProjectAgentSurfaces(this.projectPath, { refreshIfAdopted: true, agents })
         },
         () => {}
       )

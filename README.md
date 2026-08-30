@@ -146,7 +146,7 @@ generated markdown export to browse or hand-edit.
 Claude Code session                       prjct-cli
        |                                    |
        | SessionStart hook fires            |
-       | --------------------------------> |  self-heal CLAUDE.md
+       | --------------------------------> |  self-heal global agent config
        |                                    |  (opt-in: silent auto-update check)
        |                                    |
        | Lookup-first protocol kicks in:    |
@@ -185,14 +185,13 @@ It reports concrete support levels:
 | Level | What it means |
 |---|---|
 | `full` | prjct-maintained native hooks plus MCP/skills or equivalent deep integration. |
-| `good` | AGENTS.md plus MCP-capable runtime. |
-| `baseline` | Repo instructions plus `prjct <command> --md`; no native hooks assumed. |
-| `hosted` | Repo instructions are the portable layer; platform config may be manual. |
+| `good` | Global skill/MCP adapter plus `prjct <command> --md`. |
+| `baseline` | `prjct <command> --md` only; no native hooks assumed. |
+| `hosted` | Hosted platform config may be manual; use `prjct <command> --md`. |
 
 Run `prjct agents doctor --md` to see the current machine/project matrix for
 Claude Code, Codex, Gemini CLI, OpenCode, Qwen Code, Kimi Code CLI, Grok Build,
-Cursor, Pi, Cline/Roo-family agents, hosted agents, and future
-AGENTS.md/MCP clients.
+Cursor, Pi, Cline/Roo-family agents, hosted agents, and future MCP clients.
 
 Kimi Code CLI is `full`: native `[[hooks]]` entries in
 `~/.kimi-code/config.toml`, MCP servers in `~/.kimi-code/mcp.json`, and the
@@ -200,8 +199,9 @@ compact skill at `~/.agents/skills/prjct/SKILL.md` — all installed by
 `prjct install` when Kimi is detected (the legacy `~/.kimi/` directory remains
 a detection fallback only).
 
-Use `prjct agents doctor --fix` inside a prjct project to refresh the portable
-`AGENTS.md` surface and any repo-local IDE rule adapters prjct manages. The
+Use `prjct agents doctor --fix` inside a prjct project to repair the user's
+global agent wiring (hooks, MCP, skills). prjct never writes `AGENTS.md`,
+`CLAUDE.md`, `PRJCT.md`, or IDE rule files into the client repository. The
 command is idempotent and reports what changed.
 
 ## Harness intelligence
@@ -283,7 +283,7 @@ In Claude Code, ask naturally:
 Optional flags:
 ```bash
 prjct config set auto-update on    # silent self-update (1/hour throttled)
-prjct team --enforce               # pre-commit hook blocks commits without prjct-cli
+prjct team --required              # record the shared prjct-cli expectation (SQLite; writes no repo files)
 ```
 
 ## Inside Claude Code / Gemini CLI
@@ -296,7 +296,7 @@ p. performance 7                              # inspect dev+LLM efficiency
 p. ship                                       # commit, push, open PR
 ```
 
-Cursor uses its installed prjct router file; other agents use AGENTS.md, a native skill/MCP adapter, or `prjct <command> --md`.
+Cursor uses its installed prjct hooks/router file; other agents use a native skill/MCP adapter or `prjct <command> --md`.
 
 ### Harness verbs
 
@@ -360,7 +360,7 @@ Slots ship **empty** — the human or the agent fills them on demand.
 
 ## Hooks Adapter (opt-in) — Claude Code + Kimi Code CLI
 
-`prjct install` refreshes the universal project surface (`AGENTS.md`) when run inside a prjct project, writes the Claude Code hooks adapter to `~/.claude/settings.json`, writes the native Kimi Code CLI hooks adapter as `[[hooks]]` entries in `~/.kimi-code/config.toml` (marked with a `# prjct-managed` comment each — TOML forbids extra entry fields, and user entries or other tools' blocks stay byte-identical), and repairs detected Codex config in `~/.codex/config.toml` (prjct MCP + TUI `status_line`). Most of the 13 hook subcommands inject `additionalContext` (plain stdout text under Kimi, which appends it to context); two guard: the credential guard denies tool calls that would leak secrets, and the package guard denies unknown installs under strict packs. Kimi applies hook config on the next session (or after `/reload`). Other agents use the support level shown by `prjct agents doctor`.
+`prjct install` writes the Claude Code hooks adapter to `~/.claude/settings.json`, writes the native Kimi Code CLI hooks adapter as `[[hooks]]` entries in `~/.kimi-code/config.toml` (marked with a `# prjct-managed` comment each — TOML forbids extra entry fields, and user entries or other tools' blocks stay byte-identical), and repairs detected Codex config in `~/.codex/config.toml` (prjct MCP + TUI `status_line`). prjct never writes `AGENTS.md`, `CLAUDE.md`, `PRJCT.md`, or IDE rule files into the client repository. Most of the 13 hook subcommands inject `additionalContext` (plain stdout text under Kimi, which appends it to context); two guard: the credential guard denies tool calls that would leak secrets, and the package guard denies unknown installs under strict packs. Kimi applies hook config on the next session (or after `/reload`). Other agents use the support level shown by `prjct agents doctor`.
 
 | Event | Does | Kimi |
 |---|---|---|
@@ -402,7 +402,7 @@ The broker model: if you already have `linear`, `jira`, `posthog`, `gmail` MCPs 
 ```bash
 prjct start              First-time setup wizard (AI providers + commands)
 prjct init               Initialize project in current directory
-prjct install            Install agent surfaces, Claude hooks, Codex status line
+prjct install            Install global agent wiring: Claude hooks, MCP, Codex status line
 prjct uninstall          Complete system removal
 prjct sync               Sync project state, rebuild indexes
 prjct watch              Auto-sync on file changes
@@ -639,18 +639,17 @@ piped stdio (non-TTY), it adapts on every axis, with no flag:
 Full per-environment table: [docs/environments.md](./docs/environments.md).
 
 **What's the output in an OpenAI Codex sandbox?**
-Codex is detected by the `codex` CLI on PATH (context file `AGENTS.md`). The
-sandbox is non-interactive/non-TTY, so prjct-cli emits the same static, prompt-free
-status line as any agent; add `--md` for fully markdown-structured output.
+Codex is detected by the `codex` CLI on PATH. The sandbox is
+non-interactive/non-TTY, so prjct-cli emits the same static, prompt-free status
+line as any agent; add `--md` for fully markdown-structured output.
 
 **What does Codex get from prjct?**
-Four surfaces, all installed/healed automatically: a compact skill at
+Three global surfaces, all installed/healed automatically: a compact skill at
 `~/.codex/skills/prjct/SKILL.md` (kept under Codex's ~1KB skill cap), the
-prjct MCP server wired into `~/.codex/config.toml` (`prjct_*` tools), a Codex
-TUI `status_line` in that same config unless the user already set one, and a
-vendor-neutral routing block in the project's `AGENTS.md` written by
-`prjct init`. Codex has no lifecycle hooks, so AGENTS.md + MCP are its
-session-start context and live tool surface.
+prjct MCP server wired into `~/.codex/config.toml` (`prjct_*` tools), and a
+Codex TUI `status_line` in that same config unless the user already set one.
+Codex has no lifecycle hooks, so the skill + MCP are its session-start context
+and live tool surface. prjct never writes an `AGENTS.md` into the project.
 
 **How do I quickly find the local `.prjct/` directory?**
 It's in your **project repo root** (created by `prjct init` / first `prjct`

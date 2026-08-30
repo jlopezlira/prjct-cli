@@ -1,11 +1,10 @@
 /**
  * Team Enrollment Storage
  *
- * Single kv_store row at key `team:enrollment` per project. Source of
- * truth for `prjct team` enrollment state — `prjct team` writes here
- * first, then regenerates `.prjct/team.json` from the row as a derived
- * disk mirror (the pre-commit hook reads the mirror because it must
- * work BEFORE prjct is installed on a new contributor's machine).
+ * Single kv_store row at key `team:enrollment` per project. The ONLY
+ * copy of `prjct team` enrollment state — there is no `.prjct/team.json`
+ * mirror any more, because prjct writes nothing into the customer
+ * worktree and `legacy-crew-sweep` deletes a leftover mirror on sync.
  *
  * See spec a50b32d1 AC #1.
  */
@@ -40,18 +39,6 @@ class TeamEnrollmentStorage {
   clear(projectId: string): void {
     prjctDb.deleteDoc(projectId, TEAM_ENROLLMENT_KEY)
   }
-}
-
-/**
- * Canonical JSON serializer for byte-equality comparison between the
- * DB row and the on-disk mirror. Sorted keys, no whitespace beyond
- * what JSON.stringify produces. Used by `prjct team check`.
- */
-export function serializeCanonical(enrollment: TeamEnrollment): string {
-  const sortedKeys = Object.keys(enrollment).sort() as Array<keyof TeamEnrollment>
-  const ordered: Record<string, unknown> = {}
-  for (const k of sortedKeys) ordered[k] = enrollment[k]
-  return JSON.stringify(ordered)
 }
 
 export const teamEnrollmentStorage = new TeamEnrollmentStorage()

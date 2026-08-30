@@ -10,8 +10,8 @@ import {
   detectAgentRuntimes,
 } from '../infrastructure/agent-runtime-registry'
 import { formatHarnessSurfacesMarkdown } from '../infrastructure/harness-surfaces'
+import { applyDoctorHeal } from '../services/doctor-heal'
 import { probeHarnessCoverage, renderHarnessCoverageMd } from '../services/harness-coverage'
-import { writeProjectAgentSurfaces } from '../services/project-agent-surfaces'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
@@ -25,11 +25,9 @@ interface AgentsOptions extends MdOption {
 
 interface AgentRepairResult {
   success: true
-  prjctMd: string
-  agentsMd: string
-  /** null when Claude wasn't detected/selected and no CLAUDE.md already existed. */
-  claudeMd: string | null
-  ideRules: string[]
+  repoSurfaces: 'skipped'
+  globalWiring: string[]
+  errors: string[]
 }
 
 export class AgentsCommands extends PrjctCommandsBase {
@@ -56,7 +54,7 @@ export class AgentsCommands extends PrjctCommandsBase {
       }
 
       const statuses = await detectAgentRuntimes(projectPath)
-      const fixes = options.fix ? await repairAgentSurfaces(projectPath, options, statuses) : null
+      const fixes = options.fix ? await repairAgentSurfaces(projectPath, options) : null
       if (fixes && !isAgentRepairResult(fixes)) return fixes
 
       const coverage = await probeHarnessCoverage(projectPath)
@@ -70,11 +68,17 @@ export class AgentsCommands extends PrjctCommandsBase {
           `organic: ${coverage.liveCount}/${coverage.detectedCount} live (${coverage.organicPct}%) — ${coverage.summary}`
         )
       }
+      // A failed global repair must not exit 0 — `doctor --fix` already
+      // returns 1 when applyDoctorHeal reports errors (doctor-service.ts
+      // heal()), and CI cannot tell a no-op from a failure otherwise. The
+      // errors are printed above either way.
+      const healFailed = fixes !== null && fixes.errors.length > 0
       return {
-        success: true,
+        success: !healFailed,
         runtimes: statuses.length,
         detected: statuses.filter((status) => status.detected).length,
         fixed: Boolean(fixes),
+        healErrors: fixes === null ? 0 : fixes.errors.length,
         organicPct: coverage.organicPct,
         liveRuntimes: coverage.liveCount,
       }
@@ -86,24 +90,20 @@ export class AgentsCommands extends PrjctCommandsBase {
 
 async function repairAgentSurfaces(
   projectPath: string,
-  options: AgentsOptions,
-  statuses: AgentRuntimeStatus[]
+  options: AgentsOptions
 ): Promise<CommandResult | AgentRepairResult> {
   const guard = await requireProject(projectPath, options)
   if (!guard.ok) return guard.result
-  // The explicit opt-in path: `prjct agents` is the only way prjct writes a
-  // pointer into the repo (clean-repo doctrine). All automatic flows no-op.
-  // Reuses the SAME runtime detection this command already computes for its
-  // compatibility table — CLAUDE.md is only written when Claude is actually
-  // detected on this machine/project (or already had one), never blindly.
-  const detected = statuses.filter((status) => status.detected).map((status) => status.runtime.id)
-  const result = await writeProjectAgentSurfaces(projectPath, { explicit: true, agents: detected })
+
+  // prjct never writes AGENTS.md / CLAUDE.md / PRJCT.md / IDE rule files into
+  // the client's repository. `agents doctor --fix` repairs the user's global
+  // agent configuration (hooks, MCP, skills) exactly like `doctor --fix`.
+  const heal = await applyDoctorHeal(projectPath)
   return {
     success: true,
-    prjctMd: result.prjctMd.action,
-    agentsMd: result.agentsMd.action,
-    claudeMd: result.claudeMd?.action ?? null,
-    ideRules: result.ideRules,
+    repoSurfaces: 'skipped',
+    globalWiring: heal.applied,
+    errors: heal.errors,
   }
 }
 
@@ -112,10 +112,9 @@ function isAgentRepairResult(
 ): result is AgentRepairResult {
   return (
     result.success === true &&
-    typeof result.prjctMd === 'string' &&
-    typeof result.agentsMd === 'string' &&
-    (result.claudeMd === null || typeof result.claudeMd === 'string') &&
-    Array.isArray(result.ideRules)
+    result.repoSurfaces === 'skipped' &&
+    Array.isArray(result.globalWiring) &&
+    Array.isArray(result.errors)
   )
 }
 
@@ -152,10 +151,11 @@ function formatMarkdown(
       '',
       '## Repair',
       '',
-      `- PRJCT.md: ${fixes.prjctMd}`,
-      `- AGENTS.md: ${fixes.agentsMd}`,
-      `- CLAUDE.md: ${fixes.claudeMd ?? 'skipped (Claude not detected)'}`,
-      `- IDE rule adapters: ${fixes.ideRules.length > 0 ? fixes.ideRules.join(', ') : 'none needed'}`
+      '- Repo surfaces: skipped (prjct never writes AGENTS.md / CLAUDE.md / PRJCT.md / IDE rules into the client repository)',
+      `- Global wiring repaired: ${fixes.globalWiring.length > 0 ? fixes.globalWiring.join(', ') : 'nothing needed'}`,
+      ...(fixes.errors.length > 0
+        ? [`- Errors: ${fixes.errors.map((e) => `\`${e}\``).join(', ')}`]
+        : [])
     )
   }
 
@@ -191,10 +191,8 @@ function formatText(
 
   if (fixes?.success) {
     lines.push(
-      `repair: PRJCT.md ${fixes.prjctMd}; AGENTS.md ${fixes.agentsMd}; CLAUDE.md ${fixes.claudeMd ?? 'skipped'}; adapters ${
-        fixes.ideRules.length > 0 ? fixes.ideRules.join(', ') : 'none needed'
-      }`,
-      ''
+      `repair: repo surfaces skipped; global wiring [${fixes.globalWiring.join(', ') || 'nothing needed'}]`,
+      ...(fixes.errors.length > 0 ? [`errors: ${fixes.errors.join('; ')}`, ''] : [''])
     )
   }
 

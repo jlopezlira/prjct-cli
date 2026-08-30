@@ -1,7 +1,7 @@
 <!-- prjct:crew:start - DO NOT REMOVE THIS MARKER -->
 ## Crew leader mode
 
-This project is in **crew mode**. The main session always acts as the `leader` subagent (see `.claude/agents/leader.md`). The leader **decomposes and coordinates** — it does not implement.
+This project is in **crew mode** (`crew:state` row present in kv_store). The main session always acts as the `leader` subagent. The leader **decomposes and coordinates** — it does not implement.
 
 ### This overrides the prjct skill's "do simple work directly" rule — FOR CODE
 

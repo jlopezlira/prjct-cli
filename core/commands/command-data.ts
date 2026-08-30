@@ -118,7 +118,7 @@ export const COMMANDS: CommandMeta[] = [
     surface: 'support',
     routing: { group: 'planning', method: 'quickstart' },
     optionSchema: { strings: ['pack'] },
-    description: 'One-shot init + packs + agent surfaces (≈60s install)',
+    description: 'One-shot init + packs + global agent wiring (≈60s install)',
     usage: {
       claude: 'p. quickstart',
       terminal: 'prjct quickstart [--pack code,daily]',
@@ -392,7 +392,7 @@ export const COMMANDS: CommandMeta[] = [
     routing: { group: 'install', method: 'install' },
     routingMode: 'bin-only',
     optionSchema: {},
-    description: 'Install universal agent surfaces, Claude hooks, and Codex config',
+    description: 'Install global agent wiring: Claude hooks, MCP, skills, Codex config',
     usage: {
       claude: 'p. install',
       terminal: 'prjct install',
@@ -608,9 +608,9 @@ export const COMMANDS: CommandMeta[] = [
     isOptional: true,
     features: [
       'Derives support levels from the runtime registry',
-      'Reports AGENTS.md, MCP, skills, hooks, ACP, and project-rule support',
+      'Reports MCP, skills, hooks, and ACP support per runtime',
       'surfaces: benchmark-tier harness map (hooks/MCP/skills wire status)',
-      'doctor --fix refreshes repo-local agent surfaces when run inside a project',
+      'doctor --fix repairs global agent wiring; prjct never writes files into the repo',
       'Use this to audit claims like "works with Codex/Gemini/OpenCode/Cursor/Grok"',
     ],
   },
@@ -1054,9 +1054,9 @@ export const COMMANDS: CommandMeta[] = [
     group: 'setup',
     surface: 'support',
     routing: { group: 'team', method: 'team' },
-    optionSchema: { booleans: ['required', 'enforce'], strings: ['minVersion'] },
+    optionSchema: { booleans: ['required'], strings: ['minVersion'] },
     description:
-      'Enroll this repo in prjct team mode — commits .prjct/team.json + .claude/CLAUDE.md so teammates pick up shared expectations',
+      'Enroll this repo in prjct team mode — records the shared expectation in project SQLite; writes nothing to the repository',
     usage: {
       claude: 'p. team',
       terminal: 'prjct team [--required] [--min-version <semver>]',
@@ -1066,10 +1066,10 @@ export const COMMANDS: CommandMeta[] = [
     hasTemplate: false,
     requiresProject: true,
     features: [
-      'Writes .prjct/team.json with required/minVersion config',
-      'Adds prjct context block to .claude/CLAUDE.md (per-project)',
-      'Stages both files for the next commit (does NOT commit)',
-      'Teammates clone repo + install prjct → ready to go',
+      'Records required/minVersion in project SQLite (team:enrollment)',
+      'Writes no files into the client repository',
+      '`prjct team check` reports the stored enrollment',
+      'Teammates clone repo + install prjct → run `prjct team` in their clone',
     ],
   },
   {

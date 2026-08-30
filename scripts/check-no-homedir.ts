@@ -25,7 +25,10 @@ function trackedProductionFiles(): string[] {
         file.startsWith('core/') &&
         !file.startsWith('core/__tests__/') &&
         (file.endsWith('.ts') || file.endsWith('.js')) &&
-        !ALLOWLIST.has(file)
+        !ALLOWLIST.has(file) &&
+        // Index entries survive an unstaged deletion; skip what is gone from
+        // the worktree so the gate reports violations instead of ENOENT.
+        fs.existsSync(path.join(ROOT, file))
     )
 }
 

@@ -13,15 +13,11 @@ import { stripCrewModelPin } from '../../commands/crew'
 const FRONTMATTER = '---\nname: x\nmodel: sonnet\ncolor: blue\n---\n\nbody\n'
 
 describe('crew install strips the model pin', () => {
-  const dests = [
-    '.claude/agents/leader.md',
-    '.claude/agents/implementer.md',
-    '.claude/agents/reviewer.md',
-  ] as const
+  const roles = ['leader', 'implementer', 'reviewer'] as const
 
-  for (const dest of dests) {
-    it(`removes the model: line from ${dest}`, () => {
-      const out = stripCrewModelPin(FRONTMATTER, dest)
+  for (const role of roles) {
+    it(`removes the model: line from the ${role} template`, () => {
+      const out = stripCrewModelPin(FRONTMATTER, role)
       expect(out).not.toContain('model:')
       // Everything else in the frontmatter survives.
       expect(out).toContain('name: x')
@@ -33,11 +29,11 @@ describe('crew install strips the model pin', () => {
 
   it('is a no-op for a template with no model: line', () => {
     const tpl = '---\nname: leader\n---\n'
-    expect(stripCrewModelPin(tpl, '.claude/agents/leader.md')).toBe(tpl)
+    expect(stripCrewModelPin(tpl, 'leader')).toBe(tpl)
   })
 
-  it('leaves files not mapped to a crew role untouched', () => {
+  it('leaves a name mapped to no crew role untouched', () => {
     const tpl = '---\nmodel: keep\n---\n'
-    expect(stripCrewModelPin(tpl, '.claude/agents/other.md')).toBe(tpl)
+    expect(stripCrewModelPin(tpl, 'other')).toBe(tpl)
   })
 })

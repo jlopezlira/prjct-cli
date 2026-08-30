@@ -108,7 +108,8 @@ describe('skill generation invariants — the SSOT the SKILL.md twin is built fr
   it('reference reconciles crew mode so the leader, not the main session, owns code work', () => {
     const ref = buildPrjctSkillReference()
     expect(ref).toContain('Crew mode reconciliation')
-    expect(ref).toContain('.claude/agents/leader.md')
+    expect(ref).toContain('crew:state')
+    expect(ref).not.toContain('.claude/agents/leader.md')
   })
 
   it('the lean SKILL.md body points at the reference instead of inlining it', () => {

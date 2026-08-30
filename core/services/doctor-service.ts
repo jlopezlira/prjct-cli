@@ -299,7 +299,35 @@ class DoctorService {
     // Claude Code hooks (the capture/apply loop runs through them)
     checks.push(await this.checkClaudeHooks())
 
+    // Crew files an older prjct left in the worktree
+    checks.push(await this.checkLegacyRepoCrewFiles())
+
     return checks
+  }
+
+  /**
+   * Report-only: prjct will not delete from a repo it does not own, so a
+   * leftover crew file is named here and removed by the user. See
+   * `legacy-repo-crew-scan` for why detection is narrow.
+   */
+  private async checkLegacyRepoCrewFiles(): Promise<CheckResult> {
+    try {
+      const { scanLegacyRepoCrewFiles, formatLegacyRepoCrewLine } = await import(
+        './legacy-repo-crew-scan'
+      )
+      const scan = await scanLegacyRepoCrewFiles(this.projectPath)
+      const line = formatLegacyRepoCrewLine(scan)
+      if (line === null) {
+        return { name: 'legacy crew files', status: 'ok', message: 'none in the worktree' }
+      }
+      return { name: 'legacy crew files', status: 'warn', message: line }
+    } catch (error) {
+      return {
+        name: 'legacy crew files',
+        status: 'warn',
+        message: `scan failed: ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
   }
 
   private async checkClaudeHooks(): Promise<CheckResult> {
