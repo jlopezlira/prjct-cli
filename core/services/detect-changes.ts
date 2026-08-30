@@ -152,16 +152,22 @@ async function loadHunkLines(
   const base = await resolveDiffBase(projectPath, source)
   if (!base) return new Map()
 
+  // Pin the path prefixes. `diff.mnemonicPrefix` rewrites them per source
+  // (`c/`, `i/`, `w/`, `o/`) and `diff.noprefix` drops them entirely, so a
+  // user's git config would otherwise decide whether the parser recognizes a
+  // single path — silently turning every file into the "no hunk data" branch.
+  const PIN_PREFIX = ['--src-prefix=a/', '--dst-prefix=b/']
   const args =
     source === 'committed'
-      ? ['diff', '-U0', `${base}..HEAD`, '--', ...files]
-      : ['diff', '-U0', 'HEAD', '--', ...files]
+      ? ['diff', '-U0', ...PIN_PREFIX, `${base}..HEAD`, '--', ...files]
+      : ['diff', '-U0', ...PIN_PREFIX, 'HEAD', '--', ...files]
 
   const diff = (await safeGit(projectPath, args)) ?? ''
   // Also staged for working-tree
   const staged =
     source !== 'committed'
-      ? ((await safeGit(projectPath, ['diff', '-U0', '--cached', '--', ...files])) ?? '')
+      ? ((await safeGit(projectPath, ['diff', '-U0', ...PIN_PREFIX, '--cached', '--', ...files])) ??
+        '')
       : ''
   const map = parseChangedLinesFromUnifiedDiff(`${diff}\n${staged}`)
   return map
@@ -175,9 +181,13 @@ export function symbolsTouchedByHunks(
 ): string[] {
   const all = symbolsInFile(projectId, file)
   if (all.length === 0) return []
-  if (!changedLines || changedLines.size === 0) {
-    return all.slice(0, 12).map((s) => s.name)
-  }
+  // No hunk data at all (unreadable diff, file outside the slice) — stay
+  // conservative and assume the file moved. An EMPTY set is different: the
+  // hunks were read and carried no added line, so no surviving symbol body
+  // changed. Collapsing the two used to report 12 arbitrary symbols as
+  // touched for every pure deletion.
+  if (!changedLines) return all.slice(0, 12).map((s) => s.name)
+  if (changedLines.size === 0) return []
   const lines = [...changedLines].sort((a, b) => a - b)
   const names = new Set<string>()
   for (const line of lines) {
@@ -199,12 +209,15 @@ const CRITICAL_PATH =
   /(?:^|\/)(?:auth|security|crypto|billing|payment|migrate|schema|migrations?)(?:\/|$)/i
 const HIGH_PATH = /(?:^|\/)(?:storage|database|db|sync|daemon|mcp|hooks?|session)(?:\/|$)/i
 
+const RISK_RANK: Record<ChangeRisk, number> = { low: 0, medium: 1, high: 2, critical: 3 }
+
 function classifyRisk(
   file: string,
   fanIn: number,
   importerCount: number,
   hasSymbols: boolean,
-  hunkSymbolCount: number
+  hunkSymbolCount: number,
+  deletionOnly: boolean
 ): { risk: ChangeRisk; reasons: string[] } {
   const reasons: string[] = []
   const pathRisk: ChangeRisk = CRITICAL_PATH.test(file)
@@ -244,9 +257,18 @@ function classifyRisk(
     reasons.push('leaf change (no graph neighbors)')
   }
 
-  const riskRank: Record<ChangeRisk, number> = { low: 0, medium: 1, high: 2, critical: 3 }
-  const risk = [pathRisk, fanRisk, importerRisk].reduce((highest, candidate) =>
-    riskRank[candidate] > riskRank[highest] ? candidate : highest
+  // Reach (fan-in, importers) answers "how much depends on this file" — a fair
+  // proxy while a surviving symbol is being rewritten, but not for a hunk that
+  // only removes code. Either the removed symbol had no consumers, so nothing
+  // downstream moves, or it had some and the build fails at once: loud and
+  // deterministic, not latent structural risk. Path risk is NOT capped —
+  // deleting from an auth/billing surface still deserves eyes.
+  if (deletionOnly) reasons.push('deletion-only hunks (reach capped at medium)')
+  const capReach = (candidate: ChangeRisk): ChangeRisk =>
+    deletionOnly && RISK_RANK[candidate] > RISK_RANK.medium ? 'medium' : candidate
+
+  const risk = [pathRisk, capReach(fanRisk), capReach(importerRisk)].reduce((highest, candidate) =>
+    RISK_RANK[candidate] > RISK_RANK[highest] ? candidate : highest
   )
   if (reasons.length === 0) reasons.push('isolated or low connectivity')
   return { risk, reasons }
@@ -314,13 +336,18 @@ export async function detectChanges(
   for (const file of changedFiles) {
     const importers = importGraph?.reverse[file] ?? []
     const fanIn = hasSymbols ? fileFanIn(projectId, file) : 0
-    const touched = hasSymbols ? symbolsTouchedByHunks(projectId, file, hunkMap.get(file)) : []
+    const hunkLines = hunkMap.get(file)
+    const touched = hasSymbols ? symbolsTouchedByHunks(projectId, file, hunkLines) : []
+    // Present in the hunk map with no added line = every hunk was a deletion.
+    // A file absent from the map has no diff data, which is not the same thing.
+    const deletionOnly = hunkLines !== undefined && hunkLines.size === 0
     const { risk, reasons } = classifyRisk(
       file,
       fanIn,
       importers.length,
       touched.length > 0 || (hasSymbols && symbolsInFile(projectId, file).length > 0),
-      touched.length
+      touched.length,
+      deletionOnly
     )
     summary[risk]++
     changes.push({

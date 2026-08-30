@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.13.0] - 2026-08-30
+
+### Added
+- pin git diff prefixes so hunk analysis survives diff.mnemonicPrefix, and cap reach-derived risk for deletion-only hunks
+
 ## [4.12.0] - 2026-08-30
 
 ### Added
