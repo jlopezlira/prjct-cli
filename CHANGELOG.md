@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.15.0] - 2026-08-31
+
+### Changed
+- re-release of 4.14.0 under the intended version number — no code changes
+
 ## [4.14.0] - 2026-08-31
 
 ### Added
