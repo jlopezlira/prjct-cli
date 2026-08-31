@@ -37,14 +37,18 @@ export function getKimiMcpConfigPaths(): string[] {
 }
 
 /**
- * Resolve the mcp.json to write to: `~/.kimi-code/mcp.json` when that dir
- * exists (or when neither does — a fresh install), the legacy
- * `~/.kimi/mcp.json` only when it is the sole Kimi home present.
+ * Resolve the Kimi home to write to: `~/.kimi-code` when that dir exists (or
+ * when neither does — a fresh install), the legacy `~/.kimi` only when it is
+ * the sole Kimi home present. Shared with the tui.toml wiring (kimi-tui.ts).
  */
-export function getKimiMcpConfigPath(): string {
+export function getKimiHomeDir(): string {
   const [kimiCodeDir, legacyDir] = kimiHomeDirs()
-  const dir = existsSync(legacyDir) && !existsSync(kimiCodeDir) ? legacyDir : kimiCodeDir
-  return path.join(dir, 'mcp.json')
+  return existsSync(legacyDir) && !existsSync(kimiCodeDir) ? legacyDir : kimiCodeDir
+}
+
+/** The mcp.json inside the resolved Kimi home. */
+export function getKimiMcpConfigPath(): string {
+  return path.join(getKimiHomeDir(), 'mcp.json')
 }
 
 /**

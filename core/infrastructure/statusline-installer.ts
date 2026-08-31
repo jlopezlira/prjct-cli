@@ -33,18 +33,14 @@ async function ensureStatusLineSettings(
 }
 
 /**
- * Install status line script with version check
- * Copies modular statusline from assets/ to ~/.prjct-cli/statusline/
- * Includes: statusline.sh, lib/, components/, themes/, config.json
- * Creates symlink at ~/.claude/prjct-statusline.sh
- * Updates CLI_VERSION in the script
+ * Install the modular statusline assets into ~/.prjct-cli/statusline/
+ * (statusline.sh, lib/, components/, themes/, config.json) with a version
+ * check. Provider-neutral — no ~/.claude side effects — so any rig wiring
+ * (Claude symlink, Kimi tui.toml command) can guarantee its target exists.
+ * Returns the installed script path, or null when installation failed.
  */
-export async function installStatusLine(): Promise<void> {
+export async function installStatusLineAssets(): Promise<string | null> {
   try {
-    const claudeDir = resolveUserPath('.claude')
-    const settingsPath = path.join(claudeDir, 'settings.json')
-    const claudeStatusLinePath = path.join(claudeDir, 'prjct-statusline.sh')
-
     // Target location for the actual script
     const prjctStatusLineDir = pathManager.getStatusLinePath()
     const prjctStatusLinePath = path.join(prjctStatusLineDir, 'statusline.sh')
@@ -61,9 +57,6 @@ export async function installStatusLine(): Promise<void> {
     const sourceComponentsDir = path.join(assetsDir, 'components')
     const sourceConfigPath = path.join(assetsDir, 'default-config.json')
 
-    if (!(await fileExists(claudeDir))) {
-      await fs.mkdir(claudeDir, { recursive: true })
-    }
     if (!(await fileExists(prjctStatusLineDir))) {
       await fs.mkdir(prjctStatusLineDir, { recursive: true })
     }
@@ -97,9 +90,7 @@ export async function installStatusLine(): Promise<void> {
         await installStatusLineModules(sourceLibDir, prjctLibDir)
         await installStatusLineModules(sourceComponentsDir, prjctComponentsDir)
 
-        await ensureStatusLineSymlink(claudeStatusLinePath, prjctStatusLinePath)
-        await ensureStatusLineSettings(settingsPath, claudeStatusLinePath)
-        return
+        return prjctStatusLinePath
       }
       // else: Script exists WITHOUT CLI_VERSION - fall through to replace with new version
     }
@@ -134,9 +125,11 @@ export async function installStatusLine(): Promise<void> {
       if (!(await fileExists(prjctConfigPath)) && (await fileExists(sourceConfigPath))) {
         await fs.copyFile(sourceConfigPath, prjctConfigPath)
       }
-    } else {
-      // Fallback: create simple script inline
-      const scriptContent = `#!/bin/bash
+      return prjctStatusLinePath
+    }
+
+    // Fallback: create simple script inline
+    const scriptContent = `#!/bin/bash
 # prjct Status Line for Claude Code
 CLI_VERSION="${VERSION}"
 input=$(cat)
@@ -157,11 +150,36 @@ if [ -f "$CONFIG" ]; then
 fi
 echo "prjct"
 `
-      await fs.writeFile(prjctStatusLinePath, scriptContent, { mode: 0o755 })
+    await fs.writeFile(prjctStatusLinePath, scriptContent, { mode: 0o755 })
+    return prjctStatusLinePath
+  } catch (error) {
+    // Silently fail if directories don't exist
+    if (!isNotFoundError(error)) {
+      // Log unexpected errors but don't crash - status line is optional
+      log.warn(`Status line warning: ${getErrorMessage(error)}`)
+    }
+    return null
+  }
+}
+
+/**
+ * Install the statusline for Claude Code: shared assets, a symlink at
+ * ~/.claude/prjct-statusline.sh, and the settings.json statusLine entry.
+ */
+export async function installStatusLine(): Promise<void> {
+  try {
+    const claudeDir = resolveUserPath('.claude')
+    const settingsPath = path.join(claudeDir, 'settings.json')
+    const claudeStatusLinePath = path.join(claudeDir, 'prjct-statusline.sh')
+
+    if (!(await fileExists(claudeDir))) {
+      await fs.mkdir(claudeDir, { recursive: true })
     }
 
-    // Create symlink and configure settings
-    await ensureStatusLineSymlink(claudeStatusLinePath, prjctStatusLinePath)
+    const scriptPath = await installStatusLineAssets()
+    if (scriptPath === null) return
+
+    await ensureStatusLineSymlink(claudeStatusLinePath, scriptPath)
     await ensureStatusLineSettings(settingsPath, claudeStatusLinePath)
   } catch (error) {
     // Silently fail if directories don't exist

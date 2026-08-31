@@ -97,5 +97,23 @@ export async function runSelfHeal(currentVersion: string): Promise<void> {
     // best-effort
   }
 
+  // Same refresh for Kimi's footer command — but only when a Kimi home
+  // already exists (never create ~/.kimi-code for non-Kimi users), and only
+  // after the shared assets are guaranteed: the Claude installStatusLine
+  // above is the legacy bash-3.2 variant and does not install the modular
+  // script the Kimi command points at.
+  try {
+    const { getKimiHomeDir } = await import('../utils/kimi-mcp')
+    if (fs.existsSync(getKimiHomeDir())) {
+      const { installStatusLineAssets } = await import('./statusline-installer')
+      if ((await installStatusLineAssets()) !== null) {
+        const { ensureKimiStatusLine } = await import('../utils/kimi-tui')
+        await ensureKimiStatusLine()
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
   writeStamp(currentVersion)
 }

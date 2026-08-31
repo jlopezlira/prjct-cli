@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.14.0] - 2026-08-31
+
+### Added
+- statusline for every rig: Kimi Code [status_line].command install with provider-neutral asset installer, flat-payload parsing, and the tab-collapse fix that restored the weekly limit segment
+
 ## [4.13.0] - 2026-08-30
 
 ### Added
