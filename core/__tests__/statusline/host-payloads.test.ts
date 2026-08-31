@@ -61,6 +61,37 @@ describe('prjct statusline host payloads', () => {
     expect(output).toContain('59%')
   })
 
+  test('empty model and cwd strings fall back to defaults instead of shifting fields', () => {
+    // "" passes through jq's // (only null/false trigger the alternative), so
+    // without the sentinel these emitted empty leading @tsv fields and every
+    // later field shifted into the wrong variable.
+    const output = runStatusline({
+      model: '',
+      cwd: '',
+      contextTokens: 5,
+      maxContextTokens: 10,
+    })
+
+    expect(output).toContain('~')
+    expect(output).not.toContain('- ')
+    // 5/10 = 50% context — proves the numeric fields stayed in their slots.
+    expect(output).toContain('50%')
+  })
+
+  test('renders a limit that has resets_at but no percent without shifting the other window', () => {
+    const output = runStatusline({
+      model: { display_name: 'Claude' },
+      workspace: { current_dir: fixture.home },
+      rate_limits: {
+        five_hour: { resets_at: '2026-09-01T00:00:00Z' },
+        weekly: { used_percentage: 23 },
+      },
+    })
+
+    expect(output).toContain('○ 7d 23%')
+    expect(output).not.toContain('5h')
+  })
+
   test('keeps weekly limit in its slot when resets_at is absent (tab-collapse regression)', () => {
     const output = runStatusline({
       model: { display_name: 'Claude' },

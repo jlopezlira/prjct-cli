@@ -81,6 +81,17 @@ describe('ensureKimiStatusLine', () => {
     expect(await fs.readFile(fixture.configPath, 'utf-8')).toBe(user)
   })
 
+  it('recognizes TOML-valid header spellings — appending would duplicate the table', async () => {
+    for (const header of ['[ status_line ]', '["status_line"]']) {
+      const user = `${header}\nitems = ["mode"]\n`
+      await fs.writeFile(fixture.configPath, user, 'utf-8')
+
+      const r = await ensureKimiStatusLine(fixture.configPath)
+      expect(r.changed).toBe(false)
+      expect(await fs.readFile(fixture.configPath, 'utf-8')).toBe(user)
+    }
+  })
+
   it('is idempotent — second run reports unchanged', async () => {
     await ensureKimiStatusLine(fixture.configPath)
     const first = await fs.readFile(fixture.configPath, 'utf-8')

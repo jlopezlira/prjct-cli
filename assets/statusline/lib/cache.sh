@@ -107,8 +107,8 @@ parse_stdin() {
     # Kimi Code'\''s flat snapshot ({model: "...", cwd, contextTokens,
     # maxContextTokens} — see [status_line].command in ~/.kimi-code/tui.toml).
     [
-      ((.model | if type == "object" then .display_name else . end) // "Claude"),
-      (.workspace.current_dir // .cwd // "~"),
+      ((.model | if type == "object" then .display_name else . end) // "Claude" | blank_to_dash),
+      (.workspace.current_dir // .cwd // "~" | blank_to_dash),
       (.cost.total_lines_added // 0),
       (.cost.total_lines_removed // 0),
       (.context_window.context_window_size // .maxContextTokens // 200000),
@@ -125,10 +125,14 @@ parse_stdin() {
   # Parse tab-separated values (save/restore IFS to avoid breaking associative arrays)
   # Tab is IFS whitespace, so bash collapses runs of tabs — an empty middle
   # field would shift every later field one slot left. The jq side emits "-"
-  # for blank limit fields (blank_to_dash); map the sentinel back after read.
+  # for every field that can be blank (blank_to_dash: model/cwd when "" in the
+  # payload, plus the four limit fields); map the sentinel back after read so
+  # the bash defaults below apply.
   local old_ifs="$IFS"
   IFS=$'\t' read -r MODEL CWD ADDED REMOVED CTX_SIZE INPUT_TOKENS CACHE_CREATE CACHE_READ RATE_LIMIT_5H_PERCENT RATE_LIMIT_5H_RESET RATE_LIMIT_WEEKLY_PERCENT RATE_LIMIT_WEEKLY_RESET <<< "$parsed"
   IFS="$old_ifs"
+  [[ "$MODEL" == "-" ]] && MODEL=""
+  [[ "$CWD" == "-" ]] && CWD=""
   [[ "$RATE_LIMIT_5H_PERCENT" == "-" ]] && RATE_LIMIT_5H_PERCENT=""
   [[ "$RATE_LIMIT_5H_RESET" == "-" ]] && RATE_LIMIT_5H_RESET=""
   [[ "$RATE_LIMIT_WEEKLY_PERCENT" == "-" ]] && RATE_LIMIT_WEEKLY_PERCENT=""

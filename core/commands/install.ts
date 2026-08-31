@@ -10,6 +10,7 @@
 import { detectAgentRuntimes } from '../infrastructure/agent-runtime-registry'
 import { installGrokSkill } from '../infrastructure/grok-skill'
 import { installPiSkill } from '../infrastructure/pi-skill'
+import { installStatusLineAssets } from '../infrastructure/statusline-installer'
 import { probeHarnessCoverage, renderHarnessCoverageMd } from '../services/harness-coverage'
 import {
   status as hookStatus,
@@ -63,7 +64,12 @@ export class InstallCommands extends PrjctCommandsBase {
       const kimiDetected = detected.some((runtime) => runtime.runtime.id === 'kimi-cli')
       const kimiConfig = kimiDetected ? await ensureKimiMcpServer() : null
       const kimiHooks = kimiDetected ? await installKimiHooks() : null
-      const kimiStatusLine = kimiDetected ? await ensureKimiStatusLine() : null
+      // Assets first: tui.toml must never carry a command whose script this
+      // install path did not guarantee (Kimi-only users never run Claude setup).
+      const kimiStatusLine =
+        kimiDetected && (await installStatusLineAssets()) !== null
+          ? await ensureKimiStatusLine()
+          : null
       const grokDetected = detected.some((runtime) => runtime.runtime.id === 'grok')
       const grokConfig = grokDetected ? await ensureGrokMcpServer() : null
       const grokSkill = grokDetected ? await installGrokSkill() : null

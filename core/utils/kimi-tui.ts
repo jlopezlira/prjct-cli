@@ -41,10 +41,13 @@ export function buildKimiStatusLineToml(command: string = getPrjctStatusLineScri
 
 /**
  * True when tui.toml already carries an ACTIVE `[status_line]` section.
- * Kimi ships a commented-out `# [status_line]` template — that does not count.
+ * Kimi ships a commented-out `# [status_line]` template — that does not
+ * count. TOML permits whitespace around and quoting of the key
+ * (`[ status_line ]`, `["status_line"]`); missing those would append a
+ * duplicate table and invalidate the whole file.
  */
 function hasKimiStatusLine(existing: string): boolean {
-  return /^\s*\[status_line\]/m.test(existing)
+  return /^\s*\[\s*"?status_line"?\s*\]/m.test(existing)
 }
 
 /**
