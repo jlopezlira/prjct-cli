@@ -97,5 +97,18 @@ export async function runSelfHeal(currentVersion: string): Promise<void> {
     // best-effort
   }
 
+  // Same refresh for Kimi's footer command — but only when a Kimi home
+  // already exists; self-heal must never create ~/.kimi-code for non-Kimi
+  // users.
+  try {
+    const { getKimiHomeDir } = await import('../utils/kimi-mcp')
+    if (fs.existsSync(getKimiHomeDir())) {
+      const { ensureKimiStatusLine } = await import('../utils/kimi-tui')
+      await ensureKimiStatusLine()
+    }
+  } catch {
+    // best-effort
+  }
+
   writeStamp(currentVersion)
 }

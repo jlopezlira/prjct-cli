@@ -28,6 +28,7 @@ import { ensureGrokMcpServer } from '../utils/grok-mcp'
 import { installGrokPlugin } from '../utils/grok-plugin'
 import { installKimiHooks, uninstallKimiHooks } from '../utils/kimi-hooks'
 import { ensureKimiMcpServer, uninstallKimiMcpServer } from '../utils/kimi-mcp'
+import { ensureKimiStatusLine } from '../utils/kimi-tui'
 import { failFromError, failHard } from '../utils/md-aware'
 import { ensureOpenCodeMcpServer } from '../utils/opencode-mcp'
 import out from '../utils/output'
@@ -62,6 +63,7 @@ export class InstallCommands extends PrjctCommandsBase {
       const kimiDetected = detected.some((runtime) => runtime.runtime.id === 'kimi-cli')
       const kimiConfig = kimiDetected ? await ensureKimiMcpServer() : null
       const kimiHooks = kimiDetected ? await installKimiHooks() : null
+      const kimiStatusLine = kimiDetected ? await ensureKimiStatusLine() : null
       const grokDetected = detected.some((runtime) => runtime.runtime.id === 'grok')
       const grokConfig = grokDetected ? await ensureGrokMcpServer() : null
       const grokSkill = grokDetected ? await installGrokSkill() : null
@@ -135,6 +137,11 @@ export class InstallCommands extends PrjctCommandsBase {
               : []),
             ...(kimiConfig
               ? [`- Kimi config: ${kimiConfig.changed ? 'updated' : 'already ready'}`]
+              : []),
+            ...(kimiStatusLine
+              ? [
+                  `- Kimi status line: ${kimiStatusLine.changed ? 'installed' : 'already configured'}`,
+                ]
               : []),
             ...(kimiHooks
               ? [
@@ -227,6 +234,11 @@ export class InstallCommands extends PrjctCommandsBase {
         }
         if (kimiConfig) {
           out.info(`Kimi config: ${kimiConfig.changed ? 'updated' : 'already ready'}`)
+        }
+        if (kimiStatusLine) {
+          out.info(
+            `Kimi status line: ${kimiStatusLine.changed ? 'installed' : 'already configured'}`
+          )
         }
         if (kimiHooks) {
           out.info(
@@ -324,6 +336,12 @@ export class InstallCommands extends PrjctCommandsBase {
           ? {
               path: kimiConfig.path,
               changed: kimiConfig.changed,
+            }
+          : null,
+        kimiStatusLine: kimiStatusLine
+          ? {
+              path: kimiStatusLine.path,
+              changed: kimiStatusLine.changed,
             }
           : null,
         kimiHooks: kimiHooks
