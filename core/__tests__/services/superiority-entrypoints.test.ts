@@ -302,6 +302,10 @@ describe('ShippingCommands.ship entry-point gates', () => {
     const blocked = await ship.ship('land large change', fixture.projectPath, {
       md: true,
       skipHooks: true,
+      // Answer the first-step contradictory-review question so this test
+      // reaches the gate it is actually about. Declining is a separate consent
+      // from --no-judgment-gate and is never implied by it.
+      intent: 'review-skip',
       noJudgmentGate: true,
       forcePressure: true,
       allowNewDeps: true,
@@ -313,6 +317,7 @@ describe('ShippingCommands.ship entry-point gates', () => {
     const withGeom = await ship.ship('land large change', fixture.projectPath, {
       md: true,
       skipHooks: true,
+      intent: 'review-skip',
       noJudgmentGate: true,
       forcePressure: true,
       allowNewDeps: true,

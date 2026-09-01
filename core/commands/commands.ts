@@ -265,7 +265,15 @@ class PrjctCommands {
     options: {
       md?: boolean
       skipHooks?: boolean
-      intent?: 'register-only' | 'seed-code-workflow' | 'proceed'
+      intent?:
+        | 'register-only'
+        | 'seed-code-workflow'
+        | 'proceed'
+        | 'pr-convention-auto'
+        | 'pr-convention-manual'
+        | 'review-full'
+        | 'review-standard'
+        | 'review-skip'
       noSpecGate?: boolean
       noTestGate?: boolean
       allowNewDeps?: boolean

@@ -25,6 +25,7 @@ import configManager from '../../infrastructure/config-manager'
 import pathManager from '../../infrastructure/path-manager'
 import { customWorkflowStorage } from '../../storage/custom-workflow-storage'
 import { prjctDb } from '../../storage/database'
+import { judgmentLedgerStorage } from '../../storage/judgment-ledger-storage'
 import { shippedStorage } from '../../storage/shipped-storage'
 import { workflowRuleStorage } from '../../storage/workflow-rule-storage'
 
@@ -384,5 +385,86 @@ describe('ship() — PR convention', () => {
       .getRulesForCommand(fixture.projectId, 'ship')
       .map((r) => r.action)
     expect(actions).toContain('pr:ensure')
+  })
+})
+
+/**
+ * Contradictory review is the FIRST step of ship: it asks before every other
+ * gate, and only an approved-and-still-bound ledger gets past the question.
+ */
+describe('ship() — contradictory review gate', () => {
+  const fixture: { projectPath: string; projectId: string; cmd: ShippingCommands } = {
+    projectPath: '',
+    projectId: '',
+    cmd: undefined as unknown as ShippingCommands,
+  }
+
+  beforeEach(async () => {
+    ;({ projectPath: fixture.projectPath, projectId: fixture.projectId } = await freshProject())
+    fixture.cmd = new ShippingCommands()
+    // A branch ahead of main — merge-base ≠ HEAD is what makes a changeset
+    // reviewable. Without it there is nothing to contradict and ship is silent.
+    initGit(fixture.projectPath, 'main')
+    await fs.writeFile(path.join(fixture.projectPath, 'base.ts'), 'export const a = 1\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-m', 'base'], { cwd: fixture.projectPath })
+    execFileSync('git', ['checkout', '-q', '-b', 'feat/thing'], { cwd: fixture.projectPath })
+    await fs.writeFile(path.join(fixture.projectPath, 'base.ts'), 'export const a = 2\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-m', 'change'], { cwd: fixture.projectPath })
+  })
+
+  afterEach(async () => {
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
+  })
+
+  test('asks before any other gate, and ships nothing', async () => {
+    const result = await fixture.cmd.ship('a feature', fixture.projectPath, { md: true })
+    expect(result.success).toBe(false)
+    const c = result.clarification as { options: string[]; question: string } | undefined
+    expect(c?.options).toEqual(['review-full', 'review-standard', 'review-skip', 'abort'])
+    expect(c?.question).toMatch(/RED \(attack\) \+ BLUE \(defense\)/)
+    expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(0)
+  })
+
+  test('review-full opens a dual-blind ledger and still does not ship', async () => {
+    const result = await fixture.cmd.ship('a feature', fixture.projectPath, {
+      md: true,
+      intent: 'review-full',
+    })
+    expect(result.success).toBe(false)
+    expect(String(result.error ?? '')).toMatch(/Contradictory review/i)
+    expect(judgmentLedgerStorage.get(fixture.projectId)?.intensity).toBe('full')
+    expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(0)
+  })
+
+  test('review-skip clears the question and records the decline', async () => {
+    const result = await fixture.cmd.ship('a feature', fixture.projectPath, {
+      md: true,
+      intent: 'review-skip',
+    })
+    // Past the review gate — whatever stops ship now is a later gate, not this one.
+    const c = result.clarification as { options: string[] } | undefined
+    expect(c?.options ?? []).not.toContain('review-full')
+    expect(prjctDb.getDoc(fixture.projectId, 'ship:review_choice')).toMatchObject({
+      choice: 'skip',
+      branch: 'feat/thing',
+    })
+  })
+
+  test('a recorded decline does not silence the next ask', async () => {
+    await fixture.cmd.ship('a feature', fixture.projectPath, { md: true, intent: 'review-skip' })
+    const again = await fixture.cmd.ship('a feature', fixture.projectPath, { md: true })
+    const c = again.clarification as { options: string[] } | undefined
+    expect(c?.options).toContain('review-full')
+  })
+
+  test('register-only ships a row without asking — no diff to contradict', async () => {
+    const result = await fixture.cmd.ship('release notes', fixture.projectPath, {
+      md: true,
+      intent: 'register-only',
+    })
+    expect(result.success).toBe(true)
+    expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(1)
   })
 })

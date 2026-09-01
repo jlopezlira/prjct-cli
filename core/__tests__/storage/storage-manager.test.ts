@@ -213,6 +213,23 @@ describe('StorageManager', () => {
   // Cache Behavior
 
   describe('cache behavior', () => {
+    // `read` caches only OUTSIDE the daemon (storage-manager.ts): the daemon is
+    // long-lived, so its cache can serve a value a concurrent CLI already
+    // overwrote. Both modes are pinned below, and the ambient value is
+    // neutralised — otherwise the suite fails whenever it runs as a child of
+    // the daemon, which is exactly how `prjct ship` runs its Stop-Slop gate.
+    const daemonEnv: { previous: string | undefined } = { previous: undefined }
+
+    beforeEach(() => {
+      daemonEnv.previous = process.env.PRJCT_IN_DAEMON
+      delete process.env.PRJCT_IN_DAEMON
+    })
+
+    afterEach(() => {
+      if (daemonEnv.previous === undefined) delete process.env.PRJCT_IN_DAEMON
+      else process.env.PRJCT_IN_DAEMON = daemonEnv.previous
+    })
+
     it('should cache read results', async () => {
       const testData: TestData = { value: 'cached', count: 1, items: [] }
       await fixture.manager.write(fixture.testProjectId, testData)
@@ -226,6 +243,19 @@ describe('StorageManager', () => {
       // Second read should return cached value
       const result2 = await fixture.manager.read(fixture.testProjectId)
       expect(result2).toEqual(result1)
+    })
+
+    it('reads through the cache inside the daemon — SQLite is the source of truth', async () => {
+      const testData: TestData = { value: 'cached', count: 1, items: [] }
+      await fixture.manager.write(fixture.testProjectId, testData)
+      await fixture.manager.read(fixture.testProjectId)
+
+      // A concurrent CLI process overwrites the row the daemon has cached.
+      prjctDb.setDoc(fixture.testProjectId, 'test-data', { value: 'modified', count: 2, items: [] })
+
+      process.env.PRJCT_IN_DAEMON = '1'
+      const fresh = await fixture.manager.read(fixture.testProjectId)
+      expect(fresh).toEqual({ value: 'modified', count: 2, items: [] })
     })
 
     it('should clear cache for specific project', async () => {
