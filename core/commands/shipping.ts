@@ -14,6 +14,12 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import configManager from '../infrastructure/config-manager'
+import type { JudgmentLedger } from '../schemas/judgment'
+import {
+  type ContradictoryGateVerdict,
+  choiceFromIntent,
+  contradictoryReviewGate,
+} from '../services/contradictory-review'
 import { defaultPrConventionFor, detectPrConventionSignal } from '../services/pr-convention'
 import { syncService } from '../services/sync-service'
 import { completeActiveTask, resolveActiveTask } from '../services/task-service'
@@ -56,6 +62,19 @@ type ShipIntent =
   | 'proceed'
   | 'pr-convention-auto'
   | 'pr-convention-manual'
+  | 'review-full'
+  | 'review-standard'
+  | 'review-skip'
+
+// kv record of the last declined contradictory review. Evidence, never a
+// bypass: the gate does not read it, so a decline cannot silence the next ask.
+const SHIP_REVIEW_CHOICE_KEY = 'ship:review_choice'
+
+interface ShipReviewChoice {
+  choice: 'skip'
+  branch: string | null
+  at: string
+}
 
 interface ShipOptions {
   skipHooks?: boolean
@@ -124,6 +143,22 @@ export class ShippingCommands extends PrjctCommandsBase {
       } catch {
         // Best-effort recovery — never block a ship on reconciliation.
       }
+
+      // Contradictory review — the first thing every ship asks. RED/BLUE runs
+      // because the user said so, not because a diff crossed a size threshold,
+      // and once they say so the judgment gate below binds until the judges
+      // agree. Sits after the kill switch: B1 outranks every consent path.
+      const reviewGate = await resolveContradictoryReview(projectId, projectPath, options)
+      if (reviewGate.kind === 'ask') {
+        renderClarification(reviewGate.clarification, options.md === true)
+        return { success: false, clarification: reviewGate.clarification }
+      }
+      if (reviewGate.kind === 'open-review') {
+        return openContradictoryReview(projectId, projectPath, reviewGate)
+      }
+      if (reviewGate.reason === 'declined') await recordReviewDecline(projectId, projectPath)
+      if (reviewGate.message) console.log(reviewGate.message)
+      const reviewBinding = reviewGate.binding
 
       // Resolve the task for THIS worktree first. Hard gates run BEFORE
       // completeActiveTask so a blocked ship does not silently close the cycle.
@@ -287,12 +322,19 @@ export class ShippingCommands extends PrjctCommandsBase {
           { files: cs?.files ?? 0, loc: cs?.loc ?? 0 },
           signals
         ).intensity
+        const ledger = judgmentLedgerStorage.get(projectId)
         // SUPERIOR: code-strict ALWAYS dual-blind (full) — even trivial diffs.
-        // Ship-grade packs never skip the judgment ledger.
-        const intensity = isCodeStrictPack ? 'full' : inferredIntensity
+        // Ship-grade packs never skip the judgment ledger. A review the user
+        // consented to binds at the ledger's own intensity: without that, a
+        // `review-full` on a 3-line diff would infer `skip` and sail through
+        // unjudged, making the first-step question decorative.
+        const intensity = isCodeStrictPack
+          ? 'full'
+          : reviewBinding && ledger
+            ? ledger.intensity
+            : inferredIntensity
         // Hard gate for any non-skip intensity; pack code-strict always hard.
         const codeStrict = isCodeStrictPack || shipRequiresQuality(intensity)
-        const ledger = judgmentLedgerStorage.get(projectId)
         const jv = judgmentShipVerdict({
           codeStrict,
           intensity,
@@ -573,7 +615,17 @@ export class ShippingCommands extends PrjctCommandsBase {
       if (!beforeResult.success) {
         const failedList =
           beforeResult.gatesFailed.length > 0 ? beforeResult.gatesFailed.join(', ') : 'unknown step'
-        return { success: false, error: `Ship blocked: ${failedList}` }
+        // The engine records WHY (command output, timeout, exit code) in
+        // `output`; dropping it left "Ship blocked: <label>" as the only
+        // signal, which is unactionable — the reason has to travel with the
+        // refusal or the user re-runs blind.
+        const detail = beforeResult.output.trim()
+        return {
+          success: false,
+          error: detail
+            ? `Ship blocked: ${failedList}\n\n${detail}`
+            : `Ship blocked: ${failedList}`,
+        }
       }
 
       const newVersion = typeof runCtx.version === 'string' ? runCtx.version : 'unversioned'
@@ -913,6 +965,134 @@ function applyPrConventionDecision(
       sortOrder: maxSort + 1,
       createdAt: new Date().toISOString(),
     })
+  }
+}
+
+/**
+ * Gather the state the consent gate judges. Register-only ships touch neither
+ * git nor the ledger — there is no diff to contradict.
+ */
+async function resolveContradictoryReview(
+  projectId: string,
+  projectPath: string,
+  options: ShipOptions
+): Promise<ContradictoryGateVerdict> {
+  const choice = choiceFromIntent(options.intent)
+  if (options.intent === 'register-only') {
+    return contradictoryReviewGate({
+      choice,
+      registerOnly: true,
+      ledgerVerdict: null,
+      stampValid: false,
+      hasChangeset: false,
+    })
+  }
+
+  const { computeVerdict } = await import('../services/precision-judgment')
+  const { judgmentLedgerStorage } = await import('../storage/judgment-ledger-storage')
+  const hasChangeset = await hasCommittedChangeset(projectPath)
+  const ledger = judgmentLedgerStorage.get(projectId)
+  const ledgerVerdict = ledger ? computeVerdict(ledger) : null
+  const stampValid =
+    ledgerVerdict === 'approved' ? await isReviewStillBound(projectPath, ledger) : false
+
+  return contradictoryReviewGate({
+    choice,
+    registerOnly: false,
+    ledgerVerdict,
+    ledgerId: ledger?.id ?? null,
+    ledgerIntensity: ledger?.intensity ?? null,
+    stampValid,
+    hasChangeset,
+  })
+}
+
+async function hasCommittedChangeset(projectPath: string): Promise<boolean> {
+  try {
+    const { computeCommittedChangeset } = await import('../services/delivery-geometry')
+    const cs = await computeCommittedChangeset(projectPath)
+    return (cs?.files ?? 0) > 0 || (cs?.loc ?? 0) > 0
+  } catch {
+    // Unevaluable git → ask anyway. A question costs a round trip; skipping the
+    // review silently because git hiccuped costs the review.
+    return true
+  }
+}
+
+/** Does the approval still cover the tree being shipped? */
+async function isReviewStillBound(
+  projectPath: string,
+  ledger: JudgmentLedger | null
+): Promise<boolean> {
+  const stamp = ledger?.contentBound
+  if (!stamp?.treeHash) return false
+  try {
+    const { contentBoundDriftVerdict, currentTreeHashForStamp } = await import(
+      '../services/content-bound-stamp'
+    )
+    const current = await currentTreeHashForStamp(projectPath, stamp)
+    const cv = contentBoundDriftVerdict({ stamp, currentTreeHash: current, hard: false })
+    // 'unverified' (IO) counts as bound: the content-bound gate downstream
+    // judges it properly, and re-asking forever on a sick git helps nobody.
+    return cv.reason !== 'drift'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Open (or resume) the ledger the user consented to and hand back the next
+ * card. Ship does not proceed: the review has to land first.
+ */
+async function openContradictoryReview(
+  projectId: string,
+  projectPath: string,
+  verdict: Extract<ContradictoryGateVerdict, { kind: 'open-review' }>
+): Promise<CommandResult> {
+  const { ensureJudgmentLedger } = await import('../services/judgment-orchestrator')
+  const result = await ensureJudgmentLedger({
+    projectId,
+    projectPath,
+    forceIntensity: verdict.intensity,
+  })
+  const card = result.next
+  console.log(
+    mdOutput(
+      mdSection('Contradictory review', verdict.message),
+      mdSection(
+        `Next → \`${card.kind}\``,
+        [card.directive, ...card.steps.map((step) => `- ${step}`)].join('\n')
+      ),
+      card.judgeCharters
+        ? mdSection(
+            'Charters',
+            `RED: ${card.judgeCharters.red}\n\nBLUE: ${card.judgeCharters.blue}`
+          )
+        : null
+    )
+  )
+  const ledgerBit = result.ledger ? ` \`${result.ledger.id.slice(0, 8)}\`` : ''
+  return {
+    success: false,
+    error:
+      `Contradictory review${ledgerBit} is open (intensity=${result.intensity}). ` +
+      'Run the card above, then re-run ship — it passes once the judges agree.',
+    ledger: result.ledger,
+    next: card,
+  }
+}
+
+/** Persist the decline as evidence. Never consulted as consent. */
+async function recordReviewDecline(projectId: string, projectPath: string): Promise<void> {
+  try {
+    const branch = await getGitBranch(projectPath)
+    prjctDb.setDoc<ShipReviewChoice>(projectId, SHIP_REVIEW_CHOICE_KEY, {
+      choice: 'skip',
+      branch: branch ?? null,
+      at: dateHelper.getTimestamp(),
+    })
+  } catch {
+    // Evidence only — a failed write never blocks the ship the user asked for.
   }
 }
 

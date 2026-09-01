@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.16.0] - 2026-09-01
+
+### Added
+- contradictory review as the first step of ship
+
 ## [4.15.0] - 2026-08-31
 
 ### Changed

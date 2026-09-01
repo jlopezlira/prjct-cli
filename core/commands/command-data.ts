@@ -177,7 +177,11 @@ export const COMMANDS: CommandMeta[] = [
     hasTemplate: true,
     requiresProject: true,
     requiresLlm: true,
-    features: ['No arg → ships the active task description, or derives a summary from the branch'],
+    features: [
+      'No arg → ships the active task description, or derives a summary from the branch',
+      'First step asks for contradictory review: --intent=review-full (dual-blind RED/BLUE) | review-standard | review-skip',
+      'A consented review binds: ship stays blocked until the ledger is approved and still bound to the tree',
+    ],
   },
   {
     name: 'sync',
