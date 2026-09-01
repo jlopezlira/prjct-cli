@@ -7,6 +7,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { resolveUserHome } from '../../infrastructure/user-home'
@@ -188,17 +189,69 @@ export function getAllInstalledLocations(): InstalledLocation[] {
   for (const pm of [MANAGERS.bun, MANAGERS.pnpm, MANAGERS.npm, MANAGERS.yarn]) {
     const root = pm.getInstallRoot()
     if (!root) continue
-    const pkgPath = path.join(root, 'prjct-cli', 'package.json')
-    try {
-      const pkg = JSON.parse(require('node:fs').readFileSync(pkgPath, 'utf-8'))
-      if (pkg?.name === 'prjct-cli' && typeof pkg.version === 'string') {
-        found.push({ pm, version: pkg.version })
-      }
-    } catch {
-      // not installed via this manager
-    }
+    const version = readInstalledVersion(root)
+    if (version) found.push({ pm, version })
   }
   return found
+}
+
+/** Cap the per-project scan so a crowded global dir cannot stall the update. */
+const MAX_GLOBAL_PROJECT_SCAN = 20
+
+function dirMtime(dir: string): number {
+  try {
+    return fs.statSync(dir).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Every place a manager can keep `prjct-cli/package.json` under one install root.
+ *
+ * `pnpm root -g` used to return the global node_modules; pnpm v11 returns the
+ * global DIR, whose installs live in hashed per-project subdirectories that own
+ * their own node_modules. Probing only `<root>/prjct-cli` made a healthy pnpm
+ * install invisible, so update reported "No global prjct-cli install found"
+ * right after installing it — and silently skipped the version-transition and
+ * registry-match checks that read the same list.
+ *
+ * Newest project dir first: pnpm writes a fresh one per global install, so the
+ * most recent is the one the bin shim points at.
+ */
+function installedManifestCandidates(root: string): string[] {
+  const nested = (() => {
+    try {
+      return fs
+        .readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+        .map((entry) => path.join(root, entry.name))
+        .map((dir) => ({ dir, mtimeMs: dirMtime(dir) }))
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)
+        .slice(0, MAX_GLOBAL_PROJECT_SCAN)
+        .map(({ dir }) => path.join(dir, 'node_modules', 'prjct-cli', 'package.json'))
+    } catch {
+      return []
+    }
+  })()
+  return [
+    path.join(root, 'prjct-cli', 'package.json'),
+    path.join(root, 'node_modules', 'prjct-cli', 'package.json'),
+    ...nested,
+  ]
+}
+
+/** First readable prjct-cli manifest under `root`, or null when not installed. */
+export function readInstalledVersion(root: string): string | null {
+  for (const manifest of installedManifestCandidates(root)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(manifest, 'utf-8'))
+      if (pkg?.name === 'prjct-cli' && typeof pkg.version === 'string') return pkg.version
+    } catch {
+      // not installed at this candidate
+    }
+  }
+  return null
 }
 
 /**
