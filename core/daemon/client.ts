@@ -329,6 +329,48 @@ export function forceKillDaemon(): boolean {
 /** In-process single-flight so one CLI process never double-spawns. */
 const spawnState: { inFlight: Promise<boolean> | null } = { inFlight: null }
 
+/** How far up from the running module we look for the packaged daemon. */
+const DAEMON_ENTRY_MAX_ASCENT = 8
+
+export interface DaemonLaunch {
+  entryPath: string
+  runtime: 'bun' | 'node'
+}
+
+/**
+ * Locate the daemon entry from the directory the running module sits in.
+ *
+ * This used to guess three fixed paths off `__dirname`, all assuming the caller
+ * lives in `dist/bin/`. The bundler emits this module into
+ * `dist/bin/core-chunks/` (and `dist/bin/hook-chunks/`) — one level deeper — so
+ * every guess missed and a published install could NEVER spawn its daemon.
+ * Silently: callers only see `false`, so every CLI run fell back to cold start.
+ * Walking up for the packaged entry survives however the bundle is laid out.
+ */
+export function resolveDaemonLaunch(
+  fromDir: string,
+  opts: { exists: (candidate: string) => boolean; preferBun: boolean }
+): DaemonLaunch | null {
+  // Source checkout: client.ts and entry.ts are siblings.
+  const source = path.join(fromDir, 'entry.ts')
+  if (opts.exists(source)) return { entryPath: source, runtime: 'bun' }
+
+  const runtime: 'bun' | 'node' = opts.preferBun ? 'bun' : 'node'
+  const ascend = (dir: string, hops: number): DaemonLaunch | null => {
+    if (hops > DAEMON_ENTRY_MAX_ASCENT) return null
+    for (const relative of [
+      ['daemon', 'entry.mjs'],
+      ['dist', 'daemon', 'entry.mjs'],
+    ]) {
+      const candidate = path.join(dir, ...relative)
+      if (opts.exists(candidate)) return { entryPath: candidate, runtime }
+    }
+    const parent = path.dirname(dir)
+    return parent === dir ? null : ascend(parent, hops + 1)
+  }
+  return ascend(fromDir, 0)
+}
+
 export async function spawnDaemon(): Promise<boolean> {
   if (spawnState.inFlight) return spawnState.inFlight
   spawnState.inFlight = spawnDaemonExclusive().finally(() => {
@@ -354,21 +396,10 @@ async function spawnDaemonExclusive(): Promise<boolean> {
 
     const { spawn } = await import('node:child_process')
 
-    // Resolve daemon entry: prefer source (dev) → compiled (production)
-    const srcPath = path.join(__dirname, 'entry.ts')
-    // When running from dist/bin/, the daemon is at ../daemon/entry.mjs
-    const distPathAdjacent = path.join(__dirname, '..', 'daemon', 'entry.mjs')
-    // When running from bin/, the daemon is at dist/daemon/entry.mjs
-    const distPath = path.join(__dirname, '..', 'dist', 'daemon', 'entry.mjs')
-
-    const preferBun = process.platform !== 'win32' && isBunAvailable()
-    const launch = fs.existsSync(srcPath)
-      ? { entryPath: srcPath, runtime: 'bun' }
-      : fs.existsSync(distPathAdjacent)
-        ? { entryPath: distPathAdjacent, runtime: preferBun ? 'bun' : 'node' }
-        : fs.existsSync(distPath)
-          ? { entryPath: distPath, runtime: preferBun ? 'bun' : 'node' }
-          : null
+    const launch = resolveDaemonLaunch(__dirname, {
+      exists: (candidate) => fs.existsSync(candidate),
+      preferBun: process.platform !== 'win32' && isBunAvailable(),
+    })
     if (!launch) return false
     const { entryPath, runtime } = launch
 
