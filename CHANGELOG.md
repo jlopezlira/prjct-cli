@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [4.16.1] - 2026-09-01
+
+### Bug Fixes
+
+- published installs could never spawn their daemon, and update reported a false failure (#642)
+
+
 ## [4.16.0] - 2026-09-01
 
 ### Added
