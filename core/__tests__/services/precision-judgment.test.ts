@@ -25,6 +25,7 @@ import {
   evidenceScore,
   finalizeLedger,
   findingDna,
+  findingsNotReadyForVerification,
   intensityFromChangeset,
   intensityProtocol,
   isActionableSeverity,
@@ -526,6 +527,54 @@ describe('next-action card', () => {
 })
 
 describe('scoped re-review + precision', () => {
+  it('rejects every non-fixed or out-of-scope id before consuming a rejudge pass', () => {
+    const ledger = createLedger({
+      target: 't',
+      intensity: 'standard',
+      now: 't0',
+      scopePaths: ['core/in.ts'],
+    })
+    ledger.findings = [
+      finding({
+        id: 'ready',
+        severity: 'critical',
+        title: 'ready',
+        status: 'fixed',
+        file: 'core/in.ts',
+      }),
+      finding({
+        id: 'outside',
+        severity: 'critical',
+        title: 'outside',
+        status: 'fixed',
+        file: 'core/out.ts',
+      }),
+      finding({
+        id: 'stands',
+        severity: 'critical',
+        title: 'stands',
+        status: 'stands',
+        file: 'core/in.ts',
+      }),
+    ]
+
+    expect(
+      findingsNotReadyForVerification(ledger, ['ready', 'outside', 'stands', 'missing'])
+    ).toEqual(['outside', 'stands', 'missing'])
+  })
+
+  it('never verifies a requested finding unless it was fixed first', () => {
+    const ledger = createLedger({ target: 't', intensity: 'standard', now: 't0' })
+    ledger.findings = [
+      finding({ id: 'fixed', severity: 'critical', title: 'A', status: 'fixed' }),
+      finding({ id: 'stands', severity: 'critical', title: 'B', status: 'stands' }),
+    ]
+
+    const marked = markFindings(ledger, ['fixed', 'stands'], 'verified', 't1')
+    expect(marked.findings.find((finding) => finding.id === 'fixed')?.status).toBe('verified')
+    expect(marked.findings.find((finding) => finding.id === 'stands')?.status).toBe('stands')
+  })
+
   it('brief excludes info and refuted', () => {
     const ledger = createLedger({ target: 't', intensity: 'full', now: 't0' })
     ledger.findings = [

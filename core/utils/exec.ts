@@ -429,6 +429,19 @@ export function matchProc<T>(
   }
 }
 
+/** Raw stdout on success; preserves NUL-delimited Git paths byte-for-byte. */
+export async function gitRawStdout(
+  cwd: string,
+  args: string[],
+  opts: RunProcOptions = {}
+): Promise<string | null> {
+  const result = await runGit(args, { ...opts, cwd })
+  if (result.ok) return result.stdout
+  const infra = gitInfraErrorOf(result)
+  if (infra) throw infra
+  return null
+}
+
 /**
  * Trimmed stdout on success; `null` on typed exit (domain negative).
  * Timeout / spawn / overflow throw `GitInfraError` — never collapse to null.
@@ -438,34 +451,29 @@ export async function gitStdout(
   args: string[],
   opts: RunProcOptions = {}
 ): Promise<string | null> {
-  const result = await runGit(args, { ...opts, cwd })
-  if (result.ok) return result.stdout.trim()
-  const infra = gitInfraErrorOf(result)
-  if (infra) throw infra
-  return null
+  const stdout = await gitRawStdout(cwd, args, opts)
+  return stdout === null ? null : stdout.trim()
+}
+
+function nulPaths(stdout: string): string[] {
+  return stdout.split('\0').filter((entry) => entry.length > 0)
 }
 
 /** Uncommitted + untracked files vs HEAD, sorted. Typed exit → skip that half
  *  (still returns what it could read); infra failure (timeout/spawn) throws. */
 export async function listChangedFiles(projectPath: string): Promise<string[]> {
   const files = new Set<string>()
-  const diff = await runGit(['diff', '--name-only', 'HEAD'], { cwd: projectPath })
+  const diff = await runGit(['diff', '--name-only', '-z', 'HEAD'], { cwd: projectPath })
   if (diff.ok) {
-    for (const line of diff.stdout.split('\n')) {
-      const value = line.trim()
-      if (value) files.add(value)
-    }
+    for (const file of nulPaths(diff.stdout)) files.add(file)
   } else if (diff.kind !== 'exit') {
     throwProc(diff)
   }
-  const untracked = await runGit(['ls-files', '--others', '--exclude-standard'], {
+  const untracked = await runGit(['ls-files', '-z', '--others', '--exclude-standard'], {
     cwd: projectPath,
   })
   if (untracked.ok) {
-    for (const line of untracked.stdout.split('\n')) {
-      const value = line.trim()
-      if (value) files.add(value)
-    }
+    for (const file of nulPaths(untracked.stdout)) files.add(file)
   } else if (untracked.kind !== 'exit') {
     throwProc(untracked)
   }

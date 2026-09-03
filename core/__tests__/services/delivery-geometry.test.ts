@@ -14,6 +14,48 @@ import {
 } from '../../services/delivery-geometry'
 
 describe('delivery-geometry', () => {
+  it('keeps local default-branch commits in the payload when no remote exists', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-local-main-payload-'))
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: root })
+      await fs.writeFile(path.join(root, 'base.txt'), 'base\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root })
+      await fs.writeFile(path.join(root, 'local.ts'), 'export const local = true\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'local change'], { cwd: root })
+
+      expect(await resolveReviewPayloadPaths(root)).toEqual(['local.ts'])
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves unusual Git path bytes through committed and untracked manifests', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-nul-paths-'))
+    const committed = 'odd\tname.ts'
+    const untracked = 'line\nbreak.ts'
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: root })
+      await fs.writeFile(path.join(root, 'base.txt'), 'base\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root })
+      execFileSync('git', ['checkout', '-q', '-b', 'feature'], { cwd: root })
+      await fs.writeFile(path.join(root, committed), 'committed\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'odd path'], { cwd: root })
+      await fs.writeFile(path.join(root, untracked), 'untracked\n')
+
+      expect(await resolveReviewPayloadPaths(root)).toEqual([untracked, committed].sort())
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('counts untracked lines so a large new file cannot route as trivial', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-untracked-loc-'))
     try {

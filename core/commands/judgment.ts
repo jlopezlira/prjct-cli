@@ -25,6 +25,7 @@ import {
   canStartFixRound,
   createLedger,
   finalizeLedger,
+  findingsNotReadyForVerification,
   type IntensitySignals,
   intensityFromChangeset,
   intensityProtocol,
@@ -557,15 +558,10 @@ export class JudgmentCommands extends PrjctCommandsBase {
     if (ids.length === 0) return failWith(`${status} requires at least one finding id.`, options)
 
     if (status === 'verified') {
-      const hasFixedTarget = ledger.findings.some(
-        (finding) =>
-          ids.includes(finding.id) &&
-          finding.status === 'fixed' &&
-          finding.scopeDisposition !== 'follow-up'
-      )
-      if (!hasFixedTarget) {
+      const invalidIds = findingsNotReadyForVerification(ledger, ids)
+      if (invalidIds.length > 0) {
         return failWith(
-          'verified requires at least one in-scope finding currently marked fixed.',
+          `verified requires every requested finding to be in-scope and fixed first: ${invalidIds.join(', ')}`,
           options
         )
       }

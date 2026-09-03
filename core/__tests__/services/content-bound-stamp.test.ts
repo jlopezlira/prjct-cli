@@ -23,6 +23,33 @@ import {
 import { GitInfraError } from '../../utils/exec'
 
 describe('content-bound-stamp', () => {
+  it('invalidates a same-content stamp when the reviewed commit identity advances', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stamp-head-'))
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: root })
+      await fs.writeFile(path.join(root, 'base.txt'), 'base\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root })
+      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: root,
+        encoding: 'utf8',
+      }).trim()
+      const stamp = await stampProjectPaths(root, ['deleted.ts'], {
+        stampedAt: 't0',
+        headSha,
+      })
+      execFileSync('git', ['commit', '--allow-empty', '-q', '-m', 'advance identity'], {
+        cwd: root,
+      })
+
+      expect(await currentTreeHashForStamp(root, stamp)).not.toBe(stamp.treeHash)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('binds executable mode and symlink target identity, not only dereferenced bytes', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stamp-identity-'))
     try {

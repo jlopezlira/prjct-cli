@@ -5,7 +5,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { gitStdout } from '../utils/exec'
+import { gitRawStdout, gitStdout } from '../utils/exec'
 
 export type DeliveryTier = 'trivial' | 'normal' | 'large'
 export type DeliveryGeometry = 'direct' | 'single' | 'split'
@@ -43,6 +43,14 @@ export function geometryOf(tier: DeliveryTier): DeliveryGeometry {
 // decide the polarity of their gate).
 async function safeGit(projectPath: string, args: string[]): Promise<string | null> {
   return gitStdout(projectPath, args)
+}
+
+async function safeGitRaw(projectPath: string, args: string[]): Promise<string | null> {
+  return gitRawStdout(projectPath, args)
+}
+
+function parseGitPaths(output: string | null): string[] {
+  return (output ?? '').split('\0').filter((file) => file.length > 0)
 }
 
 function parseShortstat(shortstat: string): { files: number; loc: number } {
@@ -83,7 +91,7 @@ async function untrackedLoc(projectPath: string, files: readonly string[]): Prom
   return counts.reduce((total, count) => total + count, 0)
 }
 
-async function resolveDefaultBase(projectPath: string): Promise<string | null> {
+export async function resolveReviewPayloadBase(projectPath: string): Promise<string | null> {
   const originHead = await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
   const defaultRef =
     originHead && originHead !== 'origin/HEAD'
@@ -99,29 +107,36 @@ async function resolveDefaultBase(projectPath: string): Promise<string | null> {
           return ''
         })()
   if (!defaultRef) return null
-  return safeGit(projectPath, ['merge-base', defaultRef, 'HEAD'])
+  const [base, headSha] = await Promise.all([
+    safeGit(projectPath, ['merge-base', defaultRef, 'HEAD']),
+    safeGit(projectPath, ['rev-parse', 'HEAD']),
+  ])
+  if (!base || !headSha || base !== headSha || defaultRef.startsWith('origin/')) return base
+
+  const currentBranch = await safeGit(projectPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+  if (currentBranch !== defaultRef) return base
+
+  // With no remote and while working directly on local main/master, using HEAD
+  // as its own base would hide every local commit. Fall back to the root commit.
+  const roots = await safeGit(projectPath, ['rev-list', '--max-parents=0', 'HEAD'])
+  return roots?.split('\n').find(Boolean) ?? base
 }
 
 export async function resolveReviewPayloadPaths(projectPath: string): Promise<string[]> {
-  const base = await resolveDefaultBase(projectPath)
+  const base = await resolveReviewPayloadBase(projectPath)
   const [committed, tracked, untracked] = await Promise.all([
-    base ? safeGit(projectPath, ['diff', '--name-only', `${base}..HEAD`]) : Promise.resolve(''),
-    safeGit(projectPath, ['diff', '--name-only', 'HEAD']),
-    safeGit(projectPath, ['ls-files', '--others', '--exclude-standard']),
+    base
+      ? safeGitRaw(projectPath, ['diff', '--name-only', '-z', `${base}..HEAD`])
+      : Promise.resolve(''),
+    safeGitRaw(projectPath, ['diff', '--name-only', '-z', 'HEAD']),
+    safeGitRaw(projectPath, ['ls-files', '-z', '--others', '--exclude-standard']),
   ])
-  return [
-    ...new Set(
-      [committed, tracked, untracked]
-        .flatMap((output) => (output ?? '').split('\n'))
-        .map((file) => file.trim().replace(/\\/g, '/'))
-        .filter(Boolean)
-    ),
-  ].sort()
+  return [...new Set([committed, tracked, untracked].flatMap(parseGitPaths))].sort()
 }
 
 /** Committed range vs merge-base with default branch (review-risk path). */
 export async function computeCommittedChangeset(projectPath: string): Promise<Changeset | null> {
-  const base = await resolveDefaultBase(projectPath)
+  const base = await resolveReviewPayloadBase(projectPath)
   if (!base) return null
   const headSha = await safeGit(projectPath, ['rev-parse', 'HEAD'])
   if (!headSha || headSha === base) return null
@@ -129,13 +144,10 @@ export async function computeCommittedChangeset(projectPath: string): Promise<Ch
   const shortstat = await safeGit(projectPath, ['diff', '--shortstat', `${base}..HEAD`])
   if (shortstat === null) return null
   const { files, loc } = parseShortstat(shortstat)
-  const names = (await safeGit(projectPath, ['diff', '--name-only', `${base}..HEAD`])) ?? ''
+  const names = await safeGitRaw(projectPath, ['diff', '--name-only', '-z', `${base}..HEAD`])
   const dirs = [
     ...new Set(
-      names
-        .split('\n')
-        .filter(Boolean)
-        .map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))
+      parseGitPaths(names).map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))
     ),
   ].sort()
 
@@ -145,15 +157,20 @@ export async function computeCommittedChangeset(projectPath: string): Promise<Ch
 /** Uncommitted working tree (staged + unstaged) — gate before more implementation. */
 export async function computeWorkingTreeChangeset(projectPath: string): Promise<Changeset | null> {
   const shortstat = await safeGit(projectPath, ['diff', '--shortstat', 'HEAD'])
-  const untracked = await safeGit(projectPath, ['ls-files', '--others', '--exclude-standard'])
+  const untracked = await safeGitRaw(projectPath, [
+    'ls-files',
+    '-z',
+    '--others',
+    '--exclude-standard',
+  ])
   if (shortstat === null && untracked === null) return null
   const tracked = parseShortstat(shortstat ?? '')
-  const untrackedNames = (untracked ?? '').split('\n').filter(Boolean)
+  const untrackedNames = parseGitPaths(untracked)
   const files = tracked.files + untrackedNames.length
   const loc = tracked.loc + (await untrackedLoc(projectPath, untrackedNames))
   if (files === 0 && loc === 0) return null
-  const trackedNames = (await safeGit(projectPath, ['diff', '--name-only', 'HEAD'])) ?? ''
-  const names = [...trackedNames.split('\n').filter(Boolean), ...untrackedNames]
+  const trackedNames = await safeGitRaw(projectPath, ['diff', '--name-only', '-z', 'HEAD'])
+  const names = [...parseGitPaths(trackedNames), ...untrackedNames]
   const dirs = [
     ...new Set(names.map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))),
   ].sort()
