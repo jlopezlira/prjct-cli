@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { GitInfraError, gitStdout } from '../utils/exec'
-import { resolveReviewPayloadPaths } from './delivery-geometry'
+import { resolveReviewPayloadBase, resolveReviewPayloadPaths } from './delivery-geometry'
 
 /** Missing / deleted path sentinel — still contributes to treeHash. */
 export const BLOB_MISSING = 'missing' as const
@@ -37,6 +37,7 @@ export interface ContentBoundStamp {
   paths: ContentBoundPathStamp[]
   stampedAt: string
   headSha?: string
+  baseSha?: string
   /** Stamp was created from the authoritative ship payload manifest. */
   payloadBound?: boolean
   /** True when path hashes include Git-relevant identity instead of bytes alone. */
@@ -83,7 +84,13 @@ export function normalizeStampPath(p: string): string {
  */
 export function stampFromContents(
   entries: ReadonlyArray<{ path: string; content: string | Buffer | null }>,
-  opts: { stampedAt: string; headSha?: string; maxPaths?: number; payloadBound?: boolean }
+  opts: {
+    stampedAt: string
+    headSha?: string
+    baseSha?: string
+    maxPaths?: number
+    payloadBound?: boolean
+  }
 ): ContentBoundStamp {
   const max = opts.maxPaths ?? CONTENT_BOUND_MAX_PATHS
   const full: ContentBoundPathStamp[] = entries
@@ -106,6 +113,7 @@ export function stampFromContents(
     paths: all.slice(0, max),
     stampedAt: opts.stampedAt,
     headSha: opts.headSha,
+    baseSha: opts.baseSha,
     payloadBound: opts.payloadBound,
     identityBound: false,
   }
@@ -245,7 +253,7 @@ async function hashProjectPath(projectPath: string, relativePath: string): Promi
 export async function stampProjectPaths(
   projectPath: string,
   paths: readonly string[],
-  opts: { stampedAt: string; headSha?: string; payloadBound?: boolean }
+  opts: { stampedAt: string; headSha?: string; baseSha?: string; payloadBound?: boolean }
 ): Promise<ContentBoundStamp> {
   const entries: ContentBoundPathStamp[] = []
   for (const p of paths) {
@@ -264,6 +272,7 @@ export async function stampProjectPaths(
     paths: all.slice(0, CONTENT_BOUND_MAX_PATHS),
     stampedAt: opts.stampedAt,
     headSha: opts.headSha,
+    baseSha: opts.baseSha,
     payloadBound: opts.payloadBound,
     identityBound: true,
   }
@@ -276,8 +285,16 @@ export async function stampForApprove(
   stampedAt: string
 ): Promise<ContentBoundStamp> {
   const paths = await resolveStampPaths(projectPath, scopePaths)
-  const headSha = (await safeGit(projectPath, ['rev-parse', 'HEAD'])) ?? undefined
-  return stampProjectPaths(projectPath, paths, { stampedAt, headSha, payloadBound: true })
+  const [headSha, baseSha] = await Promise.all([
+    safeGit(projectPath, ['rev-parse', 'HEAD']),
+    resolveReviewPayloadBase(projectPath),
+  ])
+  return stampProjectPaths(projectPath, paths, {
+    stampedAt,
+    headSha: headSha ?? undefined,
+    baseSha: baseSha ?? undefined,
+    payloadBound: true,
+  })
 }
 
 /** Recompute treeHash for drift check at ship. */
@@ -286,6 +303,18 @@ export async function currentTreeHashForStamp(
   stamp: ContentBoundStamp
 ): Promise<string | null> {
   try {
+    const [currentHead, currentBase] = await Promise.all([
+      safeGit(projectPath, ['rev-parse', 'HEAD']),
+      resolveReviewPayloadBase(projectPath),
+    ])
+    if (
+      (stamp.headSha && currentHead !== stamp.headSha) ||
+      (stamp.baseSha && currentBase !== stamp.baseSha)
+    ) {
+      return sha256Hex(
+        `identity-drift\0${currentHead ?? BLOB_MISSING}\0${currentBase ?? BLOB_MISSING}`
+      )
+    }
     // Prefer paths recorded on stamp; fall back to re-resolve if empty
     const paths = stamp.payloadBound
       ? await resolveReviewPayloadPaths(projectPath)
@@ -297,6 +326,7 @@ export async function currentTreeHashForStamp(
     const next = await stampProjectPaths(projectPath, paths, {
       stampedAt: stamp.stampedAt,
       headSha: stamp.headSha,
+      baseSha: stamp.baseSha,
     })
     return next.treeHash
   } catch (err) {

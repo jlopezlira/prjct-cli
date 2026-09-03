@@ -565,6 +565,7 @@ export function markFindings(
     if ((status === 'fixed' || status === 'verified') && !findingInFixScope(f, ledger.scopePaths)) {
       return f
     }
+    if (status === 'verified' && f.status !== 'fixed') return f
     return { ...f, status }
   })
   return {
@@ -573,6 +574,20 @@ export function markFindings(
     updatedAt: now,
     precisionHint: computePrecisionHint(findings),
   }
+}
+
+/** Requested ids that cannot consume a scoped rejudge pass yet. */
+export function findingsNotReadyForVerification(ledger: JudgmentLedger, ids: string[]): string[] {
+  const byId = new Map(ledger.findings.map((finding) => [finding.id, finding]))
+  return [...new Set(ids)].filter((id) => {
+    const finding = byId.get(id)
+    return (
+      !finding ||
+      finding.status !== 'fixed' ||
+      finding.scopeDisposition === 'follow-up' ||
+      !findingInFixScope(finding, ledger.scopePaths)
+    )
+  })
 }
 
 /** Ids that were requested for fixed/verified but skipped by scope freeze. */

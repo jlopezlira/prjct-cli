@@ -139,6 +139,7 @@ export const JudgmentLedgerSchema = z.object({
       ),
       stampedAt: z.string().min(1),
       headSha: z.string().optional(),
+      baseSha: z.string().optional(),
       payloadBound: z.boolean().optional(),
       identityBound: z.boolean().optional(),
     })

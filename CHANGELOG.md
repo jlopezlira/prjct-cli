@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.18.5] - 2026-09-03
+
+### Bug Fixes
+
+- close review identity and scope bypasses: Git path bytes are preserved exactly (`-z` NUL-delimited listings, no trim/backslash rewriting), review approvals are bound to the HEAD and base identity they were judged against, local default-branch commits without a remote are retained in the review payload (root commit fallback instead of HEAD-as-its-own-base), and mixed or out-of-scope verification batches are rejected before a rejudge pass is consumed.
+
 ## [4.18.3] - 2026-09-03
 
 ### Performance
