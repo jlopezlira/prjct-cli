@@ -18,6 +18,7 @@
 
 import { REGISTERED_VERBS_SET } from '../commands/verb-names'
 import configManager from '../infrastructure/config-manager'
+import type { MemoryEntry } from '../memory/entries'
 import { STATUS_CHANGE_ACTION } from '../memory/events'
 import { deriveTitle as deriveMemTitle, flatDetail, preventiveLabel } from '../memory/format'
 import { projectMemory } from '../memory/project-memory'
@@ -659,10 +660,12 @@ export async function startTask(
   // on demand. Reuses the one RAG pipeline (enrichedRecall) so it works over
   // the user's EXISTING memory from day one. Best-effort; never blocks a start.
   // Prefer main projectPath for indexes (worktree shares vault via .prjct).
-  const relatedContext = await recallRelatedContext(projectPath, projectId, description)
+  const related = await recallRelatedContext(projectPath, projectId, description)
+  const relatedContext = related.context
   // Work scope: memory (vectorial/FTS) + BM25 + import/co-change graph — constrained
-  // list BEFORE the agent greps. Full async path includes semantic blend when enabled.
-  const likelyFiles = await recallLikelyFiles(projectPath, projectId, description)
+  // list BEFORE the agent greps. The semantic leg reuses the hits recalled
+  // above — one enrichedRecall per work start, not two.
+  const likelyFiles = await recallLikelyFiles(projectPath, projectId, description, related.hits)
   // Predictive risk: concentrate the preventive memory for the area this cycle
   // will touch, so the trap is surfaced at planning, not after it bites.
   const risks = recallRisksForFiles(projectId, likelyFiles)
@@ -835,11 +838,12 @@ export function recallRisksForFiles(projectId: string, files: LikelyFileHit[]): 
 async function recallLikelyFiles(
   projectPath: string,
   projectId: string,
-  description: string
+  description: string,
+  memoryHits: MemoryEntry[]
 ): Promise<LikelyFileHit[]> {
   try {
     const { resolveWorkScope, toLikelyFileHits } = await import('./work-scope')
-    const scope = await resolveWorkScope(projectPath, projectId, description, 8)
+    const scope = await resolveWorkScope(projectPath, projectId, description, 8, { memoryHits })
     if (scope.files.length > 0) return toLikelyFileHits(scope.files)
     // Fallback pure sync ranker if async path empty
     return rankLikelyFiles(projectId, description)
@@ -852,16 +856,27 @@ async function recallLikelyFiles(
   }
 }
 
+/** Related-context entries shown at work start. */
+const RELATED_CONTEXT_LIMIT = 8
+/** Entries recalled once; the scope's semantic leg reads the wider window. */
+const WORK_START_RECALL_LIMIT = 12
+
+interface RelatedContextRecall {
+  context: RelatedContextHit[]
+  /** Raw hits, for callers that need the same recall without re-running it. */
+  hits: MemoryEntry[]
+}
+
 /** Pull the RAG for context related to a task description (best-effort). */
 async function recallRelatedContext(
   projectPath: string,
   projectId: string,
   description: string
-): Promise<RelatedContextHit[]> {
+): Promise<RelatedContextRecall> {
   try {
     const { enrichedRecall } = await import('../memory/enriched-recall')
     const { deriveTitle } = await import('../memory/format')
-    const hits = await enrichedRecall(projectPath, projectId, {
+    const recalled = await enrichedRecall(projectPath, projectId, {
       topic: description,
       types: [
         'decision',
@@ -873,9 +888,10 @@ async function recallRelatedContext(
         'learning',
         'context',
       ],
-      limit: 8,
+      limit: WORK_START_RECALL_LIMIT,
     })
-    if (hits.length === 0) return []
+    const hits = recalled.slice(0, RELATED_CONTEXT_LIMIT)
+    if (hits.length === 0) return { context: [], hits: recalled }
     // Learn which surfaced context proves useful (usefulness ledger).
     const { recordSurfacedForActiveTask } = await import('./usefulness/surface-attribution')
     await recordSurfacedForActiveTask(
@@ -883,7 +899,7 @@ async function recallRelatedContext(
       projectPath,
       hits.map((h) => h.id)
     )
-    return hits.map((h) => {
+    const context = hits.map((h) => {
       const fields = parseLivingContextFields(h.content)
       const files =
         fields.relatedFiles ??
@@ -907,8 +923,9 @@ async function recallRelatedContext(
         nextImplication: fields.nextImplication,
       }
     })
+    return { context, hits: recalled }
   } catch {
-    return []
+    return { context: [], hits: [] }
   }
 }
 

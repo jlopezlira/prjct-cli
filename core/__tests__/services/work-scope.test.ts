@@ -9,6 +9,7 @@ import {
   extractFilePathsFromEntries,
   formatWorkScopeBlock,
   isUsefulScopePath,
+  resolveWorkScope,
   resolveWorkScopeSync,
 } from '../../services/work-scope'
 import { prjctDb } from '../../storage/database'
@@ -106,5 +107,59 @@ describe('resolveWorkScopeSync', () => {
     expect(r.sources).toBeDefined()
     expect(Array.isArray(r.files)).toBe(true)
     expect(typeof r.agentBlock).toBe('string')
+  })
+})
+
+describe('resolveWorkScope — caller-supplied memory hits', () => {
+  const roots: string[] = []
+  afterEach(() => {
+    for (const r of roots) {
+      try {
+        fs.rmSync(r, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+    }
+    roots.length = 0
+  })
+
+  test('seeds the scope from the supplied hits without re-running recall', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-ws3-'))
+    roots.push(root)
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'src', 'App.vue'), '<template/>')
+    fs.writeFileSync(path.join(root, 'core.ts'), 'export {}')
+    const projectId = randomUUID()
+    prjctDb.getDoc(projectId, 'project')
+    await refreshFileInventory(projectId, root)
+
+    const now = new Date().toISOString()
+    const memoryHits = [
+      {
+        id: 'mem_seed',
+        type: 'gotcha',
+        content: 'The template in src/App.vue re-renders on every store write',
+        tags: {},
+        rememberedAt: now,
+        provenance: 'declared',
+      },
+      {
+        // Outside the scope's semantic types: must not seed.
+        id: 'mem_fact',
+        type: 'fact',
+        content: 'core.ts is the entry point',
+        tags: {},
+        rememberedAt: now,
+        provenance: 'declared',
+      },
+    ] as MemoryEntry[]
+
+    const scope = await resolveWorkScope(root, projectId, 'store write re-render', 8, {
+      memoryHits,
+    })
+    const paths = scope.files.map((f) => f.path)
+    expect(paths).toContain('src/App.vue')
+    expect(paths).not.toContain('core.ts')
+    expect(scope.sources.memorySeeds).toBeGreaterThanOrEqual(1)
   })
 })
