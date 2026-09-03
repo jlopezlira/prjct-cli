@@ -215,6 +215,13 @@ function batchTagsByEntryId(projectId: string, ids: string[]): Map<string, Recor
  * `whereTail` is the part after `WHERE deleted_at IS NULL` (e.g. `AND type = ?
  * ORDER BY ... LIMIT ?`); `params` binds its placeholders.
  */
+/** Split `items` into consecutive slices of at most `size` (const-only, no counters). */
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, k) =>
+    items.slice(k * size, (k + 1) * size)
+  )
+}
+
 function loadV2Entries(
   projectId: string,
   whereTail: string,
@@ -863,6 +870,78 @@ export const projectMemory = {
   },
 
   /**
+   * `recallForFile` for a SET of paths in one query. The preventive sweep
+   * over a changeset (`guard --diff`, the work-start risk brief, world-model
+   * traps) used to issue one file-tagged scan per path — a 200-file PR was
+   * 200 scans. Same exact / suffix / basename semantics per path, same
+   * preventive filter and superseded prune, grouped back per input path.
+   * `preventiveOnly: false` keeps the per-file context leg and therefore
+   * falls back to the single-path implementation.
+   */
+  recallForFiles(
+    projectId: string,
+    filePaths: readonly string[],
+    limitPerFile = 2,
+    opts: { preventiveOnly?: boolean } = {}
+  ): Map<string, MemoryEntry[]> {
+    const out = new Map<string, MemoryEntry[]>()
+    const files = [...new Set(filePaths.map((f) => f.trim()).filter(Boolean))]
+    if (files.length === 0) return out
+    if (!opts.preventiveOnly) {
+      for (const file of files) out.set(file, this.recallForFile(projectId, file, limitPerFile))
+      return out
+    }
+    const isPreventive = (e: MemoryEntry) =>
+      e.type === 'gotcha' ||
+      e.type === 'red-herring' ||
+      e.type === 'anti-pattern' ||
+      e.tags?.pattern === 'recurring-bug'
+    const baseOf = (file: string) => file.split('/').pop() ?? file
+    const matchesPath = (stored: string, file: string, base: string) =>
+      stored === file ||
+      file.endsWith(`/${stored}`) ||
+      stored === base ||
+      stored.endsWith(`/${base}`)
+
+    // Chunk so the bound-parameter count stays far below SQLite's limit.
+    const matches: MemoryEntry[] = []
+    for (const chunk of chunked(files, 100)) {
+      const bases = chunk.map(baseOf)
+      const inList = [...new Set([...chunk, ...bases])]
+      const placeholders = inList.map(() => '?').join(',')
+      const suffixClauses = bases.map(() => "file LIKE '%/' || ?").join(' OR ')
+      const sqlLimit = Math.max(limitPerFile * 5, 15) * chunk.length
+      try {
+        matches.push(
+          ...loadV2Entries(
+            projectId,
+            `AND file IS NOT NULL
+              AND (file IN (${placeholders}) OR ${suffixClauses})
+              ORDER BY created_at DESC, rowid DESC
+              LIMIT ?`,
+            ...inList,
+            ...bases,
+            sqlLimit
+          ).filter(isPreventive)
+        )
+      } catch {
+        /* best-effort: this chunk contributes nothing */
+      }
+    }
+    const dead = collectSupersededIds(matches)
+    const live = dead.size > 0 ? matches.filter((entry) => !dead.has(entry.id)) : matches
+    for (const file of files) {
+      const base = baseOf(file)
+      const hits = live.filter((entry) => {
+        const stored = entry.tags?.file
+        return typeof stored === 'string' && matchesPath(stored, file, base)
+      })
+      if (hits.length > 0) out.set(file, hits.slice(0, limitPerFile))
+    }
+    return out
+  },
+
+  /**
    * Resolve a single memory entry by its `mem_<rowid>` id (or a bare
    * numeric id). This is the legibility fix: every `mem_NNNN` reference
    * the topical-memory injection / a memory body cites (`relates=mem_X`,
@@ -880,6 +959,40 @@ export const projectMemory = {
     } catch {
       return null
     }
+  },
+
+  /**
+   * Batch `getById`: one query for a list of ids, returned in INPUT order
+   * with misses dropped. The semantic leg and link expansion resolve their
+   * winners by id — this replaces their N+1 single-row round-trips (each
+   * of which also fired its own tag batch).
+   */
+  getByIds(projectId: string, ids: readonly string[]): MemoryEntry[] {
+    const normalized = ids
+      .map((id) =>
+        String(id)
+          .trim()
+          .match(/^(?:mem[_-])?(\d+)$/i)
+      )
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map((m) => `mem_${m[1]}`)
+    const unique = [...new Set(normalized)]
+    if (unique.length === 0) return []
+    const byId = new Map<string, MemoryEntry>()
+    for (const chunk of chunked(unique, 400)) {
+      try {
+        for (const entry of loadV2Entries(
+          projectId,
+          `AND id IN (${chunk.map(() => '?').join(',')})`,
+          ...chunk
+        )) {
+          byId.set(entry.id, entry)
+        }
+      } catch {
+        /* best-effort: misses are dropped */
+      }
+    }
+    return unique.map((id) => byId.get(id)).filter((e): e is MemoryEntry => e !== undefined)
   },
 
   /**
@@ -1012,10 +1125,10 @@ export const projectMemory = {
     // tag") so an arbitrary `mem_N`-looking tag value can't pull noise.
     const relKeys = ['resolves', 'relates', 'supersedes', 'superseded-by', 'duplicates', 'spec']
     const seen = new Set(seed.map((e) => e.id))
-    const linked: MemoryEntry[] = []
-
+    // Collect every candidate ref in seed order first, then resolve the
+    // whole set in one query (was: one getById round-trip per ref).
+    const wanted: string[] = []
     for (const entry of seed) {
-      if (linked.length >= cap) break
       const refs = new Set<string>()
       for (const key of relKeys) {
         const v = entry.tags?.[key]
@@ -1023,16 +1136,13 @@ export const projectMemory = {
         for (const m of String(v).matchAll(refRe)) refs.add(`mem_${m[1]}`)
       }
       for (const m2 of entry.content.matchAll(refRe)) refs.add(`mem_${m2[1]}`)
-
       for (const ref of refs) {
-        if (linked.length >= cap) break
         if (seen.has(ref)) continue
         seen.add(ref)
-        const e = projectMemory.getById(projectId, ref)
-        if (e) linked.push(e)
+        wanted.push(ref)
       }
     }
-    return linked
+    return projectMemory.getByIds(projectId, wanted).slice(0, cap)
   },
 
   /**

@@ -943,3 +943,91 @@ describe('topic supersession — edge-case hardening (cleanup sweep)', () => {
     }
   })
 })
+
+describe('projectMemory.getByIds — batched id resolve', () => {
+  it('returns entries in input order, drops misses, dedupes, accepts bare numeric ids', async () => {
+    await writeMemoryEntry({ type: 'decision', content: 'first entry', tags: {} })
+    await writeMemoryEntry({ type: 'gotcha', content: 'second entry', tags: {} })
+    const all = projectMemory.recall(fixture.projectId, { limit: 10 })
+    const first = all.find((e) => e.content === 'first entry')!
+    const second = all.find((e) => e.content === 'second entry')!
+    const bareSecond = second.id.replace(/^mem_/, '')
+
+    const out = projectMemory.getByIds(fixture.projectId, [
+      second.id,
+      'mem_999999',
+      first.id,
+      bareSecond,
+      'not-an-id',
+    ])
+    expect(out.map((e) => e.content)).toEqual(['second entry', 'first entry'])
+    expect(projectMemory.getByIds(fixture.projectId, [])).toEqual([])
+    expect(out[0]?.tags).toBeDefined()
+  })
+})
+
+describe('projectMemory.recallForFiles — batched preventive sweep', () => {
+  it('groups exact / suffix / basename matches per input path with the single-path semantics', async () => {
+    await writeMemoryEntry({
+      type: 'gotcha',
+      content: 'daemon caches old hook code',
+      tags: { file: 'core/daemon/daemon.ts' },
+    })
+    await writeMemoryEntry({
+      type: 'anti-pattern',
+      content: 'never read sessions from the client tree',
+      tags: { file: 'core/session/session-store.ts' },
+    })
+    await writeMemoryEntry({
+      type: 'decision',
+      content: 'plain decision is not preventive',
+      tags: { file: 'core/daemon/daemon.ts' },
+    })
+    await writeMemoryEntry({
+      type: 'gotcha',
+      content: 'unrelated trap',
+      tags: { file: 'core/hooks/prompt.ts' },
+    })
+
+    const files = [
+      'core/daemon/daemon.ts',
+      '/abs/checkout/core/session/session-store.ts',
+      'core/utils/exec.ts',
+    ]
+    const batched = projectMemory.recallForFiles(fixture.projectId, files, 2, {
+      preventiveOnly: true,
+    })
+
+    expect([...batched.keys()].sort()).toEqual(
+      ['/abs/checkout/core/session/session-store.ts', 'core/daemon/daemon.ts'].sort()
+    )
+    expect(batched.get('core/daemon/daemon.ts')?.map((e) => e.content)).toEqual([
+      'daemon caches old hook code',
+    ])
+    expect(batched.get('/abs/checkout/core/session/session-store.ts')?.[0]?.type).toBe(
+      'anti-pattern'
+    )
+    // Parity with the per-file path it replaces.
+    for (const file of files) {
+      const single = projectMemory.recallForFile(fixture.projectId, file, 2, {
+        preventiveOnly: true,
+      })
+      expect((batched.get(file) ?? []).map((e) => e.id)).toEqual(single.map((e) => e.id))
+    }
+  })
+
+  it('honours the per-file limit and returns an empty map for no paths', async () => {
+    for (const i of [0, 1, 2, 3]) {
+      await writeMemoryEntry({
+        type: 'gotcha',
+        content: `trap ${i}`,
+        tags: { file: 'core/a.ts' },
+      })
+    }
+    const batched = projectMemory.recallForFiles(fixture.projectId, ['core/a.ts', ''], 2, {
+      preventiveOnly: true,
+    })
+    expect(batched.get('core/a.ts')?.length).toBe(2)
+    expect(projectMemory.recallForFiles(fixture.projectId, [], 2).size).toBe(0)
+  })
+})

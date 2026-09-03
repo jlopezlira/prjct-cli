@@ -18,7 +18,7 @@ import type { LikelyFileHit } from './file-cue'
 import {
   formatInventorySummary,
   inventoryExtensions,
-  inventoryPathWeight,
+  inventoryPathWeightFor,
   loadFileInventory,
   pathMatchesInventory,
 } from './project-file-inventory'
@@ -110,8 +110,9 @@ function mergeScope(
 
   const bump = (filePath: string, score: number, signal: string, reason: string) => {
     if (!pathMatchesInventory(projectId, filePath)) return
-    // Unknown ext vs inventory: downrank, never drop (P0-4).
-    const weighted = score * inventoryPathWeight(projectId, filePath)
+    // Unknown ext vs inventory: downrank, never drop (P0-4). One inventory
+    // load for the whole merge — not one per candidate.
+    const weighted = score * inventoryPathWeightFor(invExts, filePath)
     const cur = scores.get(filePath)
     if (!cur) {
       scores.set(filePath, {
@@ -179,7 +180,9 @@ function mergeScope(
   const graphImpact = (() => {
     if (seedForGraph.length === 0) return null
     try {
-      return breakImpact(projectId, seedForGraph, limit)
+      // Neighbours only: traps for the resolved files are recalled once by
+      // the caller (recallRisksForFiles), not per graph expansion.
+      return breakImpact(projectId, seedForGraph, limit, { traps: false })
     } catch {
       return null
     }
