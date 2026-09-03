@@ -4,6 +4,7 @@
  * `kv_store` + normalized tables for indexed reads + append-only `events`.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
 import pathManager from '../infrastructure/path-manager'
@@ -48,12 +49,55 @@ function monotonicStamp(prev: string | null | undefined): string {
 /** Max concurrent DB connections before evicting least-recently-used */
 const MAX_DB_CONNECTIONS = 3
 
+/**
+ * Lock-wait budget every connection opens with (sqlite-compat). Commands
+ * (sync, ship, remember) legitimately wait this long for a cross-process
+ * writer to finish rather than fail.
+ */
+export const DEFAULT_BUSY_TIMEOUT_MS = 5000
+
+/**
+ * Per-async-context override of `PRAGMA busy_timeout`. The driver is
+ * synchronous, so a write that waits on another process's lock blocks the
+ * WHOLE event loop for up to busy_timeout — in the daemon that stalls every
+ * hook behind it (measured: hook:prompt tails of 5s/10s/18s, exact multiples
+ * of the 5000ms default, while a detached cold-path child held the write
+ * lock). Latency-critical work runs under {@link withBusyTimeout} with a
+ * short budget: a contended telemetry write then fails fast (SQLITE_BUSY,
+ * caught by the fail-soft hook) instead of freezing the agent's turn.
+ *
+ * The pragma is per-connection, so `getDb` re-applies it whenever the value
+ * the current async context wants differs from the last one applied to that
+ * connection — a PRAGMA is microseconds, and JS is single-threaded, so an
+ * interleaved command-lane job can never observe a hook's short budget: its
+ * next `getDb` call restores the default before it touches the driver.
+ */
+const busyTimeoutContext = new AsyncLocalStorage<number>()
+
+export function withBusyTimeout<T>(timeoutMs: number, fn: () => T): T {
+  return busyTimeoutContext.run(timeoutMs, fn)
+}
+
+/** Budget the current async context asked for (default when none did). */
+export function currentBusyTimeoutMs(): number {
+  return busyTimeoutContext.getStore() ?? DEFAULT_BUSY_TIMEOUT_MS
+}
+
 class PrjctDatabase {
   private connections = new Map<string, SqliteDatabase>()
   private accessOrder: string[] = []
   // Cache prepared statements per-connection. WeakMap keys auto-GC when
   // the SqliteDatabase reference is dropped during evictLru()/close().
   private statementCache = new WeakMap<SqliteDatabase, Map<string, SqliteStatement>>()
+  /** Last busy_timeout applied per connection — see busyTimeoutContext. */
+  private appliedBusyTimeout = new WeakMap<SqliteDatabase, number>()
+
+  private applyBusyTimeout(db: SqliteDatabase): void {
+    const wanted = currentBusyTimeoutMs()
+    if (this.appliedBusyTimeout.get(db) === wanted) return
+    db.run(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(wanted))}`)
+    this.appliedBusyTimeout.set(db, wanted)
+  }
 
   private prepareCached(db: SqliteDatabase, sql: string): SqliteStatement {
     const existingCache = this.statementCache.get(db)
@@ -78,6 +122,7 @@ class PrjctDatabase {
     const existing = this.connections.get(projectId)
     if (existing) {
       this.touchAccessOrder(projectId)
+      this.applyBusyTimeout(existing)
       return existing
     }
 
@@ -103,6 +148,10 @@ class PrjctDatabase {
 
     this.connections.set(projectId, db)
     this.touchAccessOrder(projectId)
+    // openDatabase baked in the default; record it so a default-context
+    // caller never re-runs the PRAGMA, then honour the current context.
+    this.appliedBusyTimeout.set(db, DEFAULT_BUSY_TIMEOUT_MS)
+    this.applyBusyTimeout(db)
     return db
   }
 
