@@ -23,6 +23,7 @@ import {
   computeVerdict,
   createLedger,
   evidenceScore,
+  finalizeLedger,
   findingDna,
   intensityFromChangeset,
   intensityProtocol,
@@ -370,6 +371,28 @@ describe('batch refutation', () => {
 })
 
 describe('convergence budget', () => {
+  it('stops standard review after its single fix and rejudge round', () => {
+    const ledger = {
+      ...createLedger({ target: 't', intensity: 'standard', now: 't0' }),
+      fixRound: 1,
+      reviewPasses: { initial: 1, challenge: 1, rejudge: 1 },
+      findings: [
+        finding({
+          id: 'still-open',
+          severity: 'critical',
+          title: 'still open after rejudge',
+          status: 'stands',
+          file: 'core/a.ts',
+          line: 1,
+          evidence: 'reproduced after the bounded fix round',
+        }),
+      ],
+    }
+
+    expect(canStartFixRound(ledger).ok).toBe(false)
+    expect(buildNextAction(ledger, 'standard').kind).toBe('blocked_budget')
+  })
+
   it('caps at MAX_FIX_ROUNDS=2', () => {
     expect(MAX_FIX_ROUNDS).toBe(2)
     const initial = {
@@ -479,6 +502,26 @@ describe('next-action card', () => {
     const c = buildNextAction(ledger, 'standard')
     expect(c.kind).toBe('fix_ranked')
     expect(c.rankedFixIds).toContain('a')
+  })
+
+  it('fixed findings remain in progress until the scoped re-judge verifies them', () => {
+    const ledger = createLedger({ target: 't', intensity: 'standard', now: 't0' })
+    ledger.fixRound = 1
+    ledger.findings = [
+      finding({
+        id: 'a',
+        severity: 'critical',
+        title: 'fixed but not verified',
+        status: 'fixed',
+        file: 'a.ts',
+        line: 1,
+        evidence: 'regression test added',
+      }),
+    ]
+
+    const finalized = finalizeLedger(ledger, 't1')
+    expect(finalized.verdict).toBe('in_progress')
+    expect(buildNextAction(finalized, 'standard').kind).toBe('rejudge_scoped')
   })
 })
 
@@ -613,7 +656,34 @@ describe('scope freeze (gentle-ai v1.49)', () => {
       ['core/services/x.ts']
     )
     expect(f.status).toBe('info')
+    expect(f.scopeDisposition).toBe('follow-up')
     expect(f.evidence).toMatch(/out of frozen review scope/i)
+  })
+
+  it('upsert preserves an out-of-scope critical as non-blocking info', () => {
+    const ledger = createLedger({
+      target: 'payload',
+      intensity: 'standard',
+      now: 't0',
+      scopePaths: ['core/in-scope.ts'],
+    })
+    const scoped = applyScopeFreeze(
+      finding({
+        id: 'outside',
+        severity: 'critical',
+        title: 'outside payload',
+        file: 'core/outside.ts',
+        line: 1,
+        evidence: 'concrete but not part of this ship payload',
+      }),
+      ledger.scopePaths
+    )
+    const inserted = upsertFinding([], scoped)
+    ledger.findings = inserted.findings
+
+    expect(inserted.finding.status).toBe('info')
+    expect(inserted.finding.scopeDisposition).toBe('follow-up')
+    expect(computeVerdict(ledger)).toBe('approved')
   })
 
   it('in-scope findings stay candidates', () => {

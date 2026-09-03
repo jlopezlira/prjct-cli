@@ -8,7 +8,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { execAsync } from '../utils/exec'
+import { execAsync, execFileAsync } from '../utils/exec'
 import { fileExists } from '../utils/file-helper'
 
 // Types
@@ -24,6 +24,8 @@ interface WorktreeInfo {
   isMain: boolean
   /** Task slug used to create this worktree (from directory name) */
   slug: string
+  /** Git-level lock used while a new managed worktree is being registered. */
+  locked?: boolean
 }
 
 interface WorktreeCreateOptions {
@@ -31,6 +33,13 @@ interface WorktreeCreateOptions {
   branch?: string
   /** Base branch to create from (default: current HEAD) */
   baseBranch?: string
+}
+
+interface WorktreeCleanOptions {
+  /** Worktrees backing live cycles; never remove even when still at the base commit. */
+  protectedPaths?: readonly string[]
+  /** Re-check live ownership immediately before deletion to close snapshot races. */
+  isProtected?: (worktreePath: string) => Promise<boolean>
 }
 
 // Constants
@@ -56,9 +65,20 @@ class WorktreeService {
 
     await fs.mkdir(path.join(mainPath, WORKTREE_DIR), { recursive: true })
 
-    // Create worktree with new branch
-    const baseArg = options.baseBranch ? ` ${options.baseBranch}` : ''
-    await execAsync(`git worktree add "${worktreePath}" -b "${branch}"${baseArg}`, {
+    // Git's lock is created atomically with the worktree registration. It
+    // protects the creation→task-registration window from concurrent cleanup.
+    const args = [
+      'worktree',
+      'add',
+      '--lock',
+      '--reason',
+      'prjct task registration in progress',
+      '-b',
+      branch,
+      worktreePath,
+      ...(options.baseBranch ? [options.baseBranch] : []),
+    ]
+    await execFileAsync('git', args, {
       cwd: mainPath,
     })
 
@@ -76,6 +96,19 @@ class WorktreeService {
     }
   }
 
+  /** Release the creation lock after the task is durably registered. */
+  async unlock(worktreePath: string): Promise<void> {
+    // A worktree that no longer exists on disk (removed manually or by
+    // `clean` after a merge) holds no lock — nothing to release.
+    if (!(await fileExists(worktreePath))) return
+    const mainPath = await this.getMainWorktree(worktreePath)
+    const registered = (await this.list(mainPath)).find(
+      (worktree) => path.resolve(worktree.path) === path.resolve(worktreePath)
+    )
+    if (!registered?.locked) return
+    await execFileAsync('git', ['worktree', 'unlock', worktreePath], { cwd: mainPath })
+  }
+
   /**
    * Remove a worktree and optionally delete its branch.
    */
@@ -89,7 +122,10 @@ class WorktreeService {
           .catch(() => undefined)
       : undefined
 
-    await execAsync(`git worktree remove "${worktreePath}" --force`, {
+    // Two force flags are Git's explicit escape hatch for a locked worktree.
+    // `remove(..., true)` is the rollback path for failed task registration,
+    // so it must also clean the atomic creation lock.
+    await execFileAsync('git', ['worktree', 'remove', '--force', '--force', worktreePath], {
       cwd: mainPath,
     })
 
@@ -200,22 +236,73 @@ class WorktreeService {
   /**
    * Remove worktrees whose branches have been merged or deleted.
    */
-  async clean(projectPath: string): Promise<string[]> {
-    const worktrees = await this.list(projectPath)
-    const removed: string[] = []
-
-    // Prune stale worktree references first
+  async clean(projectPath: string, options: WorktreeCleanOptions = {}): Promise<string[]> {
     const mainPath = await this.getMainWorktree(projectPath)
-    await execAsync('git worktree prune', { cwd: mainPath })
+    const managedRoot = path.join(mainPath, WORKTREE_DIR)
+    const currentPath = await execFileAsync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: projectPath,
+    }).then(({ stdout }) => path.resolve(stdout.trim()))
+    const protectedPaths = new Set((options.protectedPaths ?? []).map((p) => path.resolve(p)))
+    const beforePrune = await this.list(projectPath)
+    const removed = (
+      await Promise.all(
+        beforePrune.map(async (wt) =>
+          !wt.isMain && this.isManagedPath(wt.path, managedRoot) && !(await fileExists(wt.path))
+            ? wt.slug
+            : null
+        )
+      )
+    ).filter((slug): slug is string => slug !== null)
 
-    for (const wt of worktrees) {
-      if (wt.isMain) continue
+    // Missing directories leave git metadata behind. Prune only those stale
+    // registrations first; this never removes a live worktree directory.
+    await execFileAsync('git', ['worktree', 'prune'], { cwd: mainPath })
 
-      if (!(await fileExists(wt.path))) {
-        removed.push(wt.slug)
+    for (const wt of await this.list(projectPath)) {
+      const resolvedPath = path.resolve(wt.path)
+      if (
+        wt.isMain ||
+        wt.locked ||
+        resolvedPath === currentPath ||
+        protectedPaths.has(resolvedPath) ||
+        (await options.isProtected?.(resolvedPath)) ||
+        !this.isManagedPath(resolvedPath, managedRoot)
+      ) {
+        continue
       }
+
+      const clean = await execFileAsync('git', ['status', '--porcelain'], { cwd: wt.path })
+        .then(({ stdout }) => stdout.trim().length === 0)
+        .catch(() => false)
+      if (!clean) continue
+
+      // The list snapshot can be stale: a task may commit after clean starts.
+      // Bind ancestry to the worktree's live HEAD immediately before deletion.
+      const liveHead = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: wt.path }).then(
+        ({ stdout }) => stdout.trim(),
+        () => null
+      )
+      if (!liveHead) continue
+
+      const merged = await execFileAsync('git', ['merge-base', '--is-ancestor', liveHead, 'HEAD'], {
+        cwd: mainPath,
+      }).then(
+        () => true,
+        () => false
+      )
+      if (!merged) continue
+
+      // Ownership may appear while status and ancestry checks are running.
+      // Re-read it at the deletion boundary, after every slow git operation.
+      if (await options.isProtected?.(resolvedPath)) continue
+
+      // No --force and no branch deletion: git gets the final safety check,
+      // and the branch remains recoverable after the directory is removed.
+      await execFileAsync('git', ['worktree', 'remove', wt.path], { cwd: mainPath })
+      removed.push(wt.slug)
     }
 
+    await fs.rmdir(managedRoot).catch(() => undefined)
     return removed
   }
 
@@ -229,7 +316,7 @@ class WorktreeService {
       if (!block.trim()) continue
 
       const lines = block.trim().split('\n')
-      const { wtPath, commit, branch, isBare } = lines.reduce(
+      const { wtPath, commit, branch, isBare, locked } = lines.reduce(
         (info, line) => {
           if (line.startsWith('worktree ')) info.wtPath = line.replace('worktree ', '').trim()
           else if (line.startsWith('HEAD ')) info.commit = line.replace('HEAD ', '').trim()
@@ -237,9 +324,10 @@ class WorktreeService {
             info.branch = line.replace('branch refs/heads/', '').trim()
           } else if (line === 'bare') info.isBare = true
           else if (line === 'detached') info.branch = '(detached)'
+          else if (line === 'locked' || line.startsWith('locked ')) info.locked = true
           return info
         },
-        { wtPath: '', commit: '', branch: '', isBare: false }
+        { wtPath: '', commit: '', branch: '', isBare: false, locked: false }
       )
 
       if (wtPath) {
@@ -250,11 +338,17 @@ class WorktreeService {
           commit,
           isMain,
           slug: isMain ? 'main' : path.basename(wtPath),
+          locked,
         })
       }
     }
 
     return worktrees
+  }
+
+  private isManagedPath(candidate: string, managedRoot: string): boolean {
+    const relative = path.relative(path.resolve(managedRoot), path.resolve(candidate))
+    return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative)
   }
 }
 

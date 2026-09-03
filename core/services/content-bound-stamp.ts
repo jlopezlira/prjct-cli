@@ -11,11 +11,12 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { GitInfraError, gitStdout } from '../utils/exec'
+import { resolveReviewPayloadPaths } from './delivery-geometry'
 
 /** Missing / deleted path sentinel — still contributes to treeHash. */
 export const BLOB_MISSING = 'missing' as const
 
-export const CONTENT_BOUND_VERSION = 1 as const
+export const CONTENT_BOUND_VERSION = 2 as const
 
 /** Cap path stamps so ledger docs stay small (large monorepo diffs). */
 export const CONTENT_BOUND_MAX_PATHS = 200
@@ -27,7 +28,8 @@ export interface ContentBoundPathStamp {
 }
 
 export interface ContentBoundStamp {
-  version: typeof CONTENT_BOUND_VERSION
+  /** v1 hashed bytes only; v2 also binds file kind/mode, symlink target, and gitlink SHA. */
+  version: 1 | typeof CONTENT_BOUND_VERSION
   /** sha256 of sorted `path\\0blobHash` lines — SSOT for match/drift. */
   treeHash: string
   pathCount: number
@@ -35,6 +37,10 @@ export interface ContentBoundStamp {
   paths: ContentBoundPathStamp[]
   stampedAt: string
   headSha?: string
+  /** Stamp was created from the authoritative ship payload manifest. */
+  payloadBound?: boolean
+  /** True when path hashes include Git-relevant identity instead of bytes alone. */
+  identityBound?: boolean
 }
 
 export interface ContentBoundDriftVerdict {
@@ -77,7 +83,7 @@ export function normalizeStampPath(p: string): string {
  */
 export function stampFromContents(
   entries: ReadonlyArray<{ path: string; content: string | Buffer | null }>,
-  opts: { stampedAt: string; headSha?: string; maxPaths?: number }
+  opts: { stampedAt: string; headSha?: string; maxPaths?: number; payloadBound?: boolean }
 ): ContentBoundStamp {
   const max = opts.maxPaths ?? CONTENT_BOUND_MAX_PATHS
   const full: ContentBoundPathStamp[] = entries
@@ -100,6 +106,8 @@ export function stampFromContents(
     paths: all.slice(0, max),
     stampedAt: opts.stampedAt,
     headSha: opts.headSha,
+    payloadBound: opts.payloadBound,
+    identityBound: false,
   }
 }
 
@@ -195,31 +203,41 @@ export async function resolveStampPaths(
       ...new Set(
         scopePaths.map(normalizeStampPath).filter((p) => p.length > 0 && !p.endsWith('/'))
       ),
-    ].slice(0, CONTENT_BOUND_MAX_PATHS)
+    ]
   }
-  const names =
-    (await safeGit(projectPath, ['diff', '--name-only', 'HEAD'])) ??
-    (await safeGit(projectPath, ['diff', '--name-only', '--cached'])) ??
-    ''
-  // Prefer unstaged+staged; if clean, last commit names (ship after commit)
-  const committed = (await safeGit(projectPath, ['diff', '--name-only', 'HEAD~1..HEAD'])) ?? ''
-  const raw = names.trim() || committed.trim()
-  if (!raw) return []
-  return [
-    ...new Set(
-      raw
-        .split('\n')
-        .map(normalizeStampPath)
-        .filter((p) => p.length > 0)
-    ),
-  ].slice(0, CONTENT_BOUND_MAX_PATHS)
+  return resolveReviewPayloadPaths(projectPath)
 }
 
-async function readFileOrNull(abs: string): Promise<Buffer | null> {
+function hashIdentity(kind: string, mode: string, value: string | Buffer): string {
+  return sha256Hex(
+    Buffer.concat([
+      Buffer.from(`${kind}\0${mode}\0`, 'utf8'),
+      typeof value === 'string' ? Buffer.from(value, 'utf8') : value,
+    ])
+  )
+}
+
+async function hashProjectPath(projectPath: string, relativePath: string): Promise<string> {
+  const root = path.resolve(projectPath)
+  const abs = path.resolve(root, relativePath)
+  if (abs === root || !abs.startsWith(`${root}${path.sep}`)) return BLOB_MISSING
   try {
-    return await fs.readFile(abs)
-  } catch {
-    return null
+    const stat = await fs.lstat(abs)
+    if (stat.isSymbolicLink()) {
+      return hashIdentity('symlink', '120000', await fs.readlink(abs))
+    }
+    if (stat.isDirectory()) {
+      const staged = await safeGit(projectPath, ['ls-files', '--stage', '--', relativePath])
+      if (!staged?.startsWith('160000 ')) return hashIdentity('directory', '040000', '')
+      const checkedOutSha = await safeGit(abs, ['rev-parse', 'HEAD'])
+      return hashIdentity('gitlink', '160000', checkedOutSha ?? BLOB_MISSING)
+    }
+    if (!stat.isFile()) return hashIdentity('special', '000000', '')
+    const mode = (stat.mode & 0o111) !== 0 ? '100755' : '100644'
+    return hashIdentity('blob', mode, await fs.readFile(abs))
+  } catch (error) {
+    if (error instanceof GitInfraError) throw error
+    return BLOB_MISSING
   }
 }
 
@@ -227,18 +245,28 @@ async function readFileOrNull(abs: string): Promise<Buffer | null> {
 export async function stampProjectPaths(
   projectPath: string,
   paths: readonly string[],
-  opts: { stampedAt: string; headSha?: string }
+  opts: { stampedAt: string; headSha?: string; payloadBound?: boolean }
 ): Promise<ContentBoundStamp> {
-  const entries: Array<{ path: string; content: Buffer | null }> = []
+  const entries: ContentBoundPathStamp[] = []
   for (const p of paths) {
     const norm = normalizeStampPath(p)
-    if (!norm || norm.includes('..')) continue
-    const abs = path.join(projectPath, norm)
-    // Refuse escaping project root
-    if (!abs.startsWith(path.resolve(projectPath))) continue
-    entries.push({ path: norm, content: await readFileOrNull(abs) })
+    if (!norm) continue
+    entries.push({ path: norm, blobHash: await hashProjectPath(projectPath, norm) })
   }
-  return stampFromContents(entries, opts)
+  const byPath = new Map(entries.map((entry) => [entry.path, entry.blobHash]))
+  const all = [...byPath.entries()]
+    .map(([entryPath, blobHash]) => ({ path: entryPath, blobHash }))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+  return {
+    version: CONTENT_BOUND_VERSION,
+    treeHash: buildTreeHash(all),
+    pathCount: all.length,
+    paths: all.slice(0, CONTENT_BOUND_MAX_PATHS),
+    stampedAt: opts.stampedAt,
+    headSha: opts.headSha,
+    payloadBound: opts.payloadBound,
+    identityBound: true,
+  }
 }
 
 /** Full approve-time stamp: resolve paths + hash + optional HEAD. */
@@ -249,7 +277,7 @@ export async function stampForApprove(
 ): Promise<ContentBoundStamp> {
   const paths = await resolveStampPaths(projectPath, scopePaths)
   const headSha = (await safeGit(projectPath, ['rev-parse', 'HEAD'])) ?? undefined
-  return stampProjectPaths(projectPath, paths, { stampedAt, headSha })
+  return stampProjectPaths(projectPath, paths, { stampedAt, headSha, payloadBound: true })
 }
 
 /** Recompute treeHash for drift check at ship. */
@@ -259,8 +287,9 @@ export async function currentTreeHashForStamp(
 ): Promise<string | null> {
   try {
     // Prefer paths recorded on stamp; fall back to re-resolve if empty
-    const paths =
-      stamp.paths.length > 0
+    const paths = stamp.payloadBound
+      ? await resolveReviewPayloadPaths(projectPath)
+      : stamp.paths.length > 0
         ? stamp.paths.map((p) => p.path)
         : await resolveStampPaths(projectPath, null)
     // If pathCount > paths.length we only stamped a sample — still hash the sample

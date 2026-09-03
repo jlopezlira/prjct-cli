@@ -91,11 +91,25 @@ export const PROC_ENVELOPE_MAX = 240
  * process-group leader, so a group kill reaches grandchildren that a plain
  * `child.kill()` would orphan.
  */
-function killProcessTree(child: ChildProcess): void {
+async function killProcessTree(child: ChildProcess): Promise<void> {
   try {
     if (process.platform === 'win32') {
       if (child.pid !== undefined) {
-        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }).unref()
+        await new Promise<void>((resolve) => {
+          const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+            stdio: 'ignore',
+          })
+          const timer = setTimeout(() => {
+            killer.unref()
+            resolve()
+          }, 5_000)
+          const done = (): void => {
+            clearTimeout(timer)
+            resolve()
+          }
+          killer.once('error', done)
+          killer.once('close', done)
+        })
       }
     } else if (child.pid !== undefined) {
       process.kill(-child.pid, 'SIGKILL')
@@ -173,15 +187,23 @@ export function runProc(
       resolve(result)
     }
 
+    const finishAfterKill = async (result: ProcResult): Promise<void> => {
+      if (processState.settled) return
+      processState.settled = true
+      clearTimeout(timer)
+      opts.signal?.removeEventListener('abort', onAbort)
+      await killProcessTree(child)
+      resolve(result)
+    }
+
     const partials = (): { stdout: string; stderr: string } => ({
       stdout: joinChunks(outChunks, retainCap),
       stderr: joinChunks(errChunks, retainCap),
     })
 
     const finishTimeout = (budgetSource: ProcBudgetSource, ms: number): void => {
-      killProcessTree(child)
       const { stdout, stderr } = partials()
-      finish({
+      void finishAfterKill({
         ok: false,
         kind: 'timeout',
         budgetMs: ms,
@@ -194,11 +216,10 @@ export function runProc(
     }
 
     const finishOverflow = (): void => {
-      killProcessTree(child)
       const { stdout, stderr } = partials()
       // Finish NOW — do not wait for `close`. A process that ignores kill
       // would otherwise hang the Promise until the separate timeout fires.
-      finish({
+      void finishAfterKill({
         ok: false,
         kind: 'overflow',
         maxBuffer,

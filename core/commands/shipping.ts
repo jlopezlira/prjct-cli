@@ -1062,7 +1062,7 @@ async function resolveContradictoryReview(
 
   const { computeVerdict } = await import('../services/precision-judgment')
   const { judgmentLedgerStorage } = await import('../storage/judgment-ledger-storage')
-  const hasChangeset = await hasCommittedChangeset(projectPath)
+  const hasChangeset = await hasReviewPayload(projectPath)
   const ledger = judgmentLedgerStorage.get(projectId)
   const ledgerVerdict = ledger ? computeVerdict(ledger) : null
   const stampValid =
@@ -1079,11 +1079,10 @@ async function resolveContradictoryReview(
   })
 }
 
-async function hasCommittedChangeset(projectPath: string): Promise<boolean> {
+async function hasReviewPayload(projectPath: string): Promise<boolean> {
   try {
-    const { computeCommittedChangeset } = await import('../services/delivery-geometry')
-    const cs = await computeCommittedChangeset(projectPath)
-    return (cs?.files ?? 0) > 0 || (cs?.loc ?? 0) > 0
+    const { resolveReviewPayloadPaths } = await import('../services/delivery-geometry')
+    return (await resolveReviewPayloadPaths(projectPath)).length > 0
   } catch {
     // Unevaluable git → ask anyway. A question costs a round trip; skipping the
     // review silently because git hiccuped costs the review.

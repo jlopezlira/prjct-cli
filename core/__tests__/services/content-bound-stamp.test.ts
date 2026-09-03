@@ -4,21 +4,112 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
   BLOB_MISSING,
   buildTreeHash,
+  CONTENT_BOUND_VERSION,
   contentBoundDriftVerdict,
   currentTreeHashForStamp,
   hashBlobContent,
   resolveStampPaths,
+  stampForApprove,
   stampFromContents,
+  stampProjectPaths,
 } from '../../services/content-bound-stamp'
 import { GitInfraError } from '../../utils/exec'
 
 describe('content-bound-stamp', () => {
+  it('binds executable mode and symlink target identity, not only dereferenced bytes', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stamp-identity-'))
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'core.filemode', 'true'], { cwd: root })
+      await fs.writeFile(path.join(root, 'a.txt'), 'same\n')
+      await fs.writeFile(path.join(root, 'b.txt'), 'same\n')
+      await fs.writeFile(path.join(root, 'script.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o644 })
+      await fs.symlink('a.txt', path.join(root, 'current.txt'))
+
+      const modeStamp = await stampProjectPaths(root, ['script.sh'], { stampedAt: 't0' })
+      await fs.chmod(path.join(root, 'script.sh'), 0o755)
+      expect(await currentTreeHashForStamp(root, modeStamp)).not.toBe(modeStamp.treeHash)
+
+      const linkStamp = await stampProjectPaths(root, ['current.txt'], { stampedAt: 't1' })
+      await fs.unlink(path.join(root, 'current.txt'))
+      await fs.symlink('b.txt', path.join(root, 'current.txt'))
+      expect(await currentTreeHashForStamp(root, linkStamp)).not.toBe(linkStamp.treeHash)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('binds the checked-out commit of a dirty submodule', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stamp-gitlink-'))
+    const main = path.join(root, 'main')
+    const source = path.join(root, 'source')
+    try {
+      await fs.mkdir(main)
+      await fs.mkdir(source)
+      for (const repo of [main, source]) {
+        execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+        execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: repo })
+        execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+      }
+      await fs.writeFile(path.join(source, 'version.txt'), 'one\n')
+      execFileSync('git', ['add', '.'], { cwd: source })
+      execFileSync('git', ['commit', '-q', '-m', 'one'], { cwd: source })
+      execFileSync(
+        'git',
+        ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'vendor/sub'],
+        { cwd: main }
+      )
+      execFileSync('git', ['commit', '-q', '-am', 'add submodule'], { cwd: main })
+
+      const stamp = await stampProjectPaths(main, ['vendor/sub'], { stampedAt: 't0' })
+      const checkout = path.join(main, 'vendor', 'sub')
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: checkout })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: checkout })
+      await fs.writeFile(path.join(checkout, 'version.txt'), 'two\n')
+      execFileSync('git', ['add', '.'], { cwd: checkout })
+      execFileSync('git', ['commit', '-q', '-m', 'two'], { cwd: checkout })
+
+      expect(await currentTreeHashForStamp(main, stamp)).not.toBe(stamp.treeHash)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('binds the full payload even when diagnostic path stamps are capped', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stamp-full-payload-'))
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: root })
+      await fs.writeFile(path.join(root, 'base.txt'), 'base\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root })
+      const paths = Array.from(
+        { length: 205 },
+        (_, index) => `payload-${String(index).padStart(3, '0')}.ts`
+      )
+      await Promise.all(
+        paths.map((file) => fs.writeFile(path.join(root, file), `export const n = ${file}\n`))
+      )
+
+      const stamp = await stampForApprove(root, paths, 't0')
+      expect(stamp.pathCount).toBe(205)
+      expect(stamp.paths).toHaveLength(200)
+
+      await fs.writeFile(path.join(root, paths[204]!), 'changed outside diagnostic sample\n')
+      expect(await currentTreeHashForStamp(root, stamp)).not.toBe(stamp.treeHash)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('hashes blob content deterministically', () => {
     expect(hashBlobContent('hello')).toBe(hashBlobContent('hello'))
     expect(hashBlobContent('hello')).not.toBe(hashBlobContent('world'))
@@ -59,7 +150,7 @@ describe('content-bound-stamp', () => {
     )
     expect(s1.treeHash).toBe(s2.treeHash)
     expect(s1.pathCount).toBe(2)
-    expect(s1.version).toBe(1)
+    expect(s1.version).toBe(CONTENT_BOUND_VERSION)
     expect(s1.paths.every((p) => p.blobHash !== BLOB_MISSING)).toBe(true)
   })
 

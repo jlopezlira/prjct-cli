@@ -12,6 +12,7 @@ import {
   readGauntletReceipt,
   renderGauntletMd,
   runGauntlet,
+  runVerifyCommand,
   setGauntletCommand,
   warmGauntletInBackground,
 } from '../../services/gauntlet'
@@ -52,6 +53,50 @@ function receipt(overrides: Partial<GauntletReceipt> = {}): GauntletReceipt {
 }
 
 describe('runGauntlet', () => {
+  it('owns and removes the verify command temp root', async () => {
+    const recordPath = path.join(fixture.projectDir, 'verify-temp-path.txt')
+    const script = [
+      "const fs = require('node:fs')",
+      "const os = require('node:os')",
+      "const path = require('node:path')",
+      `fs.writeFileSync(${JSON.stringify(recordPath)}, os.tmpdir())`,
+      "fs.writeFileSync(path.join(os.tmpdir(), 'owned-artifact'), 'x')",
+    ].join(';')
+
+    const result = await runVerifyCommand(
+      fixture.projectDir,
+      'test',
+      `node -e ${JSON.stringify(script)}`
+    )
+    const ownedRoot = await fs.readFile(recordPath, 'utf8')
+
+    expect(result.ok).toBe(true)
+    expect(path.basename(ownedRoot)).toStartWith('prjct-verify-')
+    await expect(fs.access(ownedRoot)).rejects.toThrow()
+  })
+
+  it('removes the verify command temp root after a timeout', async () => {
+    const recordPath = path.join(fixture.projectDir, 'verify-timeout-temp-path.txt')
+    const script = [
+      "const fs = require('node:fs')",
+      "const os = require('node:os')",
+      `fs.writeFileSync(${JSON.stringify(recordPath)}, os.tmpdir())`,
+      'setInterval(() => {}, 10_000)',
+    ].join(';')
+
+    const result = await runVerifyCommand(
+      fixture.projectDir,
+      'test',
+      `node -e ${JSON.stringify(script)}`,
+      { timeoutMs: 150 }
+    )
+    const ownedRoot = await fs.readFile(recordPath, 'utf8')
+
+    expect(result.ok).toBe(false)
+    expect(result.outcome).toBe('timeout')
+    await expect(fs.access(ownedRoot)).rejects.toThrow()
+  })
+
   it('is loudly vacuous when the project registers no verify commands', async () => {
     const result = await runGauntlet(fixture.projectDir, fixture.projectId)
     expect(result.vacuous).toBe(true)
