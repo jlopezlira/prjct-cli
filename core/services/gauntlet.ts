@@ -22,6 +22,10 @@ const GAUNTLET_OVERRIDE_EVENT = 'gauntlet-override'
 const GAUNTLET_RUNNING_KEY = 'gauntlet:running'
 /** A background warm marker older than this is a dead run — spawn again. */
 const RUNNING_STALE_MS = 15 * 60 * 1000
+/** Old markers have no PID, so do not trust them for a full gauntlet timeout. */
+const LEGACY_RUNNING_WAIT_MS = 30_000
+/** Long checks must prove liveness instead of leaving ship apparently hung. */
+const PROGRESS_HEARTBEAT_MS = 30_000
 /** A green receipt is trusted for this long on the same HEAD. */
 export const GAUNTLET_FRESH_MS = 30 * 60 * 1000
 const OUTPUT_TAIL_CHARS = 400
@@ -49,6 +53,16 @@ export interface GauntletCheck {
    * loudly, because a receipt that hides what it skipped is a fake green.
    */
   unavailable?: boolean
+}
+
+interface GauntletRunningMarker {
+  startedAt: string
+  pid?: number
+}
+
+export interface GauntletRunOptions {
+  onProgress?: (line: string) => void
+  heartbeatMs?: number
 }
 
 /**
@@ -238,16 +252,42 @@ export async function runVerifyCommand(
   })
 }
 
+async function runGauntletCheck(
+  projectPath: string,
+  kind: string,
+  command: string,
+  options: GauntletRunOptions
+): Promise<GauntletCheck> {
+  const startedAt = Date.now()
+  const heartbeatMs = Math.max(1, options.heartbeatMs ?? PROGRESS_HEARTBEAT_MS)
+  options.onProgress?.(`→ Gauntlet ${kind}: ${command}`)
+  const heartbeat = options.onProgress
+    ? setInterval(() => {
+        const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0)
+        options.onProgress?.(`  … ${kind} still running (${elapsed}s)`)
+      }, heartbeatMs)
+    : null
+  try {
+    const check = await runVerifyCommand(projectPath, kind, command)
+    const state = check.ok ? 'passed' : check.unavailable ? 'unavailable' : check.outcome
+    options.onProgress?.(`  ${check.ok ? '✓' : check.unavailable ? '⊘' : '✗'} ${kind} ${state}`)
+    return check
+  } finally {
+    if (heartbeat) clearInterval(heartbeat)
+  }
+}
+
 export async function runGauntlet(
   projectPath: string,
-  projectId: string
+  projectId: string,
+  options: GauntletRunOptions = {}
 ): Promise<GauntletReceipt> {
   const commands = await gauntletCommands(projectPath)
   const binding = await gitBinding(projectPath)
 
   const checks: GauntletCheck[] = []
   for (const { kind, command } of commands) {
-    checks.push(await runVerifyCommand(projectPath, kind, command))
+    checks.push(await runGauntletCheck(projectPath, kind, command, options))
   }
 
   const receipt: GauntletReceipt = {
@@ -347,6 +387,8 @@ export interface GauntletVerdictInput {
 export interface GauntletVerdict {
   blocked: boolean
   message: string | null
+  /** True only when a fresh, non-vacuous green receipt covers this HEAD. */
+  verified: boolean
 }
 
 /** Minimal receipt binding — the gauntlet and QA receipts both satisfy it. */
@@ -374,12 +416,17 @@ function receiptFresh(input: GauntletVerdictInput): boolean {
 /** Pure ship-gate verdict — mirrors the judgment gate's shape. */
 export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdict {
   if (input.override) {
-    return { blocked: false, message: 'Gauntlet gate overridden (--no-gauntlet) — recorded.' }
+    return {
+      blocked: false,
+      message: 'Gauntlet gate overridden (--no-gauntlet) — recorded.',
+      verified: false,
+    }
   }
   if (!input.hasCommands) {
     return {
       blocked: false,
       message: VACUOUS_BOOTSTRAP,
+      verified: false,
     }
   }
   const fresh = receiptFresh(input)
@@ -388,6 +435,7 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
     return {
       blocked: true,
       message: `Machine gauntlet is RED (${red.join(', ')}). Fix and re-run \`prjct gauntlet\`, or override explicitly with --no-gauntlet.`,
+      verified: false,
     }
   }
   if (!fresh) {
@@ -396,14 +444,106 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
       return {
         blocked: true,
         message: `No fresh green gauntlet for this HEAD (receipt ${why}). Run \`prjct gauntlet\` first, or override with --no-gauntlet.`,
+        verified: false,
       }
     }
     return {
       blocked: false,
       message: `⚠ Gauntlet receipt ${why} — this ship is not machine-verified. Run \`prjct gauntlet\` before shipping.`,
+      verified: false,
     }
   }
-  return { blocked: false, message: '✓ Gauntlet green for HEAD — machine-verified.' }
+  const verified = Boolean(input.receipt && !input.receipt.vacuous && input.receipt.passed)
+  return {
+    blocked: false,
+    message: verified
+      ? '✓ Gauntlet green for HEAD — machine-verified.'
+      : '⚠ Gauntlet receipt is vacuous — no machine verification was performed.',
+    verified,
+  }
+}
+
+function readRunningMarker(projectId: string): GauntletRunningMarker | null {
+  try {
+    return (
+      prjctDb.getDocWithStamp<GauntletRunningMarker>(projectId, GAUNTLET_RUNNING_KEY)?.data ?? null
+    )
+  } catch {
+    return null
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function clearRunningMarker(projectId: string): void {
+  try {
+    prjctDb.deleteDoc(projectId, GAUNTLET_RUNNING_KEY)
+  } catch {
+    /* best-effort stale-marker cleanup */
+  }
+}
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function waitForBackgroundGauntlet(
+  projectId: string,
+  headSha: string | null,
+  options: {
+    backgroundWaitMs?: number
+    pollIntervalMs?: number
+    onProgress: (line: string) => void
+  }
+): Promise<GauntletReceipt | null> {
+  const marker = readRunningMarker(projectId)
+  if (!marker) return null
+  const startedAt = Date.parse(marker.startedAt)
+  const now = Date.now()
+  if (!Number.isFinite(startedAt) || now - startedAt >= RUNNING_STALE_MS) {
+    clearRunningMarker(projectId)
+    return null
+  }
+  if (marker.pid !== undefined && !processIsAlive(marker.pid)) {
+    clearRunningMarker(projectId)
+    return null
+  }
+
+  const remainingLifeMs = Math.max(0, startedAt + RUNNING_STALE_MS - now)
+  const defaultWaitMs = marker.pid === undefined ? LEGACY_RUNNING_WAIT_MS : remainingLifeMs
+  const requestedWaitMs = Math.max(0, options.backgroundWaitMs ?? defaultWaitMs)
+  const deadline = now + Math.min(requestedWaitMs, remainingLifeMs)
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 250)
+  const state = { nextHeartbeatAt: now + PROGRESS_HEARTBEAT_MS }
+  options.onProgress(
+    'Gauntlet already running in background — reusing it instead of starting a duplicate…'
+  )
+
+  while (Date.now() < deadline) {
+    await wait(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())))
+    const stamped = readGauntletReceipt(projectId)
+    if (isReceiptFresh(stamped?.data ?? null, Date.now(), headSha)) {
+      options.onProgress('✓ Background gauntlet finished; reusing its receipt.')
+      return stamped?.data ?? null
+    }
+    const current = readRunningMarker(projectId)
+    if (!current) return null
+    if (current.pid !== undefined && !processIsAlive(current.pid)) {
+      clearRunningMarker(projectId)
+      return null
+    }
+    if (Date.now() >= state.nextHeartbeatAt) {
+      const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0)
+      options.onProgress(`  … background gauntlet still running (${elapsed}s)`)
+      state.nextHeartbeatAt = Date.now() + PROGRESS_HEARTBEAT_MS
+    }
+  }
+  return null
 }
 
 /**
@@ -414,7 +554,15 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
 export async function ensureShipGauntlet(
   projectPath: string,
   projectId: string,
-  opts: { headSha: string | null; strict: boolean; override: boolean }
+  opts: {
+    headSha: string | null
+    strict: boolean
+    override: boolean
+    backgroundWaitMs?: number
+    pollIntervalMs?: number
+    progressHeartbeatMs?: number
+    onProgress?: (line: string) => void
+  }
 ): Promise<GauntletVerdict> {
   const hasCommands = await projectHasGauntletCommands(projectPath)
   const existing = readGauntletReceipt(projectId)?.data ?? null
@@ -428,8 +576,20 @@ export async function ensureShipGauntlet(
   if (opts.override || !hasCommands || isReceiptFresh(existing, base.nowMs, opts.headSha)) {
     return gauntletShipVerdict({ ...base, receipt: existing })
   }
-  console.log('Gauntlet receipt missing or stale — running machine verification now…')
-  const receipt = await runGauntlet(projectPath, projectId)
+  const onProgress = opts.onProgress ?? ((line: string) => console.log(line))
+  const backgroundReceipt = await waitForBackgroundGauntlet(projectId, opts.headSha, {
+    backgroundWaitMs: opts.backgroundWaitMs,
+    pollIntervalMs: opts.pollIntervalMs,
+    onProgress,
+  })
+  if (backgroundReceipt) {
+    return gauntletShipVerdict({ ...base, nowMs: Date.now(), receipt: backgroundReceipt })
+  }
+  onProgress('Gauntlet receipt missing or stale — running machine verification now…')
+  const receipt = await runGauntlet(projectPath, projectId, {
+    onProgress,
+    heartbeatMs: opts.progressHeartbeatMs,
+  })
   return gauntletShipVerdict({ ...base, nowMs: Date.now(), receipt })
 }
 
@@ -455,15 +615,20 @@ export async function warmGauntletInBackground(
     const stamped = readGauntletReceipt(projectId)
     const fresh = isReceiptFresh(stamped?.data ?? null, Date.now(), binding.headSha)
     if (fresh && stamped?.data.passed) return false
-    const running = prjctDb.getDocWithStamp<{ startedAt: string }>(projectId, GAUNTLET_RUNNING_KEY)
+    const running = prjctDb.getDocWithStamp<GauntletRunningMarker>(projectId, GAUNTLET_RUNNING_KEY)
     if (running && Date.now() - Date.parse(running.data.startedAt) < RUNNING_STALE_MS) return false
-    prjctDb.setDoc(projectId, GAUNTLET_RUNNING_KEY, { startedAt: new Date().toISOString() })
+    const startedAt = new Date().toISOString()
+    prjctDb.setDoc(projectId, GAUNTLET_RUNNING_KEY, { startedAt })
     const { spawn } = await import('node:child_process')
     const child = spawn(
       '/bin/sh',
       ['-c', 'command -v prjct >/dev/null 2>&1 && prjct gauntlet >/dev/null 2>&1'],
       { cwd: projectPath, detached: true, stdio: 'ignore' }
     )
+    const current = readRunningMarker(projectId)
+    if (child.pid !== undefined && current?.startedAt === startedAt) {
+      prjctDb.setDoc(projectId, GAUNTLET_RUNNING_KEY, { startedAt, pid: child.pid })
+    }
     child.unref()
     return true
   } catch {

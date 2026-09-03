@@ -36,9 +36,10 @@ describe('orchestrationFor — triage drives model/effort routing', () => {
     expect(p.spec).toBe('frame')
     expect(p.tests).toBe('first')
     expect(p.fanout).toBe('parallel')
-    expect(p.directive).toContain('mem_3432') // subagents inherit the model
     expect(p.directive).toContain('DEFAULT multi-agent')
     expect(p.directive).toContain('DEFAULT geometry')
+    expect(p.directive).toMatch(/one bounded quality card/i)
+    expect(p.directive).not.toMatch(/review \(balanced dual-blind\)/i)
   })
 
   test('H3 high-risk → frontier, HIGH effort, reviewed spec, tests-first, CREW', () => {
@@ -49,7 +50,7 @@ describe('orchestrationFor — triage drives model/effort routing', () => {
     expect(p.tests).toBe('first')
     expect(p.fanout).toBe('crew')
     expect(p.directive).toContain('crew')
-    expect(p.directive).toContain('Set EACH subagent')
+    expect(p.directive).toMatch(/at most 2 reviewer agents/i)
     expect(p.directive).toContain('DEFAULT geometry')
   })
 

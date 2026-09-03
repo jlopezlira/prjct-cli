@@ -40,7 +40,9 @@ export class GauntletCommands {
       if (!projectId) {
         return { success: false, error: 'No prjct project found in the current directory.' }
       }
-      const receipt = await runGauntlet(projectPath, projectId)
+      const receipt = await runGauntlet(projectPath, projectId, {
+        onProgress: (line) => console.log(line),
+      })
       console.log(options.md ? renderGauntletMd(receipt) : renderGauntletText(receipt))
       return {
         success: receipt.passed,

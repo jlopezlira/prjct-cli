@@ -49,6 +49,7 @@ import { requireProject } from './guards'
 // `addShipped`, this marker survives → the NEXT ship reconciles it
 // idempotently, closing the version-divergence class (mem_2920).
 const SHIP_MARKER_KEY = 'ship:in_progress'
+const LEGACY_STOP_SLOP_DESCRIPTION = 'Verify before shipping (Stop-Slop)'
 
 interface ShipMarker {
   feature: string
@@ -416,25 +417,35 @@ export class ShippingCommands extends PrjctCommandsBase {
       // so. Ship SELF-PROVISIONS: a missing/stale receipt triggers an inline
       // run — nobody has to remember. A RED result always blocks;
       // --no-gauntlet overrides explicitly and is recorded.
-      try {
-        const { ensureShipGauntlet, recordGauntletOverride } = await import('../services/gauntlet')
-        const { gitStdout } = await import('../utils/exec')
-        const headNow = await gitStdout(projectPath, ['rev-parse', 'HEAD'])
-          .then((s) => s?.trim() || null)
-          .catch(() => null)
-        const verdict = await ensureShipGauntlet(projectPath, projectId, {
-          headSha: headNow,
-          strict: isCodeStrictPack,
-          override: options.noGauntlet === true,
-        })
-        if (options.noGauntlet === true) recordGauntletOverride(projectId)
-        if (verdict.blocked) {
-          return { success: false, error: verdict.message ?? 'Machine gauntlet gate blocked.' }
+      const gauntletVerdict = await (async () => {
+        try {
+          const { ensureShipGauntlet, recordGauntletOverride } = await import(
+            '../services/gauntlet'
+          )
+          const { gitStdout } = await import('../utils/exec')
+          const headNow = await gitStdout(projectPath, ['rev-parse', 'HEAD'])
+            .then((s) => s?.trim() || null)
+            .catch(() => null)
+          const verdict = await ensureShipGauntlet(projectPath, projectId, {
+            headSha: headNow,
+            strict: isCodeStrictPack,
+            override: options.noGauntlet === true,
+          })
+          if (options.noGauntlet === true) recordGauntletOverride(projectId)
+          return verdict
+        } catch {
+          // Gauntlet lookup remains best-effort outside strict enforcement.
+          return null
         }
-        if (verdict.message) console.log(verdict.message)
-      } catch {
-        /* gauntlet gate is best-effort — never crash ship on lookup */
+      })()
+      if (gauntletVerdict?.blocked) {
+        return {
+          success: false,
+          error: gauntletVerdict.message ?? 'Machine gauntlet gate blocked.',
+        }
       }
+      const gauntletVerified = gauntletVerdict?.verified === true
+      if (gauntletVerdict?.message) console.log(gauntletVerdict.message)
 
       // QA gate: the cycle's flows must be verified for THIS HEAD — machine
       // probes or the blind QA subagent. Self-provisions the probe run like
@@ -554,6 +565,19 @@ export class ShippingCommands extends PrjctCommandsBase {
           }
         } catch {
           // ignore — TDD gate is best-effort surfacing
+        }
+      }
+
+      // Before gauntlet receipts existed, prjct auto-seeded a second `verify:`
+      // gate into the ship workflow. A fresh green gauntlet already covers the
+      // machine checks for this exact HEAD, so retaining that legacy default
+      // repeats the full test suite (and can run an obsolete monolithic test
+      // command). Retire only prjct's exact old default; user-authored verify
+      // gates remain untouched and keep their independent semantics.
+      if (gauntletVerified) {
+        const retired = retireLegacyStopSlopRules(projectId)
+        if (retired > 0) {
+          console.log(`ℹ️  Retired ${retired} redundant legacy Stop-Slop ship gate(s).`)
         }
       }
 
@@ -900,20 +924,6 @@ export async function seedCodeShipRules(projectId: string, projectPath: string):
     })
   }
 
-  // Stop-Slop on by default: verify before shipping when the project has a
-  // detected test command. Seeded with the resolved command (not `verify:auto`,
-  // which would block when nothing is detected). The user can disable or remove
-  // this rule like any other — the harness compensates for a degraded model by
-  // catching unverified output at the line, not after release.
-  const detected = await detectProjectCommands(projectPath).catch(() => null)
-  if (detected?.test?.command) {
-    gates.push({
-      action: `verify:${detected.test.command}`,
-      description: 'Verify before shipping (Stop-Slop)',
-      timeoutMs: 300000,
-    })
-  }
-
   const steps: Array<{ action: string; description: string; timeoutMs: number }> = [
     { action: 'version:bump', description: 'Bump version (stack-aware)', timeoutMs: 10000 },
     { action: 'changelog:add', description: 'Append CHANGELOG entry', timeoutMs: 10000 },
@@ -954,6 +964,25 @@ export async function seedCodeShipRules(projectId: string, projectPath: string):
   }
 
   return newRules.length > 0
+}
+
+/**
+ * Remove only the verify gate prjct itself seeded before gauntlet became the
+ * canonical machine-verification gate. Matching the exact description avoids
+ * weakening user-authored `verify:` rules, even when they run the same command.
+ */
+export function retireLegacyStopSlopRules(projectId: string): number {
+  const legacy = workflowRuleStorage
+    .getRulesForCommand(projectId, 'ship')
+    .filter(
+      (rule) =>
+        rule.type === 'gate' &&
+        rule.position === 'before' &&
+        rule.action.startsWith('verify:') &&
+        rule.description === LEGACY_STOP_SLOP_DESCRIPTION
+    )
+  for (const rule of legacy) workflowRuleStorage.removeRule(projectId, rule.id)
+  return legacy.length
 }
 
 /**

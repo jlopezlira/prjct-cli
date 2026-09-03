@@ -25,6 +25,7 @@ import {
   type NextActionCard,
 } from './precision-judgment'
 import { resolvePrivateSkillPath } from './private-skill-router'
+import { formatReviewBudget } from './review-budget'
 
 /**
  * Ship policy: suggest OK, execute only after explicit user text this turn.
@@ -175,6 +176,7 @@ export function formatQualityInject(
     '',
     `- **kind**: \`${card.kind}\` · intensity **${card.intensity}** · round ${card.fixRound}/${card.maxFixRounds}`,
     `- **directive**: ${card.directive}`,
+    `- **review budget**: ${formatReviewBudget(card.budget)}`,
     '',
     '### Steps (run these — human does not type judgment)',
     ...card.steps.map((s, i) => `${i + 1}. ${s}`),
@@ -214,6 +216,9 @@ export function reviewDispatchGuidance(card: NextActionCard): string[] {
     workflow ? `workflow:code-review=\`${workflow}\`` : '',
     '- Keep Standards findings and Spec/acceptance findings independent; do not let one substitute for the other.',
     '- Standards includes comment discipline: keep comments for intent, invariants, constraints, and non-obvious tradeoffs—not narration of visible code.',
+    `- Context ceiling: ${card.budget.contextRule}. Do not paste whole files or scan the repository broadly.`,
+    `- Output ceiling: at most ${card.budget.maxFindings} actionable findings and about ${card.budget.maxOutputTokensPerAgent} output tokens per agent.`,
+    '- This judgment card IS the review for this content. Do not run a separate generic review, crew review, or audit pass over the unchanged diff.',
   ].filter(Boolean)
 }
 

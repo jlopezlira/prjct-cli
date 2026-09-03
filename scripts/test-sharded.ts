@@ -9,6 +9,14 @@
  * core/__tests__/<dir>/ that nobody adds to ci.yml (and here) fails that check.
  */
 
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { runProc } from '../core/utils/exec'
+
+const SHARD_TIMEOUT_MS = 240_000
+const SHARD_MAX_BUFFER = 32 * 1024 * 1024
+
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   [
     'core-a',
@@ -48,35 +56,79 @@ interface ShardResult {
   readonly output: string
 }
 
+const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'prjct-sharded-'))
+const abortController = new AbortController()
+
+function cleanup(): void {
+  rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function stop(signal: 'SIGINT' | 'SIGTERM'): void {
+  // runProc aborts synchronously into its process-tree killer before exit.
+  abortController.abort()
+  cleanup()
+  process.exit(signal === 'SIGINT' ? 130 : 143)
+}
+
+process.once('SIGINT', () => stop('SIGINT'))
+process.once('SIGTERM', () => stop('SIGTERM'))
+
 async function runShard(name: string, dirs: readonly string[]): Promise<ShardResult> {
-  const proc = Bun.spawn(['bun', 'test', '--dots', ...dirs], {
-    stdout: 'pipe',
-    stderr: 'pipe',
+  const shardTemp = path.join(tempRoot, name)
+  mkdirSync(shardTemp, { recursive: true })
+  const result = await runProc('bun', ['test', '--dots', ...dirs], {
+    cwd: process.cwd(),
+    env: { ...process.env, TMPDIR: shardTemp },
+    timeoutMs: SHARD_TIMEOUT_MS,
+    maxBuffer: SHARD_MAX_BUFFER,
+    signal: abortController.signal,
   })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
-  return { name, exitCode, output: `${stdout}${stderr}` }
+  if (result.ok) return { name, exitCode: 0, output: `${result.stdout}${result.stderr}` }
+  if (result.kind === 'exit') {
+    return { name, exitCode: result.code, output: `${result.stdout}${result.stderr}` }
+  }
+  if (result.kind === 'timeout') {
+    return {
+      name,
+      exitCode: 124,
+      output: `${result.stdout}${result.stderr}\nShard timed out after ${result.budgetMs}ms.`,
+    }
+  }
+  if (result.kind === 'overflow') {
+    return {
+      name,
+      exitCode: 125,
+      output: `${result.stdout}${result.stderr}\nShard output exceeded ${result.maxBuffer} bytes.`,
+    }
+  }
+  return { name, exitCode: 127, output: `Could not start shard: ${result.cause.message}\n` }
 }
 
-const startedAt = performance.now()
-const results = await Promise.all(SHARDS.map(([name, dirs]) => runShard(name, dirs)))
-const wallSeconds = ((performance.now() - startedAt) / 1000).toFixed(1)
+try {
+  const startedAt = performance.now()
+  const results = await Promise.all(SHARDS.map(([name, dirs]) => runShard(name, dirs)))
+  const wallSeconds = ((performance.now() - startedAt) / 1000).toFixed(1)
 
-// Output stays readable: each shard's full output is printed as one block.
-for (const { name, output } of results) {
-  process.stdout.write(`\n===== shard ${name} =====\n${output}`)
-}
+  // Output stays readable: each shard's full output is printed as one block.
+  for (const { name, output } of results) {
+    process.stdout.write(`\n===== shard ${name} =====\n${output}`)
+  }
 
-const failed = results.filter(({ exitCode }) => exitCode !== 0)
-for (const { name, exitCode } of results) {
-  process.stdout.write(`shard ${name}: exit ${exitCode}\n`)
-}
-process.stdout.write(`sharded tests: wall ${wallSeconds}s\n`)
+  const failed = results.filter(({ exitCode }) => exitCode !== 0)
+  for (const { name, exitCode } of results) {
+    process.stdout.write(`shard ${name}: exit ${exitCode}\n`)
+  }
+  process.stdout.write(`sharded tests: wall ${wallSeconds}s\n`)
 
-if (failed.length > 0) {
-  process.stderr.write(`Failed shards: ${failed.map(({ name }) => name).join(', ')}\n`)
-  process.exit(1)
+  if (failed.length > 0) {
+    // Keep the actionable failure at the very end so gauntlet's bounded output
+    // tail includes the test name/assertion instead of only the shard summary.
+    for (const { name, output } of failed) {
+      process.stderr.write(`\n===== failed shard ${name} (tail) =====\n${output.slice(-4_000)}`)
+    }
+    process.stderr.write(`Failed shards: ${failed.map(({ name }) => name).join(', ')}\n`)
+    process.exitCode = 1
+  }
+} finally {
+  cleanup()
 }

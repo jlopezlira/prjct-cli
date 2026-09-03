@@ -37,6 +37,7 @@ import {
   recordRefutedAsGhosts,
   upsertFinding,
 } from '../services/precision-judgment'
+import { formatReviewBudget } from '../services/review-budget'
 import { judgmentLedgerStorage } from '../storage/judgment-ledger-storage'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
@@ -100,6 +101,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
       '',
       `### Next → \`${next.kind}\``,
       next.directive,
+      formatReviewBudget(next.budget),
       ...next.steps.map((s) => `- ${s}`),
     ]
     print(options, '## Judgment ledger', lines.join('\n'))
@@ -135,6 +137,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
       '',
       `### Next → \`${next.kind}\``,
       next.directive,
+      formatReviewBudget(next.budget),
       ...next.steps.map((s) => `- ${s}`),
     ].filter(Boolean)
     print(options, '## Judgment plan', lines.join('\n'))
@@ -195,6 +198,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
       '',
       `### Next → \`${next.kind}\``,
       next.directive,
+      formatReviewBudget(next.budget),
       ...next.steps.map((s) => `- ${s}`),
     ]
     print(options, '## Judgment open', lines.join('\n'))
@@ -398,6 +402,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
         '',
         `### Next → \`${next.kind}\``,
         next.directive,
+        formatReviewBudget(next.budget),
         ...next.steps.map((s) => `- ${s}`),
       ].join('\n')
     )
@@ -417,7 +422,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
     const raw = flags.verdicts ?? flags.v ?? args.join(' ')
     if (!raw.trim()) {
       return failWith(
-        'challenge requires --verdicts id1:stands,id2:refuted (or id1:stands:refuted:stands for full panel)',
+        'challenge requires --verdicts id1:stands,id2:refuted (one verdict per candidate; one batched challenger)',
         options
       )
     }
@@ -452,6 +457,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
         '',
         `### Next → \`${next.kind}\``,
         next.directive,
+        formatReviewBudget(next.budget),
         ...next.steps.map((s) => `- ${s}`),
       ].join('\n')
     )
@@ -578,6 +584,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
       `**intensity**: ${card.intensity} · round ${card.fixRound}/${card.maxFixRounds}`,
       '',
       `> ${card.directive}`,
+      `> ${formatReviewBudget(card.budget)}`,
       '',
       '### Steps',
       ...card.steps.map((s, i) => `${i + 1}. ${s}`),

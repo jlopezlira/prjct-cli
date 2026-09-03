@@ -391,8 +391,9 @@ export class SpecCommands extends PrjctCommandsBase {
 
   /**
    * Record a single reviewer's verdict from `audit-spec`. Claude calls
-   * this after each subagent returns. When all three reviewers pass, the
-   * service auto-promotes the spec from `draft` → `reviewed`.
+   * this for each selected lens after its assigned agent returns. When all
+   * selected lens verdicts pass, the service auto-promotes the spec from
+   * `draft` → `reviewed`.
    */
   async recordReview(
     id: string | null = null,
@@ -491,7 +492,7 @@ export class SpecCommands extends PrjctCommandsBase {
   }
 
   /**
-   * Emits the dispatch prompt for Claude to run three review subagents
+   * Emits the dispatch prompt for Claude to run at most two reviewer agents
    * in parallel via the Agent tool. Claude reads this output, dispatches,
    * then writes each verdict back via `prjct spec record-review`.
    *

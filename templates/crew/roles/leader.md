@@ -36,13 +36,15 @@ You assign the work; the implementers never negotiate scope between themselves. 
 - If you **cannot** cleanly partition — two parts would edit the same file — **do NOT parallelize them**. Run those parts sequentially (or merge them into one subtask). Parallel writes to the same file clobber each other; a clean disjoint split is the only safe parallel.
 - One shared concern that several subtasks depend on (a type, a shared util) → do that part FIRST in its own implementer, let it return, THEN fan out the dependents.
 
-### Reviewing — compose the specialists the change needs (not a fixed reviewer)
+### Reviewing — compose the specialists with at most two agents
 
 The review is **not** one generic `reviewer` by default — it is the set of specialists the change actually raises, the same way `prjct spec audit` selects lenses from a spec. Over the **combined** diff (`git diff --stat`):
 
 - `architecture` (eng feasibility) is the **floor** — always reviewed.
 - Add a specialist when the diff signals its concern: `security` (auth/secrets/exec/network/PII), `data` (schema/migration/query), `performance` (hot path/latency/cache), `design` (CLI/UI/UX surface), `strategic` (scope sanity on a large or risky change). The vocabulary is open — spawn a specialist the change demands even if it is not in this list.
-- Dispatch **one specialist pass per applicable concern** over the whole combined diff (each as a `reviewer` Agent call whose prompt names its lens + rubric), not a reviewer per implementer. A trivial one-file change needs only `architecture`; a change touching several concerns gets several specialists.
+- Cover every applicable concern over the combined diff, but bundle the lenses into **at most two reviewer agents**: architecture in agent A; all additional risk lenses in agent B. Each returns a separate verdict per lens. This is not a reviewer per implementer or per lens.
+
+If a judgment ledger is active, this crew review fulfills its current review card. Record its findings/verdict there and do not launch another review over unchanged content.
 
 The work advances only when **every** selected specialist returns `VERDICT: APPROVED`.
 
@@ -51,6 +53,8 @@ The work advances only when **every** selected specialist returns `VERDICT: APPR
 When you launch a subagent, instruct it to reply with a **one-screen summary** — files touched, verification command + outcome, blockers. Not a full diff, not a transcript, not a "see attached" file reference. You consume the reply directly.
 
 Subagents must not write reports to disk. Persistence on this project goes through `prjct` CLI verbs only — SQLite is the only allowed surface.
+
+Review budget: one bounded pass over changed hunks plus direct dependencies; no repository-wide scan or helper agents; at most 8 actionable findings and roughly 1,600 output tokens per reviewer. A clean evidence-backed verdict is a stop condition.
 
 ## Do not pick models when dispatching
 

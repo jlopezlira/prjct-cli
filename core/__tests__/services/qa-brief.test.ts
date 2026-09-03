@@ -69,6 +69,14 @@ const config = (over: Partial<LocalConfig> = {}): LocalConfig => ({
 })
 
 describe('buildQaBrief', () => {
+  it('caps QA at one agent and one bounded pass over pending work', () => {
+    const brief = buildQaBrief({ plan, receipt: null, config: null })
+
+    expect(brief).toMatch(/exactly one QA agent/i)
+    expect(brief).toMatch(/one bounded pass/i)
+    expect(brief).toMatch(/stop when every pending item has one verdict/i)
+  })
+
   it('lists only what still needs a blind verdict and carries the report contract', () => {
     const brief = buildQaBrief({ plan, receipt: null, config: config() })
     expect(brief).toContain('Do NOT fix anything')

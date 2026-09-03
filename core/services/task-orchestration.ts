@@ -9,8 +9,9 @@
  * This module turns the triage into a concrete, correct orchestration plan:
  * which model tier + effort THIS task deserves, whether it needs a spec (SDD),
  * tests-first (TDD), and whether to do it directly or fan out to a group of
- * subagents — and it always reminds the agent to SET each subagent's model
- * (they inherit the parent's otherwise). The project's `sdd`/`tdd` modes are
+ * subagents. It never changes the model the user selected; savings come from
+ * bounded fan-out and avoiding duplicate review passes. The project's
+ * `sdd`/`tdd` modes are
  * reconciled as a FLOOR over the risk-based default (strict forces the
  * ceremony even on a low-risk task; the triage can only ADD ceremony, never
  * remove what a mode requires).
@@ -188,14 +189,14 @@ const TEST_TEXT: Record<TestCeremony, string> = {
 const FANOUT_TEXT: Record<FanOut, string> = {
   direct: 'do it yourself — no subagents',
   parallel:
-    'DEFAULT multi-agent geometry: explore (fast) → implement (frontier) → review (balanced dual-blind); set EACH subagent model explicitly (they inherit yours otherwise: mem_3432). Stay single-thread only for a truly atomic one-file fix',
-  crew: 'DEFAULT crew geometry (`prjct crew`): leader + implementer + review lenses. Set EACH subagent model (Explore→fast, implementer→frontier, reviewers→balanced) — they inherit your expensive model unless you fix it',
+    'DEFAULT multi-agent geometry: explore only when needed → implement over disjoint scopes → one bounded quality card over the combined diff. Do not add a separate review pass; omit model overrides so agents use the model the user selected. Stay single-thread only for a truly atomic one-file fix; this is the DEFAULT geometry',
+  crew: 'DEFAULT crew geometry (`prjct crew`): leader + implementer(s) + at most 2 reviewer agents over the combined diff. When a judgment ledger is active, the crew review fulfills its current card; do not repeat the same review afterward. Omit model overrides so agents use the model the user selected',
 }
 const QUALITY_TEXT: Record<QualityCeremony, string> = {
   none: 'no judgment tax (trivial)',
   standard:
-    'quality auto: ledger opened; follow injected `prjct judgment next` card (one review + batch challenge)',
-  full: 'quality auto: ledger opened; follow injected next card (RED+BLUE dual-blind + batch refuters)',
+    'quality auto: ledger opened; follow one bounded `prjct judgment next` card (1 reviewer + 1 batched challenger only when findings exist)',
+  full: 'quality auto: ledger opened; RED+BLUE remain dual-blind, capped at 2 initial reviewers + 1 batched challenger only when findings exist',
 }
 const MODEL_HINT: Record<ModelTier, string> = {
   fast: 'fast/cheap model (e.g. haiku)',
