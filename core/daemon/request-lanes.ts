@@ -54,9 +54,16 @@ export class HookStateLaneTimeoutError extends Error {
 /** Bounds only the CALLER's wait — `run` keeps executing untouched, so the
  *  next queued hook-state call still waits for the real work, not for
  *  whichever caller gave up. */
-function raceWithTimeout<T>(run: Promise<T>, timeoutMs: number): Promise<T> {
+function raceWithTimeout<T>(
+  run: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => void = () => undefined
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new HookStateLaneTimeoutError(timeoutMs)), timeoutMs)
+    const timer = setTimeout(() => {
+      onTimeout()
+      reject(new HookStateLaneTimeoutError(timeoutMs))
+    }, timeoutMs)
     run.then(
       (value) => {
         clearTimeout(timer)
@@ -113,7 +120,18 @@ export class RequestLanes {
     if (lane === 'hook-state') {
       const chainKey = key ?? ''
       const chain = this.hookStateChains.get(chainKey) ?? Promise.resolve()
-      const run = chain.then(work, work)
+      // A caller that timed out has already fallen back to running the hook
+      // cold in its own process (bin/prjct.ts). If its job has not STARTED
+      // by then, running it here would execute the same prompt/stop hook a
+      // second time — double turn bumps, double telemetry — and, worse,
+      // every abandoned job still ahead in the chain stacks its full
+      // duration onto the next live caller (measured: 13s → 18s → 10s
+      // hook:prompt runs back to back, none of them with a listener).
+      // Skip abandoned jobs that never started; one already running is
+      // left to finish so its state writes stay whole.
+      const abandoned = { value: false }
+      const guarded = (): Promise<T> => (abandoned.value ? Promise.resolve(undefined as T) : work())
+      const run = chain.then(guarded, guarded)
       const settled = run.then(
         () => undefined,
         () => undefined
@@ -123,7 +141,9 @@ export class RequestLanes {
       // `settled` above is already wired to the real `run` regardless of
       // what the caller does next — bounding the caller's wait here cannot
       // let a request queued behind this one start early.
-      return raceWithTimeout(run, hookStateTimeoutMs())
+      return raceWithTimeout(run, hookStateTimeoutMs(), () => {
+        abandoned.value = true
+      })
     }
 
     const run = this.commandChain.then(work, work)

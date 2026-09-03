@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [4.18.2] - 2026-09-03
+
+### Bug Fixes
+
+- daemon hooks never stall on a SQLite write lock: hook work in the daemon (build, detached afterEmit, telemetry) runs under a 150ms `busy_timeout` instead of the 5000ms default, so a cross-process writer (a detached cold-path afterEmit child, `prjct remember`, a sync) can no longer freeze every hook — and the agent's turn — for 5s at a time (measured `hook:prompt` tails of 5s/10s/18s, exact multiples of the old timeout). The budget is bound to the async context (`withBusyTimeout`), so command-lane work keeps the default.
+- the daemon's hook-state lane skips queued prompt/stop jobs whose caller already timed out and fell back to the cold path: the hook no longer runs twice for one prompt, and abandoned jobs no longer stack their duration onto the next live caller.
+
 ## [4.18.1] - 2026-09-03
 
 ### Bug Fixes
