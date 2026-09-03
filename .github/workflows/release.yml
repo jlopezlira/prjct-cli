@@ -555,19 +555,22 @@ jobs:
         # Registry propagation after publish (especially with --provenance) can
         # lag well past a single short sleep — a flat `sleep 15` then one
         # `npm view` showed v2.48.0's release red even though the publish
-        # succeeded. Poll with backoff (up to ~90s) so a slow-but-successful
-        # publish doesn't report a false failure.
+        # succeeded, and v4.18.2's packument took ~7 minutes to list the
+        # version even though the tarball was already served. Poll for up to
+        # 10 minutes so a slow-but-successful publish doesn't report a false
+        # failure (and skip the tarball/binaries/GitHub Release that follow).
         run: |
           VERSION=${{ steps.version.outputs.new }}
-          for attempt in 1 2 3 4 5 6; do
+          ATTEMPTS=40
+          for attempt in $(seq 1 $ATTEMPTS); do
             if npm view "prjct-cli@$VERSION" version >/dev/null 2>&1; then
               echo "✅ Published prjct-cli@$VERSION (visible after ~$(( (attempt - 1) * 15 ))s)"
               exit 0
             fi
-            echo "not visible yet (attempt $attempt/6) — waiting 15s…"
+            echo "not visible yet (attempt $attempt/$ATTEMPTS) — waiting 15s…"
             sleep 15
           done
-          echo "::error title=Verify failed::prjct-cli@$VERSION not visible on npm after ~90s"
+          echo "::error title=Verify failed::prjct-cli@$VERSION not visible on npm after ~10min"
           exit 1
 
       - name: Create tarball
