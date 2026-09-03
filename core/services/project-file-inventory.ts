@@ -225,11 +225,20 @@ export function pathMatchesInventory(
  * - ext unknown vs inventory → 0.45 (downrank until next sync)
  */
 export function inventoryPathWeight(projectId: string, filePath: string): number {
+  return inventoryPathWeightFor(inventoryExtensions(projectId), filePath)
+}
+
+/**
+ * Same weight against an already-loaded extension set. Rankers score dozens
+ * of candidates per query; loading + parsing the inventory doc once per
+ * candidate (the `inventoryPathWeight` path) was the single largest
+ * per-query cost in work-scope merge.
+ */
+export function inventoryPathWeightFor(exts: ReadonlySet<string>, filePath: string): number {
   const n = filePath.replace(/^\.\//, '').replace(/\\/g, '/').trim()
   const base = n.split('/').pop() ?? n
   const ext = path.extname(base).toLowerCase()
   if (!ext) return 0.7
-  const exts = inventoryExtensions(projectId)
   if (exts.size === 0) return 1
   return exts.has(ext) ? 1 : 0.45
 }

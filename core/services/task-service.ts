@@ -802,11 +802,15 @@ export function recallRisksForFiles(projectId: string, files: LikelyFileHit[]): 
   const seen = new Set<string>()
   const risks: RiskHit[] = []
   try {
-    for (const f of files.slice(0, 5)) {
-      const hits = projectMemory.recallForFile(projectId, f.path, 2, {
-        preventiveOnly: true,
-      })
-      for (const h of hits) {
+    const top = files.slice(0, 5)
+    const hitsByFile = projectMemory.recallForFiles(
+      projectId,
+      top.map((f) => f.path),
+      2,
+      { preventiveOnly: true }
+    )
+    for (const f of top) {
+      for (const h of hitsByFile.get(f.path) ?? []) {
         if (seen.has(h.id)) continue
         seen.add(h.id)
         risks.push({

@@ -195,17 +195,18 @@ export class GuardCommands extends PrjctCommandsBase {
     const perFileLimit = typeof options.limit === 'number' && options.limit > 0 ? options.limit : 2
     const findings: Array<{ file: string; entry: MemoryEntry }> = []
     const surfacedIds: string[] = []
+    // One batched sweep over the whole changeset (was: one scan per file).
+    const hitsByFile = (() => {
+      try {
+        return projectMemory.recallForFiles(guard.value, files, perFileLimit, {
+          preventiveOnly: true,
+        })
+      } catch {
+        return new Map<string, MemoryEntry[]>()
+      }
+    })()
     for (const file of files) {
-      const hits: MemoryEntry[] = (() => {
-        try {
-          return projectMemory.recallForFile(guard.value, file, perFileLimit, {
-            preventiveOnly: true,
-          })
-        } catch {
-          return []
-        }
-      })()
-      for (const entry of hits) {
+      for (const entry of hitsByFile.get(file) ?? []) {
         findings.push({ file, entry })
         surfacedIds.push(entry.id)
       }

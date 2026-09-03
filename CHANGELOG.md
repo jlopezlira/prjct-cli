@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [4.18.3] - 2026-09-03
+
+### Performance
+
+- retrieval hot path batches its lookups: `projectMemory.recallForFiles` runs the preventive per-file sweep as one query instead of one per path (`prjct guard --diff` over 203 files: 17ms → 2.6ms), `projectMemory.getByIds` resolves the semantic leg and `expandWithLinks` without an N+1, work-scope loads the file inventory once per scope instead of once per candidate (`inventoryPathWeightFor`), and `breakImpact(..., { traps: false })` loads the import graph and matrix a single time. Used by `guard --diff`, task-service risks and world-model traps; behaviour is unchanged.
+
 ## [4.18.2] - 2026-09-03
 
 ### Bug Fixes

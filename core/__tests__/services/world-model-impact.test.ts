@@ -15,4 +15,12 @@ describe('breakImpact', () => {
     expect(imp.line).toContain('World model impact')
     expect(imp.hasIndexes).toBeDefined()
   })
+
+  test('traps:false skips the memory sweep but keeps neighbours/shape', () => {
+    const imp = breakImpact('00000000-0000-0000-0000-000000000000', ['core/hooks/pre-edit.ts'], 6, {
+      traps: false,
+    })
+    expect(imp.traps).toEqual([])
+    expect(imp.line).toContain('traps=0')
+  })
 })

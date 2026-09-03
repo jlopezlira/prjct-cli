@@ -542,11 +542,10 @@ export const embeddingService = {
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
 
-    const out: MemoryEntry[] = []
-    for (const r of ranked) {
-      const entry = projectMemory.getById(projectId, r.id)
-      if (entry) out.push(entry)
-    }
-    return out
+    // One batched resolve in rank order (was: one getById per winner).
+    return projectMemory.getByIds(
+      projectId,
+      ranked.map((r) => r.id)
+    )
   },
 }

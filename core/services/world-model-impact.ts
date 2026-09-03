@@ -29,15 +29,22 @@ export interface WorldModelImpact {
  * Rank related files + traps for a set of seed paths (or basenames).
  * Best-effort: empty indexes → traps-only or empty.
  */
-export function breakImpact(projectId: string, seedFiles: string[], limit = 8): WorldModelImpact {
+export function breakImpact(
+  projectId: string,
+  seedFiles: string[],
+  limit = 8,
+  opts: { traps?: boolean } = {}
+): WorldModelImpact {
   const seeds = seedFiles.map((s) => s.trim()).filter(Boolean)
-  const hasImports = Boolean(loadGraph(projectId))
-  const hasCochange = Boolean(loadMatrix(projectId))
+  const graph = loadGraph(projectId)
+  const matrix = loadMatrix(projectId)
+  const hasImports = Boolean(graph)
+  const hasCochange = Boolean(matrix)
   const neighborScores = new Map<string, { score: number; via: Set<'imports' | 'cochange'> }>()
 
-  if (seeds.length > 0 && hasImports) {
+  if (seeds.length > 0 && graph) {
     try {
-      for (const s of importFromSeeds(seeds, loadGraph(projectId)!, 2)) {
+      for (const s of importFromSeeds(seeds, graph, 2)) {
         if (seeds.some((seed) => seed.endsWith(s.path) || s.path.endsWith(seed))) continue
         const cur = neighborScores.get(s.path) ?? { score: 0, via: new Set() }
         cur.score += s.score
@@ -48,9 +55,9 @@ export function breakImpact(projectId: string, seedFiles: string[], limit = 8): 
       /* best-effort */
     }
   }
-  if (seeds.length > 0 && hasCochange) {
+  if (seeds.length > 0 && matrix) {
     try {
-      for (const s2 of cochangeFromSeeds(seeds, loadMatrix(projectId)!)) {
+      for (const s2 of cochangeFromSeeds(seeds, matrix)) {
         if (seeds.some((seed) => seed.endsWith(s2.path) || s2.path.endsWith(seed))) continue
         const cur = neighborScores.get(s2.path) ?? { score: 0, via: new Set() }
         cur.score += s2.score
@@ -72,18 +79,21 @@ export function breakImpact(projectId: string, seedFiles: string[], limit = 8): 
     .slice(0, limit)
 
   const traps: WorldModelImpact['traps'] = []
-  for (const seed of seeds.slice(0, 5)) {
+  if (opts.traps !== false) {
     try {
-      const hits = projectMemory.recallForFile(projectId, seed, 2, {
+      // One batched query for every seed instead of one scan per seed.
+      const bySeed = projectMemory.recallForFiles(projectId, seeds.slice(0, 5), 2, {
         preventiveOnly: true,
       })
-      for (const h of hits) {
-        traps.push({
-          id: h.id,
-          type: h.type,
-          title: h.content.replace(/\s+/g, ' ').trim().slice(0, 100),
-          file: seed,
-        })
+      for (const [seed, hits] of bySeed) {
+        for (const h of hits) {
+          traps.push({
+            id: h.id,
+            type: h.type,
+            title: h.content.replace(/\s+/g, ' ').trim().slice(0, 100),
+            file: seed,
+          })
+        }
       }
     } catch {
       /* ignore */
