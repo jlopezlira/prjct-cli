@@ -187,16 +187,16 @@ describe('RequestLanes', () => {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
-  test('hook-state bounds the CALLER wait, but the real work still completes — a slow ahead-of-queue job cannot stack unbounded latency onto the next caller', async () => {
+  test('hook-state bounds the CALLER wait, and a queued job whose caller gave up is skipped — it never stacks its duration onto the next live caller', async () => {
     process.env.PRJCT_HOOK_STATE_TIMEOUT_MS = '20'
     const lanes = new RequestLanes()
     const gate = Promise.withResolvers<void>()
     const order: string[] = []
 
-    // Simulates the real 4.4s-tail scenario: a slow buildProjectState ahead
+    // Simulates the measured tail scenario: a slow buildProjectState ahead
     // in this cwd's chain. Its OWN caller times out too (its work legitimately
-    // exceeds the bound) — that's expected, matching real behavior for a
-    // genuinely slow hook.
+    // exceeds the bound); since it already STARTED it runs to completion so
+    // its state writes stay whole.
     const slow = lanes.run('hook-state', async () => {
       order.push('slow-start')
       await gate.promise
@@ -204,14 +204,13 @@ describe('RequestLanes', () => {
       return 'slow-result'
     })
 
-    // Queued behind `slow` — must not wait the full duration of `slow`.
+    // Queued behind `slow` — must not wait the full duration of `slow`, and
+    // once its caller has fallen back to the cold path it must NOT run here
+    // (that would execute the same prompt hook twice).
     const queuedBehind = lanes.run('hook-state', async () => {
       order.push('queued-behind')
       return 'queued-result'
     })
-    // Attach synchronously, before either timer fires, so bun's unhandled-
-    // rejection detector never observes a transiently-uncaught rejection —
-    // the `.rejects` assertions below still read the real settled reason.
     slow.catch(() => undefined)
     queuedBehind.catch(() => undefined)
 
@@ -219,14 +218,12 @@ describe('RequestLanes', () => {
     await expect(queuedBehind).rejects.toBeInstanceOf(HookStateLaneTimeoutError)
     expect(order).toEqual(['slow-start'])
 
-    // Neither caller is listening anymore — the underlying chain must still
-    // run to completion, uninterrupted by either sibling caller's bail.
     gate.resolve()
     await flush()
-    expect(order).toEqual(['slow-start', 'slow-end', 'queued-behind'])
+    expect(order).toEqual(['slow-start', 'slow-end'])
   })
 
-  test('hook-state ordering survives a caller timeout — the NEXT queued call still waits for the real work, not for whichever caller gave up', async () => {
+  test('hook-state ordering survives a caller timeout — a live caller queued later still waits for the running job, abandoned jobs in between are dropped', async () => {
     process.env.PRJCT_HOOK_STATE_TIMEOUT_MS = '20'
     const lanes = new RequestLanes()
     const gate = Promise.withResolvers<void>()
@@ -240,26 +237,24 @@ describe('RequestLanes', () => {
     const second = lanes.run('hook-state', async () => {
       order.push('second') // Would prove a race if this ran before first-end.
     })
-    const third = lanes.run('hook-state', async () => {
-      order.push('third')
-    })
     first.catch(() => undefined)
     second.catch(() => undefined)
-    third.catch(() => undefined)
 
     await expect(first).rejects.toBeInstanceOf(HookStateLaneTimeoutError)
     await expect(second).rejects.toBeInstanceOf(HookStateLaneTimeoutError)
-    await expect(third).rejects.toBeInstanceOf(HookStateLaneTimeoutError)
-    // Every caller already gave up — nothing has executed past `first-start`.
     expect(order).toEqual(['first-start'])
 
-    // Release the real work with no caller left listening on any of the
-    // three promises above; the chain must still drain in order.
+    // A NEW live caller arrives after the earlier ones bailed. It must still
+    // wait for `first` (mutual exclusion on this cwd's state), but must not
+    // pay for `second`, which nobody is listening to any more.
+    process.env.PRJCT_HOOK_STATE_TIMEOUT_MS = '5000'
+    const third = lanes.run('hook-state', async () => {
+      order.push('third')
+      return 'third-result'
+    })
     gate.resolve()
-    await flush()
-    // `second` runs (as `first`'s chained continuation) before `third` — the
-    // mutual-exclusion invariant held despite every caller having bailed.
-    expect(order).toEqual(['first-start', 'first-end', 'second', 'third'])
+    await expect(third).resolves.toBe('third-result')
+    expect(order).toEqual(['first-start', 'first-end', 'third'])
   })
 
   test('a fast hook-state call resolves normally, well under the timeout', async () => {

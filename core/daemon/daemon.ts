@@ -24,7 +24,7 @@ import { getHookRunner } from '../hooks/registry'
 import configManager from '../infrastructure/config-manager'
 import { performanceTracker } from '../infrastructure/performance-tracker'
 import { refreshUpdateStatus } from '../services/update-checker'
-import prjctDb from '../storage/database'
+import prjctDb, { withBusyTimeout } from '../storage/database'
 import { realtimeManager } from '../sync/realtime-manager'
 import type { DaemonRequest, DaemonResponse, DaemonState } from '../types/daemon'
 import { executeCommand } from './dispatch'
@@ -637,7 +637,22 @@ async function handleRequestInner(request: DaemonRequest): Promise<DaemonRespons
  * contract; the outer guard is belt-and-suspenders so a hook can never take
  * the daemon down.
  */
+/**
+ * Lock-wait budget for hook work inside the daemon. The SQLite driver is
+ * synchronous: a hook write that waits on another process's write lock
+ * (a detached cold-path afterEmit child, a CLI `remember`, a sync) blocks the
+ * event loop — and with it every other hook — for up to busy_timeout. The
+ * default 5000ms produced hook:prompt tails of 5s/10s/18s. Hooks are
+ * fail-soft and their DB writes are telemetry-grade, so failing fast is the
+ * correct trade: one lost sample beats a frozen agent turn.
+ */
+const HOOK_DB_BUSY_TIMEOUT_MS = 150
+
 async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse> {
+  return withBusyTimeout(HOOK_DB_BUSY_TIMEOUT_MS, () => handleHookRequestInner(request))
+}
+
+async function handleHookRequestInner(request: DaemonRequest): Promise<DaemonResponse> {
   const startedAt = performance.now()
   const runner = getHookRunner(request.args[0])
   if (!runner) {
@@ -662,7 +677,11 @@ async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse
     },
     detachAfterEmit: (fn) => {
       setImmediate(() => {
-        fn().catch(() => {
+        // Detached work runs on this same event loop after the response —
+        // a 5s lock wait here would stall the NEXT hook, so it keeps the
+        // hook budget explicitly (timers do not inherit the async context
+        // on every runtime).
+        withBusyTimeout(HOOK_DB_BUSY_TIMEOUT_MS, () => fn()).catch(() => {
           /* detached side-effects are best-effort; the next hook recovers */
         })
       })
@@ -680,9 +699,11 @@ async function handleHookRequest(request: DaemonRequest): Promise<DaemonResponse
     try {
       const projectId = await configManager.getProjectId(request.cwd)
       if (projectId) {
-        performanceTracker.recordTiming(projectId, 'command_duration', durationMs, {
-          command: `hook:${request.args[0] ?? 'unknown'}`,
-        })
+        withBusyTimeout(HOOK_DB_BUSY_TIMEOUT_MS, () =>
+          performanceTracker.recordTiming(projectId, 'command_duration', durationMs, {
+            command: `hook:${request.args[0] ?? 'unknown'}`,
+          })
+        )
       }
     } catch {
       /* telemetry is best-effort and never blocks the response */
