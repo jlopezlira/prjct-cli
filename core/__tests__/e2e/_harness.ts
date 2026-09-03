@@ -147,6 +147,7 @@ export async function makeSandbox(opts: SandboxOpts | boolean = true): Promise<S
     CI: '1',
     NO_COLOR: '1',
     PRJCT_NO_DAEMON: '1',
+    PRJCT_SKIP_CONTEXT7_SMOKE: '1',
   }
 
   return {

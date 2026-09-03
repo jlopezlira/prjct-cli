@@ -30,6 +30,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'deliveryGeometry',
   'land',
   'judgment',
+  'qa',
   'notify',
   'retention',
   'multiAgent',

@@ -167,6 +167,7 @@ export const COMMANDS: CommandMeta[] = [
         'forcePressure',
         'noJudgmentGate',
         'noGauntlet',
+        'noQaGate',
       ],
       strings: ['intent', 'geometry'],
     },
@@ -569,6 +570,37 @@ export const COMMANDS: CommandMeta[] = [
       'No arg → show mode + the active task spec station (pipeline checklist)',
       'off|advisory|strict sets the intensity (opt-in, like lean)',
       'strict: every task needs a reviewed spec; ship blocks unspecced work',
+    ],
+  },
+  {
+    name: 'qa',
+    group: 'optional',
+    surface: 'support',
+    routing: { group: 'qa', method: 'qa' },
+    // Probe runs can take minutes (app start + e2e) — never inside the daemon.
+    routingMode: 'cold-only',
+    optionSchema: {
+      strings: ['json', 'flow', 'evidence'],
+      booleans: ['noServe'],
+    },
+    description:
+      'QA phase: per-cycle acceptance criteria + flows, verified by universal probes (http/cli/file) and a blind QA subagent — no test framework required',
+    usage: {
+      claude: 'p. qa [plan|run|next|brief|report|mark|set|receipt|browser|off|advisory|strict]',
+      terminal: 'prjct qa [sub]',
+    },
+    params: '[plan|run|next|brief|report|mark|set|receipt|browser|off|advisory|strict]',
+    implemented: true,
+    hasTemplate: false,
+    requiresProject: true,
+    isOptional: true,
+    features: [
+      'No arg → mode + the active cycle plan checklist, app config, last receipt',
+      "plan --json '{criteria,flows}' writes the plan (seeded from a linked spec); strict refuses vague criteria",
+      'run executes http/cli/file probes (starts qa.app.start when set) → receipt bound to HEAD',
+      'next/brief/report drive a blind QA subagent for flows a probe cannot cover; author marks never satisfy strict',
+      'browser install|status|goto|fill|click|text|screenshot|close — prjct’s own headless Chromium under the prjct cache: machine-run browser probes + a driver for rigs with no browser MCP',
+      'Default: advisory on the code pack, strict on code-strict; ship gates it (--no-qa-gate overrides, recorded)',
     ],
   },
   {

@@ -2,12 +2,18 @@
 
 ## [Unreleased]
 
+## [4.17.0] - 2026-09-02
+
+### Added
+
+- qa phase
+- `prjct qa` — an integrated QA phase per work cycle: acceptance criteria + flows (seeded from a linked spec) written at work start, universal `http`/`cli`/`file` probes prjct runs itself, a blind QA subagent brief/report loop for browser flows, and `done`/`ship` gates (advisory on the `code` pack, strict on `code-strict`; `--no-qa-gate` overrides and is recorded). No test framework required in the project. `prjct qa browser install` adds prjct's own headless Chromium under `~/.prjct-cli/cache` (never in the project): declarative `browser` probes run by machine, and `prjct qa browser goto|fill|click|text|screenshot` primitives so the blind QA subagent can drive the app on rigs with no browser MCP.
+
 ## [4.16.1] - 2026-09-01
 
 ### Bug Fixes
 
 - published installs could never spawn their daemon, and update reported a false failure (#642)
-
 
 ## [4.16.0] - 2026-09-01
 

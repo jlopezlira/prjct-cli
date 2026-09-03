@@ -200,6 +200,8 @@ export interface GateRequest {
   noSession?: { mode: 'emit' } | { mode: 'memory' } | { mode: 'static'; ttlMs: number }
   /** Pointer text on suppression; default → emit null. */
   onRepeat?: (hash: string) => string
+  /** Clock override for the static TTL (tests); default `Date.now()`. */
+  nowMs?: number
 }
 
 export interface GateResult {
@@ -348,7 +350,7 @@ export async function gateDelivery(req: GateRequest): Promise<GateResult> {
     const subKey = req.key ? hashContent(req.key).slice(0, 16) : '_'
     const l1Key = `${stampKey}:${req.surface}:${subKey}`
     const ttlMs = policy?.mode === 'static' ? policy.ttlMs : null
-    const now = Date.now()
+    const now = req.nowMs ?? Date.now()
 
     if (policy?.mode === 'memory') {
       const repeat = !req.full && gateL1.get(l1Key) === hash

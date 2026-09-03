@@ -362,6 +362,7 @@ export type CommandRoutingGroup =
   | 'eval'
   | 'judgment'
   | 'code'
+  | 'qa'
 
 export interface CommandRouting {
   /** Which command-group instance owns the handler. */

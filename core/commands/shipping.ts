@@ -94,6 +94,8 @@ interface ShipOptions {
   noJudgmentGate?: boolean
   /** Skip the machine gauntlet gate (explicit consent — the override is recorded) */
   noGauntlet?: boolean
+  /** Skip the QA gate (explicit consent — the override is recorded) */
+  noQaGate?: boolean
 }
 
 export class ShippingCommands extends PrjctCommandsBase {
@@ -434,6 +436,34 @@ export class ShippingCommands extends PrjctCommandsBase {
         /* gauntlet gate is best-effort — never crash ship on lookup */
       }
 
+      // QA gate: the cycle's flows must be verified for THIS HEAD — machine
+      // probes or the blind QA subagent. Self-provisions the probe run like
+      // the gauntlet; --no-qa-gate overrides explicitly and is recorded.
+      const qaChecklist: string[] = []
+      try {
+        const { ensureShipQa, recordQaOverride } = await import('../services/qa-runner')
+        const { effectiveQaMode } = await import('../services/qa-gate')
+        const { gitStdout } = await import('../utils/exec')
+        const headNow = await gitStdout(projectPath, ['rev-parse', 'HEAD'])
+          .then((s) => s?.trim() || null)
+          .catch(() => null)
+        const verdict = await ensureShipQa(projectPath, projectId, {
+          taskId: currentTask?.id ?? null,
+          harnessLevel: currentTask?.harness?.level,
+          headSha: headNow,
+          mode: effectiveQaMode(shipConfig),
+          override: options.noQaGate === true,
+        })
+        if (options.noQaGate === true) recordQaOverride(projectId, currentTask?.id)
+        if (verdict.blocked) {
+          return { success: false, error: verdict.message ?? 'QA gate blocked.' }
+        }
+        if (verdict.message) console.log(verdict.message)
+        qaChecklist.push(...verdict.checklist)
+      } catch {
+        /* qa gate is best-effort — never crash ship on lookup */
+      }
+
       // Gates passed — complete the task for THIS worktree (main → currentTask,
       // child worktree → its activeTasks[] slot) so parallel agents ship their
       // own work without disturbing sibling worktrees.
@@ -446,7 +476,20 @@ export class ShippingCommands extends PrjctCommandsBase {
       // is met — Claude (or the human) does, per the skill body's `ship`
       // entry. Without --no-spec-gate, we surface and continue; the agent
       // is responsible for halting if any criterion is unmet.
-      if (linkedSpecId && !options.noSpecGate) {
+      if (qaChecklist.length > 0) {
+        console.log(
+          [
+            '',
+            '## QA checklist — the plan this ship is measured against',
+            '',
+            ...qaChecklist,
+            '',
+          ].join('\n')
+        )
+      }
+      // A QA plan already carries the spec's criteria — print the spec list
+      // only when no plan exists.
+      if (linkedSpecId && !options.noSpecGate && qaChecklist.length === 0) {
         try {
           const { specService } = await import('../services/spec-service')
           const spec = await specService.get(projectPath, linkedSpecId)

@@ -305,6 +305,32 @@ export async function buildProjectStateParts(
         /* advisory */
       }
 
+      // QA phase: one bounded line naming the next step while the plan is open.
+      // Keyed per card kind so it re-fires only when the step changes.
+      try {
+        const { effectiveQaMode, formatQaInject, qaAppliesTo, qaNextAction } = await import(
+          '../services/qa-gate'
+        )
+        const qaMode = effectiveQaMode(config)
+        const level = overview.current.harness?.level
+        if (qaAppliesTo(level, qaMode)) {
+          const { getQaPlan } = await import('../services/qa-plan')
+          const { readQaReceipt } = await import('../services/qa-runner')
+          const card = qaNextAction({
+            mode: qaMode,
+            harnessLevel: level,
+            plan: getQaPlan(config.projectId, overview.current.id),
+            receipt: readQaReceipt(config.projectId, overview.current.id)?.data ?? null,
+            headSha: null,
+            nowMs: Date.now(),
+          })
+          const text = formatQaInject(card)
+          if (text) events.push({ key: `qa:${overview.current.id}:${card.kind}`, text })
+        }
+      } catch {
+        /* advisory */
+      }
+
       // Owner from post-bump task — skip resolveActiveTask (second workspace walk).
       if (currentTask?.ownerAgent) {
         lines.push(

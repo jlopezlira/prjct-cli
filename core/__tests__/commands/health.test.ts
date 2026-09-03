@@ -22,7 +22,10 @@ beforeEach(async () => {
   await fs.mkdir(path.join(fixture.dir, '.prjct'), { recursive: true })
   await fs.writeFile(
     path.join(fixture.dir, '.prjct/prjct.config.json'),
-    JSON.stringify({ projectId: `health-test-${Date.now()}` })
+    JSON.stringify({
+      projectId: `health-test-${Date.now()}`,
+      dataPath: path.join(fixture.dir, '.prjct-data'),
+    })
   )
 })
 

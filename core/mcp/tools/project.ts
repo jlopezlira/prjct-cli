@@ -182,6 +182,9 @@ export function registerProjectTools(
             lines.push(`Evidence: ${outcome.harness.expectedEvidence.join(', ')}`)
           }
         }
+        if (outcome.qa?.section) {
+          lines.push('', 'QA plan (AUTHORITATIVE — verified before done/ship):', outcome.qa.section)
+        }
         lines.push(
           '',
           formatModelOnlyGuidance(outcome.privateSkills ?? {}, outcome.outputProfile ?? 'compact')
@@ -243,7 +246,7 @@ export function registerProjectTools(
       )
       if (!outcome.ok) {
         const text =
-          outcome.reason === 'unsupported'
+          outcome.reason !== 'no-active-task'
             ? outcome.message
             : 'No active work cycle to update. Start one with prjct_task_start.'
         return { content: [{ type: 'text', text }] }

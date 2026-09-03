@@ -156,7 +156,8 @@ export async function projectHasGauntletCommands(projectPath: string): Promise<b
   }
 }
 
-async function gitBinding(
+/** Bind a receipt to git HEAD; shared with the QA receipt. */
+export async function gitBinding(
   projectPath: string
 ): Promise<{ headSha: string | null; dirty: boolean | null }> {
   try {
@@ -170,10 +171,19 @@ async function gitBinding(
   }
 }
 
-async function runCheck(
+/** A verify check result — the QA runner reuses the exact same shape. */
+export type VerifyCheck = GauntletCheck
+
+/**
+ * Run one verify command through the shell and classify the result. Shared
+ * with the QA runner (`opts.timeoutMs` lets long e2e suites breathe); the
+ * gauntlet's own timeouts are unchanged when the option is absent.
+ */
+export async function runVerifyCommand(
   projectPath: string,
   kind: string,
-  command: string
+  command: string,
+  opts: { timeoutMs?: number } = {}
 ): Promise<GauntletCheck> {
   const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'
   const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
@@ -181,7 +191,8 @@ async function runCheck(
   const result = await runProc(shell, shellArgs, {
     cwd: projectPath,
     env: { ...process.env, PATH: `${localBin}:${process.env.PATH ?? ''}` },
-    timeoutMs: kind === 'test' ? TEST_TIMEOUT_MS : (CHECK_TIMEOUT_MS[kind] ?? 240_000),
+    timeoutMs:
+      opts.timeoutMs ?? (kind === 'test' ? TEST_TIMEOUT_MS : (CHECK_TIMEOUT_MS[kind] ?? 240_000)),
     maxBuffer: MAX_BUFFER,
   })
   return matchProc<GauntletCheck>(result, {
@@ -236,7 +247,7 @@ export async function runGauntlet(
 
   const checks: GauntletCheck[] = []
   for (const { kind, command } of commands) {
-    checks.push(await runCheck(projectPath, kind, command))
+    checks.push(await runVerifyCommand(projectPath, kind, command))
   }
 
   const receipt: GauntletReceipt = {
@@ -338,8 +349,14 @@ export interface GauntletVerdict {
   message: string | null
 }
 
+/** Minimal receipt binding — the gauntlet and QA receipts both satisfy it. */
+export interface ReceiptBinding {
+  ranAt: string
+  headSha: string | null
+}
+
 export function isReceiptFresh(
-  receipt: GauntletReceipt | null,
+  receipt: ReceiptBinding | null,
   nowMs: number,
   headSha: string | null
 ): boolean {

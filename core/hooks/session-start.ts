@@ -173,6 +173,18 @@ export async function buildSessionContext(
         }
       })()
     : Promise.resolve(null)
+  // Same division of labor for QA: prjct states that probes cannot reach the
+  // app; the agent registers how it runs.
+  const qaCuePromise: Promise<string | null> = opts.digest
+    ? (async () => {
+        try {
+          const { qaBootstrapCue } = await import('../services/qa-runner')
+          return await qaBootstrapCue(projectPath, config)
+        } catch {
+          return null
+        }
+      })()
+    : Promise.resolve(null)
   const identityPromise = buildProjectIdentityLine(projectPath, config.projectId)
   const [
     staleness,
@@ -182,6 +194,7 @@ export async function buildSessionContext(
     handoffCue,
     continuityCue,
     gauntletCue,
+    qaCue,
     identity,
   ] = await Promise.all([
     stalenessPromise,
@@ -191,6 +204,7 @@ export async function buildSessionContext(
     handoffCuePromise,
     continuityCuePromise,
     gauntletCuePromise,
+    qaCuePromise,
     identityPromise,
   ])
 
@@ -258,6 +272,10 @@ export async function buildSessionContext(
   if (gauntletCue) {
     if (sections.length > 0) sections.push('')
     sections.push(gauntletCue)
+  }
+  if (qaCue) {
+    if (sections.length > 0) sections.push('')
+    sections.push(qaCue)
   }
   return sections.join('\n')
 }

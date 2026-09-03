@@ -200,6 +200,9 @@ function packConfigDefaults(existing: LocalConfig, activated: string[]): Partial
         conflictMode: defaults.conflictMode,
       }
     }
+    if (defaults.qa && !existing.qa?.mode) {
+      patch.qa = { ...existing.qa, ...patch.qa, mode: defaults.qa }
+    }
   }
   return patch
 }
