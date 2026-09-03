@@ -68,6 +68,24 @@ export function resolveWorkScopeSync(
   return mergeScope(projectId, q, memorySeeds, limit)
 }
 
+/** Memory types whose file tags seed the scope (semantic leg). */
+const SCOPE_MEMORY_TYPES: ReadonlySet<string> = new Set([
+  'context',
+  'decision',
+  'gotcha',
+  'anti-pattern',
+  'learning',
+])
+
+export interface ResolveWorkScopeOptions {
+  /**
+   * Memory hits the caller already pulled through `enrichedRecall` for the
+   * same query. When present the semantic leg is NOT re-run — `prjct work`
+   * recalls once and feeds both the related-context block and the scope.
+   */
+  memoryHits?: MemoryEntry[]
+}
+
 /**
  * Full resolution for work start / MCP — includes semantic memory blend
  * when embeddings are configured (enrichedRecall).
@@ -76,25 +94,35 @@ export async function resolveWorkScope(
   projectPath: string,
   projectId: string,
   query: string,
-  limit: number = DEFAULT_LIMIT
+  limit: number = DEFAULT_LIMIT,
+  options: ResolveWorkScopeOptions = {}
 ): Promise<WorkScopeResult> {
   const q = query.trim()
   if (!q) return emptyResult()
 
   const memorySeeds = new Set<string>(memoryFileSeedsSync(projectId, q))
   try {
-    const { enrichedRecall } = await import('../memory/enriched-recall')
-    const hits = await enrichedRecall(projectPath, projectId, {
-      topic: q,
-      types: ['context', 'decision', 'gotcha', 'anti-pattern', 'learning'],
-      limit: 12,
-    })
-    for (const p of extractFilePathsFromEntries(hits, projectId)) memorySeeds.add(p)
+    const hits = options.memoryHits ?? (await semanticMemoryHits(projectPath, projectId, q))
+    const scoped = hits.filter((h) => SCOPE_MEMORY_TYPES.has(h.type))
+    for (const p of extractFilePathsFromEntries(scoped, projectId)) memorySeeds.add(p)
   } catch {
     /* FTS seeds still stand */
   }
 
   return mergeScope(projectId, q, memorySeeds, limit)
+}
+
+async function semanticMemoryHits(
+  projectPath: string,
+  projectId: string,
+  query: string
+): Promise<MemoryEntry[]> {
+  const { enrichedRecall } = await import('../memory/enriched-recall')
+  return enrichedRecall(projectPath, projectId, {
+    topic: query,
+    types: [...SCOPE_MEMORY_TYPES],
+    limit: 12,
+  })
 }
 
 function mergeScope(

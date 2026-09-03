@@ -8,6 +8,13 @@
 
 - close review identity and scope bypasses: Git path bytes are preserved exactly (`-z` NUL-delimited listings, no trim/backslash rewriting), review approvals are bound to the HEAD and base identity they were judged against, local default-branch commits without a remote are retained in the review payload (root commit fallback instead of HEAD-as-its-own-base), and mixed or out-of-scope verification batches are rejected before a rejudge pass is consumed.
 
+## [4.18.4] - 2026-09-03
+
+### Performance
+
+- `prjct work --md` packs its bounded surface honestly: a required section that does not fit whole (QA plan, model guidance, work scope…) is cut at a line boundary with a marker instead of being silently skipped, the trailing receipt names every section that was cut or omitted, and the receipt never displaces content — it may only shrink an already-cut section, otherwise a short receipt (or none) trails the content.
+- `prjct work` runs `enrichedRecall` once per start instead of twice: the related-context recall feeds the work scope's semantic leg (`resolveWorkScope(..., { memoryHits })`), so the FTS + embedding round-trip is no longer duplicated.
+
 ## [4.18.3] - 2026-09-03
 
 ### Performance

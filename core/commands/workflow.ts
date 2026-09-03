@@ -67,34 +67,142 @@ import {
 } from './workflow/rule-actions/workflows'
 
 const WORK_MD_BUDGET = 2_000
+/** `mdOutput` joins sections with a blank line. */
+const SECTION_SEPARATOR = 2
+/** Trails a required section that was cut at a line boundary. */
+const CUT_MARKER = '> … cut for budget — pull the rest with `prjct context`.'
+const RECEIPT_TITLE_MAX = 40
 
-/** Priority-pack whole markdown sections; never cut a guidance section mid-byte. */
+interface PackableSection {
+  text: string
+  title: string
+  required: boolean
+}
+
+interface PackOutcome {
+  kept: string[]
+  cut: string[]
+  omitted: string[]
+  used: number
+}
+
+/** Short human name for a section — its heading up to the first ` — ` / ` (`. */
+function sectionTitle(section: string): string {
+  const heading = (section.split('\n', 1)[0] ?? '')
+    .replace(/^#+\s*/, '')
+    .replace(/^>\s*/, '')
+    .trim()
+  const short = heading.split(' — ')[0]?.split(' (')[0]?.trim() || heading
+  return short.length > RECEIPT_TITLE_MAX ? `${short.slice(0, RECEIPT_TITLE_MAX - 1)}…` : short
+}
+
+/**
+ * Keep the heading plus whole leading lines that fit in `room`, then the cut
+ * marker. Null when not even one content line fits — a bare heading is noise.
+ */
+function truncateSectionToFit(section: string, room: number): string | null {
+  const lines = section.split('\n')
+  const heading = lines[0] ?? ''
+  const acc = { used: heading.length + 1 + CUT_MARKER.length, kept: [heading] }
+  for (const line of lines.slice(1)) {
+    const cost = line.length + 1
+    if (acc.used + cost > room) break
+    acc.kept.push(line)
+    acc.used += cost
+  }
+  if (acc.kept.length < 2) return null
+  return [...acc.kept, CUT_MARKER].join('\n')
+}
+
+function packOnce(sections: PackableSection[], room: number): PackOutcome {
+  const outcome: PackOutcome = { kept: [], cut: [], omitted: [], used: 0 }
+  for (const section of sections) {
+    const separator = outcome.kept.length > 0 ? SECTION_SEPARATOR : 0
+    if (outcome.used + separator + section.text.length <= room) {
+      outcome.kept.push(section.text)
+      outcome.used += separator + section.text.length
+      continue
+    }
+    const truncated = section.required
+      ? truncateSectionToFit(section.text, room - outcome.used - separator)
+      : null
+    if (truncated) {
+      outcome.kept.push(truncated)
+      outcome.used += separator + truncated.length
+      outcome.cut.push(section.title)
+    } else {
+      outcome.omitted.push(section.title)
+    }
+  }
+  return outcome
+}
+
+/** Names every section the budget cut or dropped so the agent knows what to pull. */
+function packingReceipt(outcome: PackOutcome): string | null {
+  if (outcome.cut.length === 0 && outcome.omitted.length === 0) return null
+  const parts = [
+    outcome.cut.length > 0 ? `cut: ${outcome.cut.join(', ')}` : null,
+    outcome.omitted.length > 0 ? `omitted: ${outcome.omitted.join(', ')}` : null,
+  ].filter((s): s is string => s !== null)
+  return `> Bounded surface — ${parts.join(' · ')}. Pull with \`prjct context\`, \`prjct search\`, or \`prjct workflows --md\`.`
+}
+
+/** Fits where the named receipt cannot: still tells the agent something is missing. */
+function shortPackingReceipt(outcome: PackOutcome): string | null {
+  const missing = outcome.cut.length + outcome.omitted.length
+  if (missing === 0) return null
+  return `> Bounded surface — ${missing} section(s) trimmed; pull with \`prjct context\`.`
+}
+
+function fitsAfter(outcome: PackOutcome, receipt: string, budget: number): boolean {
+  const separator = outcome.kept.length > 0 ? SECTION_SEPARATOR : 0
+  return outcome.used + separator + receipt.length <= budget
+}
+
+/**
+ * Priority-pack markdown sections under `budget`.
+ *
+ * Required sections that do not fit whole are cut at a line boundary (heading
+ * + leading lines + marker) instead of being dropped; optional ones are
+ * omitted. The trailing receipt NAMES what was cut/omitted.
+ *
+ * The receipt never displaces content: when it does not fit, the pack is
+ * retried with the receipt's room reserved, and that retry is accepted only
+ * if it shrinks an already-cut section — the same sections kept whole, the
+ * same names on the receipt. Otherwise the content stands and a short receipt
+ * (or none) trails it.
+ */
 export function packWorkMarkdownSections(
   required: Array<string | null | undefined | false>,
   optional: Array<string | null | undefined | false>,
   budget = WORK_MD_BUDGET
 ): string {
-  const kept: string[] = []
-  const packing = { used: 0, omitted: 0 }
-  for (const section of [...required, ...optional]) {
-    if (!section) continue
-    const separator = kept.length > 0 ? 2 : 0
-    if (packing.used + separator + section.length <= budget) {
-      kept.push(section)
-      packing.used += separator + section.length
-    } else {
-      packing.omitted += 1
-    }
+  const toSections = (
+    list: Array<string | null | undefined | false>,
+    isRequired: boolean
+  ): PackableSection[] =>
+    list.flatMap((s) => (s ? [{ text: s, title: sectionTitle(s), required: isRequired }] : []))
+  const sections = [...toSections(required, true), ...toSections(optional, false)]
+
+  const first = packOnce(sections, budget)
+  const receipt = packingReceipt(first)
+  if (!receipt) return mdOutput(...first.kept)
+  if (fitsAfter(first, receipt, budget)) return mdOutput(...first.kept, receipt)
+
+  const separator = first.kept.length > 0 ? SECTION_SEPARATOR : 0
+  const reserved = packOnce(sections, budget - separator - receipt.length)
+  if (
+    first.cut.length > 0 &&
+    packingReceipt(reserved) === receipt &&
+    fitsAfter(reserved, receipt, budget)
+  ) {
+    return mdOutput(...reserved.kept, receipt)
   }
-  const receipt =
-    packing.omitted > 0
-      ? `> ${packing.omitted} lower-priority section(s) omitted from this bounded surface; pull with \`prjct context\`, \`prjct search\`, or \`prjct workflows --md\`.`
-      : null
-  if (receipt) {
-    const separator = kept.length > 0 ? 2 : 0
-    if (packing.used + separator + receipt.length <= budget) kept.push(receipt)
-  }
-  return mdOutput(...kept)
+
+  const short = shortPackingReceipt(first)
+  return short && fitsAfter(first, short, budget)
+    ? mdOutput(...first.kept, short)
+    : mdOutput(...first.kept)
 }
 
 export class WorkflowCommands extends PrjctCommandsBase {
