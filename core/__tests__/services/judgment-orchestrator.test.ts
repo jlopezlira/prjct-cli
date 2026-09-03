@@ -95,6 +95,8 @@ describe('formatQualityInject', () => {
     expect(guidance).toContain('workflow:code-review=')
     expect(guidance).toContain('Standards')
     expect(guidance).toContain('comment discipline')
+    expect(guidance).toMatch(/changed hunks \+ direct dependencies/i)
+    expect(guidance).toMatch(/do not run a separate.*review/i)
 
     ledger.verdict = 'approved'
     expect(reviewDispatchGuidance(buildNextAction(ledger, 'standard'))).toEqual([])

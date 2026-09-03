@@ -183,7 +183,7 @@ describe('ship() — workflow-first', () => {
     expect(pkg.version).toBe('0.6.0')
   })
 
-  test('seeds a Stop-Slop verify gate when the project has a test command', async () => {
+  test('does not seed a duplicate verify gate when gauntlet owns machine verification', async () => {
     await fs.writeFile(
       path.join(fixture.projectPath, 'package.json'),
       JSON.stringify({ name: 'codeproj', version: '0.5.0', scripts: { test: 'true' } })
@@ -192,7 +192,71 @@ describe('ship() — workflow-first', () => {
     const actions = workflowRuleStorage
       .getRulesForCommand(fixture.projectId, 'ship')
       .map((r) => r.action)
-    expect(actions.some((a) => a.startsWith('verify:'))).toBe(true)
+    expect(actions.some((a) => a.startsWith('verify:'))).toBe(false)
+  })
+
+  test('fresh green gauntlet retires the legacy Stop-Slop gate instead of re-running tests', async () => {
+    await fs.writeFile(
+      path.join(fixture.projectPath, 'package.json'),
+      JSON.stringify({ name: 'codeproj', version: '0.5.0', scripts: { test: 'exit 99' } })
+    )
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
+      gauntlet: { commands: [{ kind: 'test', command: 'true' }] },
+    })
+    initGit(fixture.projectPath)
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-m', 'init', '-q'], { cwd: fixture.projectPath })
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture.projectPath,
+      encoding: 'utf8',
+    }).trim()
+    prjctDb.setDoc(fixture.projectId, 'gauntlet:latest', {
+      version: 1,
+      ranAt: new Date().toISOString(),
+      headSha,
+      dirty: false,
+      passed: true,
+      vacuous: false,
+      checks: [{ kind: 'test', command: 'true', ok: true, outcome: 'ok', durationMs: 1 }],
+    })
+    const now = new Date().toISOString()
+    workflowRuleStorage.addRule(fixture.projectId, {
+      type: 'gate',
+      command: 'ship',
+      position: 'before',
+      action: 'verify:bun run test',
+      description: 'Verify before shipping (Stop-Slop)',
+      enabled: true,
+      timeoutMs: 300_000,
+      sortOrder: 1,
+      createdAt: now,
+    })
+    workflowRuleStorage.addRule(fixture.projectId, {
+      type: 'step',
+      command: 'ship',
+      position: 'before',
+      action: 'touch shipped-marker',
+      description: 'Test ship marker',
+      enabled: true,
+      timeoutMs: 5_000,
+      sortOrder: 2,
+      createdAt: now,
+    })
+
+    const result = await fixture.cmd.ship('deduplicated verification', fixture.projectPath, {
+      md: true,
+      intent: 'proceed',
+    })
+
+    expect(result.success).toBe(true)
+    expect(await fs.readFile(path.join(fixture.projectPath, 'shipped-marker'), 'utf8')).toBe('')
+    expect(
+      workflowRuleStorage
+        .getRulesForCommand(fixture.projectId, 'ship')
+        .some((rule) => rule.action.startsWith('verify:'))
+    ).toBe(false)
   })
 
   test('seeds no verify gate when the project has no test command', async () => {

@@ -37,8 +37,8 @@ describe('renderAuditDispatch — points reviewers at prjct, never embeds the sp
       ['architecture'],
       'claude'
     )
-    expect(out).toContain('Reviewer A — architecture')
-    expect(out).not.toContain('Reviewer B')
+    expect(out).toContain('Reviewer agent A — architecture')
+    expect(out).not.toContain('Reviewer agent B')
     expect(out).toContain('Selected lenses for this spec: **architecture**')
   })
 

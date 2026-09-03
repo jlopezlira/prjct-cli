@@ -29,6 +29,7 @@ import type { AIProviderName } from '../types/provider'
 import type { SpecContent } from '../types/spec'
 import type { DomainDefinition } from '../types/storage/extended'
 import { resolveDispatchMechanism } from './agent-dispatch'
+import { groupReviewLenses, MAX_REVIEW_AGENTS_PER_STAGE } from './review-budget'
 import { domainLensRubric, GENERIC_RUBRIC, LENS_CATALOG } from './review-lenses'
 import { parseScopePaths } from './spec-validate'
 
@@ -184,8 +185,9 @@ export function reviewsGatePassedRelational(projectId: string, specId: string): 
 
 /**
  * The dispatch prompt emitted by `prjct spec audit`. Claude reads this, runs
- * one Agent call per selected lens IN PARALLEL (one tool-use block each, same
- * message), then writes each verdict back via `prjct spec record-review`.
+ * at most two Agent calls in parallel. All selected lenses remain covered;
+ * multiple lenses share one agent's spec/code read, then each verdict is
+ * written back via `prjct spec record-review`.
  *
  * The spec body is NEVER embedded — each reviewer runs `prjct spec show <id>
  * --md` itself in its own fresh context.
@@ -200,6 +202,7 @@ export async function renderAuditDispatch(
 ): Promise<string> {
   const dispatch = await resolveDispatchMechanism(projectProvider)
   const chosen = lenses && lenses.length > 0 ? lenses : selectReviewers(content, domains)
+  const groups = groupReviewLenses(chosen)
   const domainMap = new Map(domains.map((d) => [d.name, d]))
   const scopePaths = parseScopePaths(content.scope)
   const scopeBlock =
@@ -208,22 +211,25 @@ export async function renderAuditDispatch(
       : '\n\n## Codebase paths\n_No path-shaped scope entries found. Reviewers judge the spec body alone._'
 
   const reviewerSections: string[] = []
-  chosen.forEach((lens, i) => {
-    const spec = LENS_CATALOG[lens]
-    const domain = domainMap.get(lens)
-    // Rubric resolution: function lens → its rubric; else a project domain →
-    // the domain-expert rubric; else the generic fallback (open vocabulary).
-    const label = spec ? spec.label : domain ? 'domain expert' : 'custom lens'
-    const rubric = spec ? spec.rubric : domain ? domainLensRubric(domain) : GENERIC_RUBRIC
+  groups.forEach((group, i) => {
     const letter = String.fromCharCode(65 + (i % 26))
     reviewerSections.push(
-      `## Reviewer ${letter} — ${lens} (${label})`,
-      `Reviewer prompt: "First run \`prjct spec show ${id} --md\` to read the spec. ${rubric} Return verdict (pass|fail) and 2-4 sentence notes."`,
+      `## Reviewer agent ${letter} — ${group.join(' + ')}`,
+      `Run \`prjct spec show ${id} --md\` once. Apply every lens below independently in one bounded pass; return one pass|fail verdict and 2-4 sentence notes PER LENS. Do not start another agent or second pass.`,
       ''
     )
+    group.forEach((lens) => {
+      const spec = LENS_CATALOG[lens]
+      const domain = domainMap.get(lens)
+      // Rubric resolution: function lens → its rubric; else a project domain →
+      // the domain-expert rubric; else the generic fallback (open vocabulary).
+      const label = spec ? spec.label : domain ? 'domain expert' : 'custom lens'
+      const rubric = spec ? spec.rubric : domain ? domainLensRubric(domain) : GENERIC_RUBRIC
+      reviewerSections.push(`### Lens: ${lens} (${label})`, rubric, '')
+    })
   })
 
-  const runLine = dispatch.runLine(chosen.length)
+  const runLine = dispatch.runLine(groups.length)
 
   return [
     `# audit-spec dispatch — ${title}`,
@@ -233,12 +239,13 @@ export async function renderAuditDispatch(
     `Selected lenses for this spec: **${chosen.join(', ')}**. This is the baseline prjct computed from the spec — re-run \`prjct spec audit ${id} --lenses <comma,separated>\` to adjust the set before dispatching (add a lens the risk surface demands, drop one that is irrelevant).`,
     '',
     runLine,
+    `Hard ceiling: at most ${MAX_REVIEW_AGENTS_PER_STAGE} reviewer agents, one bounded pass each. All ${chosen.length} lens verdicts are still required.`,
     '',
     '## Where the spec lives — read it from prjct, it is NOT in this prompt',
     `The plan lives in prjct (SQLite), never duplicated into a dispatch payload. Each reviewer runs \`prjct spec show ${id} --md\` itself, fresh, to read the full spec. Do NOT paste the spec body into the prompts — point them at that command. (Same rule for any memory the reviewer wants: \`prjct context memory <topic>\` — pulled by the reviewer, not pre-pasted by you.)`,
     '',
     '## Before dispatching',
-    'Do not set `model:` on any reviewer — every lens inherits the model this session is running. Hand reviewers the spec-read COMMAND and the codebase PATHS + the Read tool — never paste spec body or file contents into their prompts.',
+    'Do not set `model:` on any reviewer — every agent inherits the model this session is running. Hand reviewers the spec-read COMMAND and the codebase PATHS + the Read tool — never paste spec body or file contents into their prompts. Read each shared source once per agent.',
     scopeBlock,
     '',
     ...reviewerSections,

@@ -151,9 +151,20 @@ describe('renderAuditDispatch — never names a model', () => {
       ['architecture', 'design', 'security'],
       'claude'
     )
-    expect(out).toContain('## Reviewer B — design (UX/DX)')
+    expect(out).toContain('### Lens: design (UX/DX)')
     for (const needle of FORBIDDEN) expect(out).not.toContain(needle)
     expect(out).toContain('Do not set `model:` on any reviewer')
+    expect(out).toContain('at most 2 reviewer agents')
+  })
+
+  it('bundles all selected lenses into at most two agents', async () => {
+    const chosen = ['architecture', 'strategic', 'design', 'security', 'data', 'performance']
+    const out = await renderAuditDispatch('spec_1', 'T', emptySpecContent('x'), chosen, 'claude')
+
+    expect(out).toContain('## Reviewer agent A')
+    expect(out).toContain('## Reviewer agent B')
+    expect(out).not.toContain('## Reviewer agent C')
+    for (const lens of chosen) expect(out).toContain(`### Lens: ${lens}`)
   })
 
   it('no catalog lens carries a capability-class override', () => {

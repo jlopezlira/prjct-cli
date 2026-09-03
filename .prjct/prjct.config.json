@@ -31,5 +31,21 @@
   },
   "judgment": {
     "conflictMode": "advisory"
+  },
+  "gauntlet": {
+    "commands": [
+      {
+        "kind": "typecheck",
+        "command": "bun run typecheck"
+      },
+      {
+        "kind": "lint",
+        "command": "bun run check"
+      },
+      {
+        "kind": "test",
+        "command": "bun run test:sharded && bun run test:e2e"
+      }
+    ]
   }
 }

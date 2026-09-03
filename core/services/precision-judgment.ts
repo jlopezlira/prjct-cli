@@ -9,7 +9,7 @@
  *  3. Evidence TAX — blockers without file:line+sketch cannot stay blockers
  *  4. Finding DNA — fingerprint dedup + project ghost (FP) memory
  *  5. Dual-judge RED/BLUE merge — agreement / single-side / contradiction
- *  6. Batch refutation ceiling fixed (1 standard / 3 full) — never O(findings)
+ *  6. Batch refutation ceiling fixed at one challenger — never O(findings)
  *  7. Fail-closed missing votes → stands
  *  8. Convergence budget max 2 fix rounds
  *  9. Scoped re-review brief (ledger + fix scope only)
@@ -32,6 +32,11 @@ import type {
 import { MAX_FIX_ROUNDS } from '../schemas/judgment'
 import type { DeliveryTier } from './delivery-geometry'
 import { tierOf } from './delivery-geometry'
+import {
+  MAX_REVIEW_AGENTS_PER_STAGE,
+  type ReviewExecutionBudget,
+  reviewBudgetFor,
+} from './review-budget'
 
 // ── Intensity router ────────────────────────────────────────────────────────
 
@@ -436,8 +441,12 @@ export function mergeDualJudges(
 
 export type RefutePanelSize = 1 | 3
 
-export function refutePanelSize(intensity: ReviewIntensity): RefutePanelSize {
-  return intensity === 'full' ? 3 : 1
+export function refutePanelSize(_intensity: ReviewIntensity): RefutePanelSize {
+  // RED + BLUE already provide independent evidence on full. A second
+  // three-agent panel repeated the same context and made the gate cost five
+  // calls before any fix. One fresh batched challenger keeps the false-positive
+  // check while bounding the stage to a single additional call.
+  return 1
 }
 
 export function resolveRefuteVotes(
@@ -709,6 +718,8 @@ export interface NextActionCard {
   }
   rankedFixIds: string[]
   judgeCharters?: { red: string; blue: string }
+  /** Hard process ceilings rendered into every dispatch card. */
+  budget: ReviewExecutionBudget
 }
 
 const RED_CHARTER =
@@ -720,6 +731,7 @@ export function buildNextAction(
   ledger: JudgmentLedger | null,
   intensity: ReviewIntensity
 ): NextActionCard {
+  const requestedBudget = reviewBudgetFor(intensity)
   if (intensity === 'skip' && !ledger) {
     return {
       kind: 'skip_ship',
@@ -730,6 +742,7 @@ export function buildNextAction(
       maxFixRounds: 0,
       counts: emptyCounts(),
       rankedFixIds: [],
+      budget: requestedBudget,
     }
   }
 
@@ -744,6 +757,7 @@ export function buildNextAction(
       counts: emptyCounts(),
       rankedFixIds: [],
       judgeCharters: intensity === 'full' ? { red: RED_CHARTER, blue: BLUE_CHARTER } : undefined,
+      budget: requestedBudget,
     }
   }
 
@@ -757,6 +771,7 @@ export function buildNextAction(
     rankedFixIds: ranked.map((f) => f.id),
     judgeCharters:
       ledger.intensity === 'full' ? { red: RED_CHARTER, blue: BLUE_CHARTER } : undefined,
+    budget: reviewBudgetFor(ledger.intensity),
   }
 
   if (ledger.verdict === 'escalated') {
@@ -784,8 +799,8 @@ export function buildNextAction(
       kind: 'dispatch_reviewers',
       directive:
         ledger.intensity === 'full'
-          ? 'Dispatch RED + BLUE judges in parallel (blind). Then prjct judgment merge. If both find nothing: prjct judgment approve.'
-          : 'Dispatch ONE focused reviewer. Record findings with prjct judgment add (or approve if truly clean).',
+          ? 'Dispatch RED + BLUE in parallel for one bounded pass over complementary risk charters. Then prjct judgment merge. If both find nothing: prjct judgment approve and STOP.'
+          : 'Dispatch ONE focused reviewer for one bounded pass. Record findings with prjct judgment add, or approve and STOP if clean.',
       steps:
         ledger.intensity === 'full'
           ? [
@@ -805,9 +820,9 @@ export function buildNextAction(
     return {
       ...base,
       kind: 'dispatch_refuters',
-      directive: `Batch-challenge ${counts.candidates} candidate(s). Ceiling: ${refutePanelSize(ledger.intensity)} vote(s) total — never per-finding tasks.`,
+      directive: `Use one batched challenger for all ${counts.candidates} candidate(s) — never per-finding tasks or a second panel.`,
       steps: [
-        'Spawn ONE batched refuter (or 3-lens panel on full) over ALL candidates',
+        'Spawn ONE batched challenger over ALL candidates',
         'prjct judgment challenge --verdicts id:stands|refuted[,…]',
         'prjct judgment next',
       ],
@@ -916,6 +931,7 @@ export function intensityProtocol(intensity: ReviewIntensity): {
   shipExpectation: string
   redCharter?: string
   blueCharter?: string
+  maxReviewAgentsPerStage: number
 } {
   switch (intensity) {
     case 'skip':
@@ -927,6 +943,7 @@ export function intensityProtocol(intensity: ReviewIntensity): {
         evidenceTax: 'n/a',
         maxFixRounds: 0,
         shipExpectation: 'ship without judgment ledger',
+        maxReviewAgentsPerStage: 0,
       }
     case 'standard':
       return {
@@ -938,6 +955,7 @@ export function intensityProtocol(intensity: ReviewIntensity): {
         evidenceTax: 'blocker without file:line demoted to critical; title-only critical → info',
         maxFixRounds: MAX_FIX_ROUNDS,
         shipExpectation: 'ledger verdict approved (or --no-spec-gate override)',
+        maxReviewAgentsPerStage: 1,
       }
     case 'full':
       return {
@@ -945,7 +963,7 @@ export function intensityProtocol(intensity: ReviewIntensity): {
         reviewers:
           'dual-blind RED (attack) + BLUE (defense) in parallel — merge via prjct judgment merge',
         refuters:
-          'exactly THREE batched refuter votes (correctness/impact/repro); 2-of-3 kills; fail-closed stands',
+          'exactly one batched challenger over all candidates; fail-closed missing vote stands',
         severityFloor:
           'only verified BLOCKER/CRITICAL enter fix loops; WARNING/SUGGESTION = info once',
         evidenceTax: 'blocker without file:line demoted to critical; title-only critical → info',
@@ -953,6 +971,7 @@ export function intensityProtocol(intensity: ReviewIntensity): {
         shipExpectation: 'ledger verdict approved after ≤2 fix rounds (or escalate)',
         redCharter: RED_CHARTER,
         blueCharter: BLUE_CHARTER,
+        maxReviewAgentsPerStage: MAX_REVIEW_AGENTS_PER_STAGE,
       }
   }
 }

@@ -61,6 +61,7 @@ export function buildQaBrief(input: {
     '# QA brief — blind verification',
     '',
     "**Role**: you are QA. You did not write this change and you must not read its diff, commits or the author's notes. Verify the flows below against the running app exactly as a user would; report what you observed. Do NOT fix anything.",
+    '**Budget**: exactly one QA agent, one bounded pass over pending items, no helper agents. Stop when every pending item has one verdict; every verdict still needs evidence. Do not re-check machine-verified work.',
     '',
     '## App',
     app?.start

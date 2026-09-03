@@ -327,9 +327,9 @@ describe('ghost FP memory', () => {
 })
 
 describe('batch refutation', () => {
-  it('panel size is 1 standard / 3 full', () => {
+  it('uses one batched challenger for standard and full', () => {
     expect(refutePanelSize('standard')).toBe(1)
-    expect(refutePanelSize('full')).toBe(3)
+    expect(refutePanelSize('full')).toBe(1)
   })
 
   it('fail-closed missing votes → stands', () => {
@@ -337,7 +337,7 @@ describe('batch refutation', () => {
     expect(resolveRefuteVotes([], 3)).toBe('stands')
   })
 
-  it('full panel 2-of-3 kills', () => {
+  it('keeps legacy 2-of-3 vote resolution compatible', () => {
     expect(resolveRefuteVotes(['refuted', 'refuted', 'stands'], 3)).toBe('refuted')
     expect(resolveRefuteVotes(['refuted', 'stands', 'stands'], 3)).toBe('stands')
   })
@@ -435,6 +435,9 @@ describe('next-action card', () => {
     const ledger = createLedger({ target: 't', intensity: 'full', now: 't0' })
     const c = buildNextAction(ledger, 'full')
     expect(c.kind).toBe('dispatch_reviewers')
+    expect(c.budget.initialReviewers).toBe(2)
+    expect(c.budget.challengeReviewers).toBe(1)
+    expect(c.directive).toMatch(/one bounded pass/i)
   })
 
   it('candidates present → dispatch_refuters', () => {
@@ -453,6 +456,7 @@ describe('next-action card', () => {
     ]
     const c = buildNextAction(ledger, 'standard')
     expect(c.kind).toBe('dispatch_refuters')
+    expect(c.directive).toMatch(/one batched challenger/i)
   })
 
   it('stands → fix_ranked with order', () => {
@@ -561,6 +565,8 @@ describe('protocol card', () => {
     expect(p.evidenceTax).toMatch(/file:line/i)
     expect(p.maxFixRounds).toBe(2)
     expect(p.redCharter).toMatch(/attack/i)
+    expect(p.refuters).toMatch(/one batched/i)
+    expect(p.maxReviewAgentsPerStage).toBe(2)
   })
 })
 

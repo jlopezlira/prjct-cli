@@ -4,7 +4,7 @@
  *
  * Mirrors `prjct spec` CLI: create, list, get, update, set-status,
  * record-review, link-task, ship, audit. The `audit` tool returns the
- * dispatch prompt; the host model runs the three review subagents in
+ * dispatch prompt; the host model runs at most two reviewer agents in
  * parallel via its own tool-use mechanism (Agent / Task tool, etc.) and
  * writes verdicts back via `prjct_spec_record_review`.
  *
@@ -109,7 +109,7 @@ export function registerSpecTools(server: McpServer) {
           `status: ${spec.status}`,
           `goal: ${spec.content.goal}`,
           ``,
-          `Next: \`prjct_spec_audit\` to dispatch the three review subagents (strategic / architecture / design) in parallel.`,
+          `Next: \`prjct_spec_audit\` to cover every selected review lens with at most two reviewer agents in parallel.`,
         ].join('\n')
         return { content: [{ type: 'text', text: summary }] }
       }
@@ -361,7 +361,7 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_audit',
     {
       description:
-        'Call before implementing a spec. Returns a dispatch prompt for a DYNAMIC set of review specialists the spec signals (architecture is the floor; security/data/performance/design/strategic + DOMAIN experts join as signaled). Run them IN PARALLEL; persist each verdict via `prjct_spec_record_review` — all pass → auto-promotes draft → reviewed.',
+        'Call before implementing a spec. Returns a dispatch prompt for a DYNAMIC set of review lenses bundled into at most two reviewer agents (architecture is the floor; security/data/performance/design/strategic + DOMAIN experts join as signaled). Run the agents IN PARALLEL; persist each lens verdict via `prjct_spec_record_review` — all pass → auto-promotes draft → reviewed.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id to audit'),
@@ -403,7 +403,7 @@ export function registerSpecTools(server: McpServer) {
     'prjct_spec_record_review',
     {
       description:
-        "Persist one reviewer's verdict from `prjct_spec_audit` dispatch. Call once per reviewer (strategic, architecture, design). When all three are recorded with verdict=pass, the spec auto-promotes draft → reviewed.",
+        'Persist one lens verdict from `prjct_spec_audit` dispatch. Call once per selected lens, even when one agent covers multiple lenses. When every selected lens is recorded with verdict=pass, the spec auto-promotes draft → reviewed.',
       inputSchema: z.object({
         projectPath: optionalProjectPath,
         id: z.string().describe('Spec id'),

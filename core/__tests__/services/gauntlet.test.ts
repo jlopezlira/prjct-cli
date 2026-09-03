@@ -228,6 +228,26 @@ describe('runGauntlet', () => {
     const stored = readGauntletReceipt(fixture.projectId)
     expect(stored?.data.passed).toBe(false)
   })
+
+  it('reports the active check and heartbeats instead of looking hung', async () => {
+    await fs.mkdir(path.join(fixture.projectDir, '.prjct'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectDir, '.prjct', 'prjct.config.json'),
+      JSON.stringify({
+        gauntlet: { commands: [{ kind: 'test', command: 'sleep 0.05' }] },
+      })
+    )
+    const progress: string[] = []
+
+    await runGauntlet(fixture.projectDir, fixture.projectId, {
+      heartbeatMs: 5,
+      onProgress: (line) => progress.push(line),
+    })
+
+    expect(progress.some((line) => line.includes('test') && line.includes('sleep 0.05'))).toBe(true)
+    expect(progress.some((line) => line.includes('still running'))).toBe(true)
+    expect(progress.some((line) => line.includes('passed'))).toBe(true)
+  })
 })
 
 describe('gauntletShipVerdict', () => {
@@ -299,6 +319,33 @@ describe('gauntletShipVerdict', () => {
 })
 
 describe('ensureShipGauntlet (self-provisioning)', () => {
+  it('reuses an in-flight background gauntlet instead of launching a duplicate suite', async () => {
+    await fs.writeFile(
+      path.join(fixture.projectDir, 'package.json'),
+      JSON.stringify({ name: 'fixture', scripts: { test: 'false' } })
+    )
+    prjctDb.setDoc(fixture.projectId, 'gauntlet:running', {
+      startedAt: new Date().toISOString(),
+      pid: process.pid,
+    })
+    const background = setTimeout(() => {
+      prjctDb.setDoc(fixture.projectId, 'gauntlet:latest', receipt({ headSha: null, checks: [] }))
+      prjctDb.deleteDoc(fixture.projectId, 'gauntlet:running')
+    }, 20)
+
+    const verdict = await ensureShipGauntlet(fixture.projectDir, fixture.projectId, {
+      headSha: null,
+      strict: false,
+      override: false,
+      backgroundWaitMs: 100,
+      pollIntervalMs: 5,
+    })
+    clearTimeout(background)
+
+    expect(verdict.blocked).toBe(false)
+    expect(readGauntletReceipt(fixture.projectId)?.data.passed).toBe(true)
+  })
+
   it('runs the gauntlet inline when the receipt is missing — nobody has to remember', async () => {
     await fs.writeFile(
       path.join(fixture.projectDir, 'package.json'),

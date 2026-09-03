@@ -369,6 +369,17 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(ref).toContain('context-rot defense')
     })
 
+    it('bounds review fan-out and forbids duplicate review passes', async () => {
+      const ref = await readReference()
+
+      expect(ref).toMatch(/Review budget law/i)
+      expect(ref).toMatch(/at most 2 reviewer agents/i)
+      expect(ref).toMatch(/do not stack `review`, `audit`, crew review, and `judgment`/i)
+      expect(ref).toMatch(/zero findings is a valid pass/i)
+      expect(ref).not.toContain('THREE subagents IN PARALLEL')
+      expect(ref).not.toContain('3-vote panel')
+    })
+
     it('instructs review/security/investigate to dispatch as subagents', async () => {
       const ref = await readReference()
       const reviewSection = ref.split('### `review`')[1]?.split('### `qa`')[0] ?? ''
@@ -385,7 +396,7 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(ref).toContain('IN PARALLEL')
       expect(ref).toMatch(/Subagent A.*review/)
       expect(ref).toMatch(/Subagent B.*security/)
-      expect(ref).toMatch(/Subagent C.*investigate/)
+      expect(ref).not.toMatch(/Subagent C/)
     })
 
     it('scopes heavy-review subagent dispatch to diff size — in the pulled reference, not the always-on description', async () => {
