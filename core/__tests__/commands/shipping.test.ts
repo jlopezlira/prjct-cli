@@ -468,3 +468,62 @@ describe('ship() — contradictory review gate', () => {
     expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(1)
   })
 })
+
+describe('ship() — QA gate', () => {
+  const fixture: { projectPath: string; projectId: string; cmd: ShippingCommands } = {
+    projectPath: '',
+    projectId: '',
+    cmd: undefined as unknown as ShippingCommands,
+  }
+
+  beforeEach(async () => {
+    ;({ projectPath: fixture.projectPath, projectId: fixture.projectId } = await freshProject())
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
+      qa: { mode: 'strict' },
+    })
+    fixture.cmd = new ShippingCommands()
+    initGit(fixture.projectPath, 'main')
+    await fs.writeFile(path.join(fixture.projectPath, 'base.ts'), 'export const a = 1\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-m', 'base'], { cwd: fixture.projectPath })
+    execFileSync('git', ['checkout', '-q', '-b', 'feat/thing'], { cwd: fixture.projectPath })
+    await fs.writeFile(path.join(fixture.projectPath, 'base.ts'), 'export const a = 2\n')
+    execFileSync('git', ['add', '.'], { cwd: fixture.projectPath })
+    execFileSync('git', ['commit', '-m', 'change'], { cwd: fixture.projectPath })
+    const { startTask } = await import('../../services/task-service')
+    const started = await startTask(
+      fixture.projectId,
+      fixture.projectPath,
+      'add billing retry handling',
+      { skipHooks: true }
+    )
+    expect(started.ok).toBe(true)
+  })
+
+  afterEach(async () => {
+    if (fixture.projectPath) await fs.rm(fixture.projectPath, { recursive: true, force: true })
+  })
+
+  test('strict blocks a ship whose cycle has no verified QA plan', async () => {
+    const result = await fixture.cmd.ship('a feature', fixture.projectPath, {
+      md: true,
+      intent: 'review-skip',
+    })
+    expect(result.success).toBe(false)
+    expect(String(result.error ?? '')).toMatch(/QA gate \(strict\)/)
+    expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(0)
+  })
+
+  test('--no-qa-gate proceeds past the gate and records the override', async () => {
+    const result = await fixture.cmd.ship('a feature', fixture.projectPath, {
+      md: true,
+      intent: 'review-skip',
+      noQaGate: true,
+    })
+    expect(String(result.error ?? '')).not.toMatch(/QA gate/)
+    const events = prjctDb.getEvents(fixture.projectId, 'qa-override')
+    expect(events.length).toBeGreaterThan(0)
+  })
+})

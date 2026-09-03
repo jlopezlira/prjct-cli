@@ -62,6 +62,8 @@ export interface PackManifest {
     land?: 'off' | 'advisory' | 'strict'
     /** Closed-loop conflict gate default (first activation only). */
     conflictMode?: 'off' | 'advisory' | 'strict'
+    /** QA phase default (first activation only; `effectiveQaMode` also pack-gates when unset). */
+    qa?: 'off' | 'advisory' | 'strict'
   }
 }
 
@@ -106,6 +108,7 @@ export const PACK_MANIFESTS: Record<string, PackManifest> = {
       land: 'strict',
       // SUPERIOR: conflict gate on by default for code (not off).
       conflictMode: 'advisory',
+      qa: 'advisory',
     },
   },
 
@@ -121,6 +124,7 @@ export const PACK_MANIFESTS: Record<string, PackManifest> = {
       deliveryGeometry: 'strict',
       land: 'strict',
       conflictMode: 'strict',
+      qa: 'strict',
     },
   },
 

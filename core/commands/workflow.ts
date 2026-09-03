@@ -367,11 +367,24 @@ export class WorkflowCommands extends PrjctCommandsBase {
             { label: 'Synthesize context on close', command: 'prjct remember context "..."' },
             { label: 'Ship when done', command: 'prjct ship --md' },
           ]),
+          // [12] QA plan — appended LAST: packing below is by positional index.
+          outcome.qa?.section
+            ? mdSection(
+                'QA plan (MUST before implementing)',
+                [
+                  '> AUTHORITATIVE: acceptance criteria + flows are verified before done/ship.',
+                  outcome.qa.section,
+                ].join('\n')
+              )
+            : null,
         ]
         const md = packWorkMarkdownSections(
           [
             workSections[0],
             workSections[1],
+            // QA directive is a MUST-before-implementing gate and short: it rides
+            // right behind the header so the budget can never drop it.
+            workSections[12],
             // Source alignment is a correctness gate, not optional prose.
             // Keep it ahead of orchestration/model guidance so tight budgets
             // cannot tell Codex how to work while hiding what to reuse.
@@ -413,6 +426,7 @@ export class WorkflowCommands extends PrjctCommandsBase {
           }
         }
         if (orchestration) out.info(orchestration.directive)
+        if (outcome.qa?.directive) out.info(`QA plan (AUTHORITATIVE): ${outcome.qa.directive}`)
         out.info(modelGuidance)
         out.info(alignment.line)
         if (riskLines.length > 0) {

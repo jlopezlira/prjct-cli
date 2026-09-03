@@ -34,7 +34,7 @@ Project memory, work cycles, ships, guardrails, or performance. **You run the ve
 | next | `prjct next --md` | 1 |
 | metrics | `prjct insights` / `performance` / `cost` | 1 |
 | land | `prjct land` | 1 |
-| tdd/sdd | `prjct tdd` / `sdd` | 1 |
+| tdd/sdd/qa | `prjct tdd` / `sdd` / `qa` | 1 |
 | workflows | `prjct workflow` / `seed` | 1 |
 
 `prjct work` is the normal entrypoint **for task cycles only**. Known CLI verbs run bare. Full map in `workflows.md`.

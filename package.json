@@ -1,6 +1,6 @@
 {
   "name": "prjct-cli",
-  "version": "4.16.1",
+  "version": "4.17.0",
   "description": "The agentic harness for AI coding agents — machine-verified ships, guarded edits, and fast project lookup with measured retrieval quality.",
   "main": "dist/bin/prjct.mjs",
   "bin": {

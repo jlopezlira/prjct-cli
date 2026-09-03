@@ -4,7 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { indexProject } from '../../domain/bm25'
 import pathManager from '../../infrastructure/path-manager'
-import { startTask } from '../../services/task-service'
+import { applyQaReport, getQaPlan, upsertQaPlan } from '../../services/qa-plan'
+import { runQa } from '../../services/qa-runner'
+import { setTaskStatus, startTask } from '../../services/task-service'
 import { MAIN_WORKSPACE_ID } from '../../services/workspace-id'
 import { prjctDb } from '../../storage/database'
 import { getTaskPipelineState } from '../../storage/task-pipeline-storage'
@@ -94,5 +96,84 @@ describe('task service pipeline orchestration', () => {
     expect(outcome.ok).toBe(true)
     expect(outcome.likelyFiles?.[0]?.path).toBe('core/server/headless-api.ts')
     expect(outcome.likelyFiles?.[0]?.signals).toContain('bm25')
+  })
+})
+
+describe('task service — QA phase', () => {
+  beforeEach(async () => {
+    fixture.tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-task-service-qa-'))
+    fixture.projectId = `qa-service-${Date.now()}`
+    fixture.projectPath = path.join(fixture.tmpRoot, 'repo')
+    patchPathManager(fixture.tmpRoot)
+    await fs.mkdir(pathManager.getStoragePath(fixture.projectId, ''), { recursive: true })
+    await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
+    await fs.writeFile(
+      path.join(fixture.projectPath, '.prjct', 'prjct.config.json'),
+      JSON.stringify({
+        projectId: fixture.projectId,
+        dataPath: fixture.tmpRoot,
+        qa: { mode: 'strict' },
+      })
+    )
+  })
+
+  afterEach(async () => {
+    prjctDb.close()
+    restorePathManager()
+    await fs.rm(fixture.tmpRoot, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('work start carries the QA directive; strict done blocks until the plan is verified', async () => {
+    const outcome = await startTask(
+      fixture.projectId,
+      fixture.projectPath,
+      'add billing retry handling with failure recovery',
+      { skipHooks: true }
+    )
+    expect(outcome.ok).toBe(true)
+    expect(outcome.qa?.mode).toBe('strict')
+    expect(outcome.qa?.planExists).toBe(false)
+    expect(outcome.qa?.directive).toContain('BEFORE implementing')
+    expect(outcome.qa?.section).toContain('prjct qa plan --json')
+
+    const blocked = await setTaskStatus(fixture.projectId, fixture.projectPath, 'done')
+    expect(blocked.ok).toBe(false)
+    if (!blocked.ok) {
+      expect(blocked.reason).toBe('gate-blocked')
+      expect(blocked.reason === 'gate-blocked' && blocked.message).toContain('prjct qa next')
+    }
+
+    // A plan whose flows are all machine-verified for this HEAD clears the gate.
+    const taskId = outcome.taskId ?? ''
+    upsertQaPlan(
+      fixture.projectId,
+      taskId,
+      {
+        criteria: ['retry endpoint returns 200 — cli probe'],
+        flows: [{ name: 'retry ok', kind: 'cli', probe: { type: 'cli', command: 'true' } }],
+      },
+      { mode: 'strict' }
+    )
+    const plan = getQaPlan(fixture.projectId, taskId)
+    await runQa(fixture.projectPath, fixture.projectId, { plan })
+    const acId = plan?.criteria[0]?.id ?? ''
+    applyQaReport(fixture.projectId, taskId, [
+      {
+        id: acId,
+        verdict: 'met',
+        evidence:
+          'curl http://localhost/retry answered 200 with {"ok":true} on three consecutive calls',
+      },
+    ])
+    const done = await setTaskStatus(fixture.projectId, fixture.projectPath, 'done')
+    expect(done.ok).toBe(true)
+  })
+
+  it('does not apply to H0 cycles', async () => {
+    const outcome = await startTask(fixture.projectId, fixture.projectPath, 'fix typo in README', {
+      skipHooks: true,
+    })
+    expect(outcome.ok).toBe(true)
+    if (outcome.harness?.level === 'H0') expect(outcome.qa).toBeUndefined()
   })
 })

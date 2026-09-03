@@ -192,6 +192,28 @@ export interface LocalConfig {
   gauntlet?: {
     commands?: Array<{ kind: 'typecheck' | 'lint' | 'test'; command: string }>
   }
+  /**
+   * QA phase — per-cycle acceptance criteria + flows, verified without any
+   * test framework in this repo. Unset mode is pack-gated (code → advisory,
+   * code-strict → strict, else off), like `judgment.conflictMode`:
+   *   - `advisory` — `work` asks for the plan, `done`/`ship` warn on gaps.
+   *   - `strict` — `done`/`ship` block until every flow is machine- or
+   *     agent-verified (`--no-qa-gate` is the recorded override).
+   * `app` tells prjct how to reach the running app for `http`/`browser`
+   * probes (nothing is inferred; the agent registers it once via
+   * `prjct qa set app.start|app.baseUrl …`). `commands` are OPTIONAL extra
+   * checks a project already owns (an existing e2e suite) — never required.
+   */
+  qa?: {
+    mode?: 'off' | 'advisory' | 'strict'
+    app?: {
+      start?: string
+      baseUrl?: string
+      readyPath?: string
+      readyTimeoutMs?: number
+    }
+    commands?: Array<{ kind: 'e2e' | 'integration' | 'smoke'; command: string }>
+  }
   retention?: {
     mode?: 'off' | 'dry-run' | 'apply'
     /** Max archive actions per full sync (default 100). */

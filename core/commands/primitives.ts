@@ -49,7 +49,8 @@ export class PrimitiveCommands extends PrjctCommandsBase {
       if (value) {
         const outcome = await setTaskStatus(pid.value, projectPath, value)
         if (!outcome.ok) {
-          if (outcome.reason === 'unsupported') {
+          // `unsupported` and `gate-blocked` both carry the message to print.
+          if (outcome.reason !== 'no-active-task') {
             if (options.md) console.log(`> ${outcome.message}`)
             else out.fail(outcome.message)
             return { success: false, error: outcome.message }

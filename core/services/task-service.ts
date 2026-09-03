@@ -54,6 +54,17 @@ import { deriveWorkspace, MAIN_WORKSPACE_ID } from './workspace-id'
 /** Status values that mean "make this task the active one again". */
 const RESUME_VALUES = ['active', 'resume', 'in_progress', 'working']
 
+/** QA phase at work start — plan state + the AUTHORITATIVE directive. */
+export interface QaWorkOutcome {
+  mode: 'off' | 'advisory' | 'strict'
+  planExists: boolean
+  seeded: boolean
+  criteriaCount: number
+  flowsCount: number
+  section: string | null
+  directive: string | null
+}
+
 export interface StartTaskOutcome {
   ok: boolean
   /** Set when a `before_task` gate or hook blocked the start. */
@@ -101,6 +112,8 @@ export interface StartTaskOutcome {
   risks?: RiskHit[]
   /** Dynasty D5: one-shot cycle budget line printed at work start. */
   cycleBudget?: string | null
+  /** QA phase: present when the phase applies to this cycle (H1+, mode ≠ off). */
+  qa?: QaWorkOutcome
   /** Multi-agent owner stamped at start. */
   ownerAgent?: string
   ownerIdentity?: string
@@ -578,6 +591,15 @@ export async function startTask(
     }
   }
 
+  // QA phase: seed the plan from the linked spec and compute the work-start
+  // directive. Best-effort — never blocks a start.
+  const qa = await qaWorkOutcome(projectId, projectPath, cfg, {
+    taskId,
+    workspaceId,
+    linkedSpecId: linkedSpecId ?? null,
+    harnessLevel: harness.level,
+  })
+
   const author = await projectService.ensureAuthor()
   await memoryService.log(
     projectPath,
@@ -653,6 +675,82 @@ export async function startTask(
     likelyFiles,
     risks,
     cycleBudget,
+    qa,
+  }
+}
+
+async function qaWorkOutcome(
+  projectId: string,
+  projectPath: string,
+  cfg: Awaited<ReturnType<typeof configManager.readConfig>> | null,
+  input: {
+    taskId: string
+    workspaceId: string
+    linkedSpecId: string | null
+    harnessLevel: TaskHarness['level']
+  }
+): Promise<QaWorkOutcome | undefined> {
+  try {
+    const { effectiveQaMode, qaAppliesTo, qaWorkCue } = await import('./qa-gate')
+    const mode = effectiveQaMode(cfg)
+    if (!qaAppliesTo(input.harnessLevel, mode)) return undefined
+    const { getQaPlan, saveSeededPlan, seedQaPlanFromSpec } = await import('./qa-plan')
+    const existing = getQaPlan(projectId, input.taskId)
+    const seeded = await (async () => {
+      if (existing || !input.linkedSpecId) return null
+      const { specService } = await import('./spec-service')
+      const spec = await specService.get(projectPath, input.linkedSpecId)
+      if (!spec) return null
+      const plan = seedQaPlanFromSpec(spec, input.taskId, input.workspaceId)
+      if (plan.criteria.length === 0 && plan.flows.length === 0) return null
+      return saveSeededPlan(projectId, plan)
+    })().catch(() => null)
+    const plan = existing ?? seeded
+    const cue = qaWorkCue({ mode, harnessLevel: input.harnessLevel, plan, seeded: Boolean(seeded) })
+    return {
+      mode,
+      planExists: Boolean(plan),
+      seeded: Boolean(seeded),
+      criteriaCount: plan?.criteria.length ?? 0,
+      flowsCount: plan?.flows.length ?? 0,
+      section: cue.section,
+      directive: cue.directive,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `done` gate for the QA phase: strict blocks with the exact unblock, advisory
+ * warns through the existing harness-warnings channel. Best-effort.
+ */
+async function qaDoneGate(
+  projectId: string,
+  projectPath: string,
+  task: { id: string; harness?: TaskHarness }
+): Promise<{ blocked: string | null; warning: string | null }> {
+  try {
+    const cfg = await configManager.readConfig(projectPath).catch(() => null)
+    const { effectiveQaMode, qaDoneVerdict } = await import('./qa-gate')
+    const mode = effectiveQaMode(cfg)
+    if (mode === 'off') return { blocked: null, warning: null }
+    const { getQaPlan } = await import('./qa-plan')
+    const { readQaReceipt } = await import('./qa-runner')
+    const { gitBinding } = await import('./gauntlet')
+    const binding = await gitBinding(projectPath)
+    const verdict = qaDoneVerdict({
+      mode,
+      harnessLevel: task.harness?.level,
+      plan: getQaPlan(projectId, task.id),
+      receipt: readQaReceipt(projectId, task.id)?.data ?? null,
+      headSha: binding.headSha,
+      nowMs: Date.now(),
+    })
+    if (verdict.blocked) return { blocked: verdict.message, warning: null }
+    return { blocked: null, warning: verdict.message?.startsWith('⚠') ? verdict.message : null }
+  } catch {
+    return { blocked: null, warning: null }
   }
 }
 
@@ -807,6 +905,8 @@ export type SetStatusOutcome =
   | { ok: false; reason: 'no-active-task' }
   /** The transition isn't supported in this context — caller prints `message`. */
   | { ok: false; reason: 'unsupported'; message: string }
+  /** A strict gate (QA) refused `done` — `message` names the exact unblock. */
+  | { ok: false; reason: 'gate-blocked'; message: string }
 
 /**
  * Change the active task's status. Drives the real workflow state machine so
@@ -845,6 +945,9 @@ export async function setTaskStatus(
     if (normalized === 'done' || normalized === 'completed') {
       const lastStatus = await readLastStatus(projectId, wsTask.id)
       const verification = await evaluateHarnessCompletion(projectPath, wsTask)
+      const qaGate = await qaDoneGate(projectId, projectPath, wsTask)
+      if (qaGate.blocked) return { ok: false, reason: 'gate-blocked', message: qaGate.blocked }
+      if (qaGate.warning) verification.warnings.push(qaGate.warning)
       await memoryService.log(projectPath, STATUS_CHANGE_ACTION, {
         taskId: wsTask.id,
         from: lastStatus ?? null,
@@ -930,6 +1033,9 @@ export async function setTaskStatus(
     } catch {
       /* advisory only */
     }
+    const qaGate = await qaDoneGate(projectId, projectPath, active)
+    if (qaGate.blocked) return { ok: false, reason: 'gate-blocked', message: qaGate.blocked }
+    if (qaGate.warning) verification.warnings.push(qaGate.warning)
   }
 
   await memoryService.log(projectPath, STATUS_CHANGE_ACTION, {

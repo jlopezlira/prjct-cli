@@ -109,6 +109,7 @@ describe('a config key prjct ignores is reported', () => {
         maxTokensPerCycle: 1,
         contextPressure: {},
         sdd: {},
+        qa: {},
         cloud: {},
       })
     ).toEqual([])

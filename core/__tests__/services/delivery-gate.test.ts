@@ -119,26 +119,31 @@ describe('gateDelivery — noSession policies', () => {
     expect((await gateDelivery(req)).suppressed).toBe(false)
   })
 
+  // The TTL tests drive the gate's clock through `nowMs` instead of sleeping:
+  // wall-clock sleeps of a few ms stretch under suite load and turned these
+  // into flaky failures at the window edge.
   it('static: dedupes on disk until the TTL lapses', async () => {
+    const t0 = 1_000_000
     const req = baseReq({ sessionId: undefined, noSession: { mode: 'static', ttlMs: 40 } })
-    expect((await gateDelivery(req)).suppressed).toBe(false)
-    expect((await gateDelivery(req)).suppressed).toBe(true)
-    await new Promise((resolve) => setTimeout(resolve, 60))
-    expect((await gateDelivery(req)).suppressed).toBe(false)
+    expect((await gateDelivery({ ...req, nowMs: t0 })).suppressed).toBe(false)
+    expect((await gateDelivery({ ...req, nowMs: t0 + 10 })).suppressed).toBe(true)
+    expect((await gateDelivery({ ...req, nowMs: t0 + 60 })).suppressed).toBe(false)
   })
 
   it('static: TTL is a hard bound, not a sliding window — steady access still expires', async () => {
+    const t0 = 1_000_000
     const req = baseReq({ sessionId: undefined, noSession: { mode: 'static', ttlMs: 90 } })
-    expect((await gateDelivery(req)).suppressed).toBe(false)
+    expect((await gateDelivery({ ...req, nowMs: t0 })).suppressed).toBe(false)
     // Suppressed accesses inside the window must NOT refresh the stamp:
     // once the ORIGINAL TTL lapses the content re-emits, even though it was
     // being accessed (and suppressed) the whole time.
-    await new Promise((resolve) => setTimeout(resolve, 35))
-    expect((await gateDelivery(req)).suppressed).toBe(true)
-    await new Promise((resolve) => setTimeout(resolve, 35))
-    expect((await gateDelivery(req)).suppressed).toBe(true)
-    await new Promise((resolve) => setTimeout(resolve, 35))
-    expect((await gateDelivery(req)).suppressed).toBe(false)
+    expect((await gateDelivery({ ...req, nowMs: t0 + 35 })).suppressed).toBe(true)
+    expect((await gateDelivery({ ...req, nowMs: t0 + 70 })).suppressed).toBe(true)
+    expect((await gateDelivery({ ...req, nowMs: t0 + 89 })).suppressed).toBe(true)
+    expect((await gateDelivery({ ...req, nowMs: t0 + 105 })).suppressed).toBe(false)
+    // A fresh emit restarts the bound from that access, not from the first one.
+    expect((await gateDelivery({ ...req, nowMs: t0 + 150 })).suppressed).toBe(true)
+    expect((await gateDelivery({ ...req, nowMs: t0 + 196 })).suppressed).toBe(false)
   })
 
   it('probe: evaluates suppression without writing any stamp', async () => {
