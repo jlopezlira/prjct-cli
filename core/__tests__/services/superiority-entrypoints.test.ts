@@ -248,6 +248,7 @@ describe('ShippingCommands.ship entry-point gates', () => {
     const blocked = await ship.ship('add left-pad', fixture.projectPath, {
       md: true,
       skipHooks: true,
+      intent: 'review-skip',
       noSpecGate: true, // prove package gate is independent of noSpecGate
       noJudgmentGate: true,
       forcePressure: true,
@@ -258,6 +259,7 @@ describe('ShippingCommands.ship entry-point gates', () => {
     const allowed = await ship.ship('add left-pad', fixture.projectPath, {
       md: true,
       skipHooks: true,
+      intent: 'review-skip',
       noSpecGate: true,
       noJudgmentGate: true,
       forcePressure: true,
@@ -328,7 +330,7 @@ describe('ShippingCommands.ship entry-point gates', () => {
     }
   })
 
-  it('hard-blocks code-strict judgment without ledger; --no-judgment-gate overrides (not --no-spec-gate)', async () => {
+  it('asks for review without a ledger; only explicit review consent reaches --no-judgment-gate', async () => {
     Object.assign(
       fixture,
       await freshProject({
@@ -355,7 +357,8 @@ describe('ShippingCommands.ship entry-point gates', () => {
       allowNewDeps: true,
     })
     expect(blocked.success).toBe(false)
-    expect(String(blocked.error ?? '')).toMatch(/judgment|no-judgment-gate|ledger/i)
+    const clarification = blocked.clarification as { options?: string[] } | undefined
+    expect(clarification?.options).toContain('review-standard')
 
     const withSpecGateOnly = await ship.ship('ship grade change', fixture.projectPath, {
       md: true,
@@ -364,12 +367,16 @@ describe('ShippingCommands.ship entry-point gates', () => {
       forcePressure: true,
       allowNewDeps: true,
     })
-    // Still blocked on judgment
+    // --no-spec-gate does not answer the independent review-consent question.
     expect(withSpecGateOnly.success).toBe(false)
+    expect(
+      (withSpecGateOnly.clarification as { options?: string[] } | undefined)?.options
+    ).toContain('review-standard')
 
     const overridden = await ship.ship('ship grade change', fixture.projectPath, {
       md: true,
       skipHooks: true,
+      intent: 'review-skip',
       noJudgmentGate: true,
       forcePressure: true,
       allowNewDeps: true,

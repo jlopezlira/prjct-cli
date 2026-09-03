@@ -3,6 +3,8 @@
  * Shared by `prjct review-risk` (advisory) and work-start gates (strict packs).
  */
 
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { gitStdout } from '../utils/exec'
 
 export type DeliveryTier = 'trivial' | 'normal' | 'large'
@@ -53,8 +55,35 @@ function parseShortstat(shortstat: string): { files: number; loc: number } {
   return { files, loc }
 }
 
-/** Committed range vs merge-base with default branch (review-risk path). */
-export async function computeCommittedChangeset(projectPath: string): Promise<Changeset | null> {
+const MAX_UNTRACKED_BYTES_TO_SCAN = 1024 * 1024
+
+async function untrackedLoc(projectPath: string, files: readonly string[]): Promise<number> {
+  const root = path.resolve(projectPath)
+  const counts = await Promise.all(
+    files.map(async (file) => {
+      const abs = path.resolve(root, file)
+      if (abs !== root && !abs.startsWith(`${root}${path.sep}`)) return 0
+      try {
+        const stat = await fs.lstat(abs)
+        if (stat.isSymbolicLink()) return 1
+        if (!stat.isFile()) return 0
+        // Size alone is sufficient to cross the large-review threshold;
+        // avoid loading arbitrarily large new assets into the CLI process.
+        if (stat.size > MAX_UNTRACKED_BYTES_TO_SCAN) return NORMAL_MAX_LOC + 1
+        const content = await fs.readFile(abs)
+        if (content.length === 0) return 0
+        const newlines = content.reduce((count, byte) => count + (byte === 10 ? 1 : 0), 0)
+        return newlines + (content.at(-1) === 10 ? 0 : 1)
+      } catch {
+        // Unknown untracked content must not make the review cheaper.
+        return NORMAL_MAX_LOC + 1
+      }
+    })
+  )
+  return counts.reduce((total, count) => total + count, 0)
+}
+
+async function resolveDefaultBase(projectPath: string): Promise<string | null> {
   const originHead = await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
   const defaultRef =
     originHead && originHead !== 'origin/HEAD'
@@ -70,8 +99,29 @@ export async function computeCommittedChangeset(projectPath: string): Promise<Ch
           return ''
         })()
   if (!defaultRef) return null
+  return safeGit(projectPath, ['merge-base', defaultRef, 'HEAD'])
+}
 
-  const base = await safeGit(projectPath, ['merge-base', defaultRef, 'HEAD'])
+export async function resolveReviewPayloadPaths(projectPath: string): Promise<string[]> {
+  const base = await resolveDefaultBase(projectPath)
+  const [committed, tracked, untracked] = await Promise.all([
+    base ? safeGit(projectPath, ['diff', '--name-only', `${base}..HEAD`]) : Promise.resolve(''),
+    safeGit(projectPath, ['diff', '--name-only', 'HEAD']),
+    safeGit(projectPath, ['ls-files', '--others', '--exclude-standard']),
+  ])
+  return [
+    ...new Set(
+      [committed, tracked, untracked]
+        .flatMap((output) => (output ?? '').split('\n'))
+        .map((file) => file.trim().replace(/\\/g, '/'))
+        .filter(Boolean)
+    ),
+  ].sort()
+}
+
+/** Committed range vs merge-base with default branch (review-risk path). */
+export async function computeCommittedChangeset(projectPath: string): Promise<Changeset | null> {
+  const base = await resolveDefaultBase(projectPath)
   if (!base) return null
   const headSha = await safeGit(projectPath, ['rev-parse', 'HEAD'])
   if (!headSha || headSha === base) return null
@@ -95,24 +145,17 @@ export async function computeCommittedChangeset(projectPath: string): Promise<Ch
 /** Uncommitted working tree (staged + unstaged) — gate before more implementation. */
 export async function computeWorkingTreeChangeset(projectPath: string): Promise<Changeset | null> {
   const shortstat = await safeGit(projectPath, ['diff', '--shortstat', 'HEAD'])
-  const cached = await safeGit(projectPath, ['diff', '--shortstat', '--cached'])
-  if (shortstat === null && cached === null) return null
-  const a = parseShortstat(shortstat ?? '')
-  const b = parseShortstat(cached ?? '')
-  const files = Math.max(a.files, b.files)
-  const loc = a.loc + b.loc
+  const untracked = await safeGit(projectPath, ['ls-files', '--others', '--exclude-standard'])
+  if (shortstat === null && untracked === null) return null
+  const tracked = parseShortstat(shortstat ?? '')
+  const untrackedNames = (untracked ?? '').split('\n').filter(Boolean)
+  const files = tracked.files + untrackedNames.length
+  const loc = tracked.loc + (await untrackedLoc(projectPath, untrackedNames))
   if (files === 0 && loc === 0) return null
-  const names =
-    (await safeGit(projectPath, ['diff', '--name-only', 'HEAD'])) ??
-    (await safeGit(projectPath, ['diff', '--name-only', '--cached'])) ??
-    ''
+  const trackedNames = (await safeGit(projectPath, ['diff', '--name-only', 'HEAD'])) ?? ''
+  const names = [...trackedNames.split('\n').filter(Boolean), ...untrackedNames]
   const dirs = [
-    ...new Set(
-      names
-        .split('\n')
-        .filter(Boolean)
-        .map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))
-    ),
+    ...new Set(names.map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))),
   ].sort()
   return { base: 'HEAD', files, loc, dirs, source: 'working-tree' }
 }

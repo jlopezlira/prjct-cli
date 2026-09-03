@@ -58,6 +58,11 @@ function initGit(projectPath: string, branch = 'develop'): void {
   execFileSync('git', ['config', 'user.name', 'test'], { cwd: projectPath })
 }
 
+function commitFixtureState(projectPath: string): void {
+  execFileSync('git', ['add', '--all'], { cwd: projectPath })
+  execFileSync('git', ['commit', '--allow-empty', '-m', 'init', '-q'], { cwd: projectPath })
+}
+
 describe('ship() — workflow-first', () => {
   const fixture: {
     projectPath: string
@@ -161,9 +166,7 @@ describe('ship() — workflow-first', () => {
       JSON.stringify({ name: 'codeproj', version: '0.5.0' }, null, 2)
     )
     initGit(fixture.projectPath)
-    execFileSync('git', ['commit', '--allow-empty', '-m', 'init', '-q'], {
-      cwd: fixture.projectPath,
-    })
+    commitFixtureState(fixture.projectPath)
 
     // No rules pre-seeded — ship should auto-seed then proceed (push will
     // fail for lack of remote, but commit should land).
@@ -277,9 +280,7 @@ describe('ship() — workflow-first', () => {
       JSON.stringify({ name: 'codeproj', version: '0.5.0' }, null, 2)
     )
     initGit(fixture.projectPath, 'feat/universal-agent-compat')
-    execFileSync('git', ['commit', '--allow-empty', '-m', 'init', '-q'], {
-      cwd: fixture.projectPath,
-    })
+    commitFixtureState(fixture.projectPath)
 
     const result = await fixture.cmd.ship(null, fixture.projectPath, { md: true })
 
@@ -364,9 +365,7 @@ describe('ship() — PR convention', () => {
     // 4 steps, no pr:ensure, no stored prConvention — the exact shape
     // this repo's own workflow_rules were in before this session.
     initGit(fixture.projectPath, 'feat/legacy')
-    execFileSync('git', ['commit', '--allow-empty', '-m', 'init', '-q'], {
-      cwd: fixture.projectPath,
-    })
+    commitFixtureState(fixture.projectPath)
     const now = new Date().toISOString()
     for (const [i, action] of [
       'git branch --show-current | grep -vE "^(main|master)$"',
@@ -414,9 +413,7 @@ describe('ship() — PR convention', () => {
 
   test('--intent=pr-convention-auto persists auto and adds the pr:ensure step', async () => {
     initGit(fixture.projectPath, 'feat/legacy')
-    execFileSync('git', ['commit', '--allow-empty', '-m', 'init', '-q'], {
-      cwd: fixture.projectPath,
-    })
+    commitFixtureState(fixture.projectPath)
     const now = new Date().toISOString()
     for (const [i, action] of [
       'version:bump',
@@ -489,6 +486,18 @@ describe('ship() — contradictory review gate', () => {
     expect(c?.options).toEqual(['review-full', 'review-standard', 'review-skip', 'abort'])
     expect(c?.question).toMatch(/RED \(attack\) \+ BLUE \(defense\)/)
     expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(0)
+  })
+
+  test('asks for review when the payload exists only in the dirty tree', async () => {
+    execFileSync('git', ['reset', '--hard', 'main'], { cwd: fixture.projectPath })
+    await fs.writeFile(path.join(fixture.projectPath, 'base.ts'), 'export const dirty = 1\n')
+    await fs.writeFile(path.join(fixture.projectPath, 'untracked.ts'), 'export const fresh = 1\n')
+
+    const result = await fixture.cmd.ship('dirty feature', fixture.projectPath, { md: true })
+    const clarification = result.clarification as { options?: string[] } | undefined
+
+    expect(result.success).toBe(false)
+    expect(clarification?.options).toContain('review-standard')
   })
 
   test('review-full opens a dual-blind ledger and still does not ship', async () => {

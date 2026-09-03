@@ -1,13 +1,75 @@
 import { describe, expect, it } from 'bun:test'
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import {
+  computeWorkingTreeChangeset,
   geometryBlockMessage,
   geometryOf,
   intentGeometryVerdict,
   NORMAL_MAX_LOC,
+  resolveReviewPayloadPaths,
   tierOf,
 } from '../../services/delivery-geometry'
 
 describe('delivery-geometry', () => {
+  it('counts untracked lines so a large new file cannot route as trivial', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-untracked-loc-'))
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: root })
+      await fs.writeFile(path.join(root, 'base.txt'), 'base\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root })
+      await fs.writeFile(path.join(root, 'large-new.ts'), 'line\n'.repeat(NORMAL_MAX_LOC + 1))
+
+      const changeset = await computeWorkingTreeChangeset(root)
+
+      expect(changeset?.loc).toBe(NORMAL_MAX_LOC + 1)
+      expect(changeset && tierOf(changeset)).toBe('large')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves one review payload across committed, staged, unstaged, deleted and untracked paths', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-review-payload-'))
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    }
+    try {
+      git('init', '-q', '-b', 'main')
+      git('config', 'user.email', 'test@prjct.local')
+      git('config', 'user.name', 'test')
+      await fs.writeFile(path.join(root, 'modified.ts'), 'base\n')
+      await fs.writeFile(path.join(root, 'deleted.ts'), 'base\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'base')
+      git('checkout', '-q', '-b', 'feature')
+      await fs.writeFile(path.join(root, 'committed.ts'), 'committed\n')
+      git('add', 'committed.ts')
+      git('commit', '-q', '-m', 'committed change')
+
+      await fs.writeFile(path.join(root, 'modified.ts'), 'dirty\n')
+      await fs.writeFile(path.join(root, 'staged.ts'), 'staged\n')
+      git('add', 'staged.ts')
+      await fs.rm(path.join(root, 'deleted.ts'))
+      await fs.writeFile(path.join(root, 'untracked.ts'), 'untracked\n')
+
+      expect(await resolveReviewPayloadPaths(root)).toEqual([
+        'committed.ts',
+        'deleted.ts',
+        'modified.ts',
+        'staged.ts',
+        'untracked.ts',
+      ])
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('classifies tiers', () => {
     expect(tierOf({ files: 1, loc: 10 })).toBe('trivial')
     expect(tierOf({ files: 5, loc: 100 })).toBe('normal')

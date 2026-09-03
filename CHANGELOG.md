@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [4.18.1] - 2026-09-03
+
+### Bug Fixes
+
+- zero test worktree residue: verification owns and removes its temp root on success and timeout, the Bun test preload cleans its sandbox homes on exit and signals, and `prjct land` removes only clean, inactive managed worktrees already contained in HEAD.
+- contradictory review binds the real ship payload: the review payload now spans committed, staged, unstaged, deleted and untracked paths (a dirty tree alone asks for review), untracked lines count toward delivery geometry, and the content-bound stamp (v2) binds executable mode, symlink targets and submodule SHAs — not only dereferenced bytes — for the full payload even past the diagnostic path cap.
+- review passes are persisted on the judgment ledger so CLI retries cannot spend the same initial/challenge/rejudge stage twice, with a per-intensity finding budget on `finding` and `merge`.
+
 ## [4.18.0] - 2026-09-03
 
 ### Added

@@ -16,7 +16,11 @@
 import type { JudgmentLedger, ReviewIntensity } from '../schemas/judgment'
 import { judgmentLedgerStorage } from '../storage/judgment-ledger-storage'
 import { getTimestamp } from '../utils/date-helper'
-import { computeCommittedChangeset, computeWorkingTreeChangeset } from './delivery-geometry'
+import {
+  computeCommittedChangeset,
+  computeWorkingTreeChangeset,
+  resolveReviewPayloadPaths,
+} from './delivery-geometry'
 import {
   buildNextAction,
   createLedger,
@@ -101,8 +105,24 @@ export async function ensureJudgmentLedger(input: {
     const next = buildNextAction(existing, intensity)
     return { opened: false, intensity, quality, ledger: existing, next }
   }
+  const scopePaths = await resolveReviewPayloadPaths(input.projectPath)
 
-  if (existing && (existing.verdict === 'in_progress' || existing.verdict === 'approved')) {
+  const sameScope =
+    existing?.scopePaths !== undefined &&
+    existing.scopePaths.length === scopePaths.length &&
+    existing.scopePaths.every((path, index) => path === scopePaths[index])
+  const approvedStillBound =
+    existing?.verdict === 'approved' && existing.contentBound?.payloadBound
+      ? await import('./content-bound-stamp').then(async ({ currentTreeHashForStamp }) => {
+          const current = await currentTreeHashForStamp(input.projectPath, existing.contentBound!)
+          return current === existing.contentBound?.treeHash
+        })
+      : false
+  if (
+    existing &&
+    sameScope &&
+    (existing.verdict === 'in_progress' || (existing.verdict === 'approved' && approvedStillBound))
+  ) {
     const next = buildNextAction(existing, existing.intensity)
     return { opened: false, intensity: existing.intensity, quality, ledger: existing, next }
   }
@@ -117,26 +137,6 @@ export async function ensureJudgmentLedger(input: {
   )
     .then(({ tierOf }) => tierOf({ files: resolved.files, loc: resolved.loc }))
     .catch(() => undefined)
-
-  const scopePaths = await (async () => {
-    try {
-      const { computeCommittedChangeset } = await import('./delivery-geometry')
-      const cs = await computeCommittedChangeset(input.projectPath)
-      if (cs?.base) {
-        const { execFileAsync } = await import('../utils/exec')
-        const { stdout } = await execFileAsync('git', ['diff', '--name-only', `${cs.base}..HEAD`], {
-          cwd: input.projectPath,
-        })
-        return stdout
-          .split('\n')
-          .map((path) => path.trim())
-          .filter(Boolean)
-      }
-      return cs?.dirs?.length ? [...cs.dirs] : undefined
-    } catch {
-      return undefined
-    }
-  })()
 
   const ledger = createLedger({
     target,
@@ -218,6 +218,7 @@ export function reviewDispatchGuidance(card: NextActionCard): string[] {
     '- Standards includes comment discipline: keep comments for intent, invariants, constraints, and non-obvious tradeoffs—not narration of visible code.',
     `- Context ceiling: ${card.budget.contextRule}. Do not paste whole files or scan the repository broadly.`,
     `- Output ceiling: at most ${card.budget.maxFindings} actionable findings and about ${card.budget.maxOutputTokensPerAgent} output tokens per agent.`,
+    '- Reuse the current QA and gauntlet receipts. Do not run tests, builds, gauntlet, or a second review suite inside a reviewer pass; request one targeted probe only when code evidence cannot resolve a candidate.',
     '- This judgment card IS the review for this content. Do not run a separate generic review, crew review, or audit pass over the unchanged diff.',
   ].filter(Boolean)
 }

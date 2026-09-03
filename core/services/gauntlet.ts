@@ -11,8 +11,12 @@
  * said loudly — never a fake green.
  */
 
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import configManager from '../infrastructure/config-manager'
 import prjctDb from '../storage/database'
+import { getErrorMessage } from '../types/fs'
 import { gitStdout, listChangedFiles, matchProc, runProc } from '../utils/exec'
 import { detectVerifiedCommands } from './project-command-facts'
 
@@ -202,13 +206,50 @@ export async function runVerifyCommand(
   const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'
   const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
   const localBin = `${projectPath}/node_modules/.bin`
+  // Own one outer temp root for every registered command. Frameworks,
+  // preloads, nested shards, and subprocesses honoring the OS temp variables
+  // all land below it; cleanup runs on green, red, timeout, and abort.
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-verify-'))
   const result = await runProc(shell, shellArgs, {
     cwd: projectPath,
-    env: { ...process.env, PATH: `${localBin}:${process.env.PATH ?? ''}` },
+    env: {
+      ...process.env,
+      PATH: `${localBin}:${process.env.PATH ?? ''}`,
+      HOME: tempRoot,
+      USERPROFILE: tempRoot,
+      XDG_CONFIG_HOME: path.join(tempRoot, '.config'),
+      GIT_CONFIG_GLOBAL: path.join(tempRoot, '.gitconfig'),
+      TMPDIR: tempRoot,
+      TMP: tempRoot,
+      TEMP: tempRoot,
+    },
     timeoutMs:
       opts.timeoutMs ?? (kind === 'test' ? TEST_TIMEOUT_MS : (CHECK_TIMEOUT_MS[kind] ?? 240_000)),
     maxBuffer: MAX_BUFFER,
   })
+  const cleanupError = await fs
+    .rm(tempRoot, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 })
+    .then(
+      () => null,
+      (error: unknown) => getErrorMessage(error)
+    )
+  if (cleanupError) {
+    const commandOutcome = result.ok
+      ? 'ok'
+      : result.kind === 'exit'
+        ? `exit:${result.code ?? 'signal'}`
+        : result.kind
+    return {
+      kind,
+      command,
+      ok: false,
+      outcome: 'cleanup',
+      durationMs: result.durationMs,
+      detail: `command outcome ${commandOutcome}; temp cleanup failed: ${cleanupError}`.slice(
+        -OUTPUT_TAIL_CHARS
+      ),
+    }
+  }
   return matchProc<GauntletCheck>(result, {
     ok: (r) => ({ kind, command, ok: true, outcome: 'ok', durationMs: r.durationMs }),
     exit: (r) => {

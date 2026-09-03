@@ -37,7 +37,15 @@ import {
   recordRefutedAsGhosts,
   upsertFinding,
 } from '../services/precision-judgment'
-import { formatReviewBudget } from '../services/review-budget'
+import {
+  canConsumeReviewPass,
+  consumeReviewPass,
+  formatReviewBudget,
+  initialFindingBudgetFor,
+  recordInitialReviewPasses,
+  reviewBudgetFor,
+  reviewPassUsage,
+} from '../services/review-budget'
 import { judgmentLedgerStorage } from '../storage/judgment-ledger-storage'
 import type { MdOption } from '../types/cli'
 import type { CommandResult } from '../types/commands'
@@ -252,7 +260,19 @@ export class JudgmentCommands extends PrjctCommandsBase {
     // Scope freeze: file outside frozen git path set → non-blocking follow-up.
     const scoped = applyScopeFreeze(tagged!, ledger.scopePaths)
     const { findings, finding, deduped } = upsertFinding(ledger.findings, scoped)
+    const findingCap = initialFindingBudgetFor(ledger.intensity)
+    if (findings.length > findingCap) {
+      return failWith(
+        `Initial finding budget exhausted (${findings.length}/${findingCap}); consolidate findings instead of dispatching more review.`,
+        options
+      )
+    }
+    if (reviewPassUsage(ledger).initial === 0) {
+      const passGate = canConsumeReviewPass(ledger, 'initial')
+      if (!passGate.ok) return failWith(passGate.reason, options)
+    }
     ledger.findings = findings
+    ledger.reviewPasses = recordInitialReviewPasses(ledger, 1)
     ledger.updatedAt = getTimestamp()
     ledger.verdict = 'in_progress'
     judgmentLedgerStorage.set(projectId, ledger)
@@ -323,6 +343,8 @@ export class JudgmentCommands extends PrjctCommandsBase {
     if (!Array.isArray(redFindings) || !Array.isArray(blueFindings)) {
       return failWith('merge: --red and --blue must be JSON arrays', options)
     }
+    const passGate = canConsumeReviewPass(ledger, 'initial')
+    if (!passGate.ok) return failWith(passGate.reason, options)
 
     const parseSide = (arr: unknown[], role: 'red' | 'blue') => {
       const out: Array<{
@@ -351,9 +373,19 @@ export class JudgmentCommands extends PrjctCommandsBase {
       return out
     }
 
+    const budget = reviewBudgetFor(ledger.intensity)
+    const parsedRed = parseSide(redFindings, 'red')
+    const parsedBlue = parseSide(blueFindings, 'blue')
+    if (parsedRed.length > budget.maxFindings || parsedBlue.length > budget.maxFindings) {
+      return failWith(
+        `Initial finding budget exceeded: each reviewer may report at most ${budget.maxFindings} findings.`,
+        options
+      )
+    }
+
     const merged = mergeDualJudges(
-      { role: 'red', findings: parseSide(redFindings, 'red') },
-      { role: 'blue', findings: parseSide(blueFindings, 'blue') }
+      { role: 'red', findings: parsedRed },
+      { role: 'blue', findings: parsedBlue }
     )
 
     const book = judgmentLedgerStorage.getGhosts(projectId)
@@ -361,10 +393,19 @@ export class JudgmentCommands extends PrjctCommandsBase {
       applyScopeFreeze(applyMechanicalStyleRefute(applyEvidenceTax(f)), ledger.scopePaths)
     )
     // Fold into existing ledger via DNA upsert
-    ledger.findings = findings.reduce(
+    const nextFindings = findings.reduce(
       (current, finding) => upsertFinding(current, finding).findings,
       ledger.findings
     )
+    const findingCap = initialFindingBudgetFor(ledger.intensity)
+    if (nextFindings.length > findingCap) {
+      return failWith(
+        `Initial finding budget exceeded (${nextFindings.length}/${findingCap}); consolidate duplicates before merge.`,
+        options
+      )
+    }
+    ledger.findings = nextFindings
+    ledger.reviewPasses = recordInitialReviewPasses(ledger, budget.initialReviewers)
 
     ledger.merge = {
       agreed: merged.agreed,
@@ -431,10 +472,14 @@ export class JudgmentCommands extends PrjctCommandsBase {
     if (Object.keys(votesById).length === 0) {
       return failWith('Could not parse any verdicts from input.', options)
     }
+    const passGate = canConsumeReviewPass(ledger, 'challenge')
+    if (!passGate.ok) return failWith(passGate.reason, options)
+    const reviewPasses = consumeReviewPass(ledger, 'challenge')
 
     ledger.findings = applyBatchRefutation(ledger.findings, votesById, ledger.intensity)
     // Fail-closed remaining candidates
     ledger.findings = this.failCloseRemainingCandidates(ledger)
+    ledger.reviewPasses = reviewPasses
     ledger.updatedAt = getTimestamp()
     const updated = finalizeLedger(ledger, getTimestamp())
     judgmentLedgerStorage.set(projectId, updated)
@@ -471,7 +516,7 @@ export class JudgmentCommands extends PrjctCommandsBase {
 
     const gate = canStartFixRound(ledger)
     if (!gate.ok) {
-      if (ledger.fixRound >= ledger.maxFixRounds) {
+      if (buildNextAction(ledger, ledger.intensity).kind === 'blocked_budget') {
         const closed = markLeftoversOpen(ledger, getTimestamp())
         judgmentLedgerStorage.set(projectId, closed)
         print(
@@ -511,8 +556,28 @@ export class JudgmentCommands extends PrjctCommandsBase {
     const { projectId, ledger } = req.value
     if (ids.length === 0) return failWith(`${status} requires at least one finding id.`, options)
 
+    if (status === 'verified') {
+      const hasFixedTarget = ledger.findings.some(
+        (finding) =>
+          ids.includes(finding.id) &&
+          finding.status === 'fixed' &&
+          finding.scopeDisposition !== 'follow-up'
+      )
+      if (!hasFixedTarget) {
+        return failWith(
+          'verified requires at least one in-scope finding currently marked fixed.',
+          options
+        )
+      }
+      const passGate = canConsumeReviewPass(ledger, 'rejudge')
+      if (!passGate.ok) return failWith(passGate.reason, options)
+    }
+    const reviewPasses =
+      status === 'verified' ? consumeReviewPass(ledger, 'rejudge') : ledger.reviewPasses
+
     const skipped = markFindingsSkippedByScope(ledger, ids, status)
     const next = markFindings(ledger, ids, status, getTimestamp())
+    next.reviewPasses = reviewPasses
     const finalized = finalizeLedger(next, getTimestamp())
     judgmentLedgerStorage.set(projectId, finalized)
     const card = buildNextAction(finalized, finalized.intensity)
@@ -662,6 +727,10 @@ export class JudgmentCommands extends PrjctCommandsBase {
 
     // Empty ledger: agent attests reviewers ran and found nothing (explicit approve).
     if (ledger.findings.length === 0) {
+      ledger.reviewPasses = recordInitialReviewPasses(
+        ledger,
+        reviewBudgetFor(ledger.intensity).initialReviewers
+      )
       ledger.verdict = 'approved'
       ledger.updatedAt = getTimestamp()
       const stamped = await stampApprove(ledger)

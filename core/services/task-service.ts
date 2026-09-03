@@ -455,10 +455,15 @@ export async function startTask(
         const { worktreeService } = await import('./worktree-service')
         const slug = worktreeSlugFromIntent(description)
         const created = await worktreeService.create(projectPath, slug)
-        await worktreeService.setup(
-          created.path,
-          await worktreeService.getMainWorktree(projectPath)
-        )
+        try {
+          await worktreeService.setup(
+            created.path,
+            await worktreeService.getMainWorktree(projectPath)
+          )
+        } catch (error) {
+          await worktreeService.remove(created.path, true)
+          throw error
+        }
         const occ = decision.occupant
         return {
           effectivePath: created.path,
@@ -487,6 +492,18 @@ export async function startTask(
 
   const ws = await deriveWorkspace(effectivePath)
   if (ws.gitError) {
+    if (isolation?.worktreePath) {
+      const { worktreeService } = await import('./worktree-service')
+      try {
+        await worktreeService.remove(isolation.worktreePath, true)
+      } catch (cleanupError) {
+        const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+        return {
+          ok: false,
+          blocked: `git ${ws.gitError}: workspace identity failed and rollback could not remove ${isolation.worktreePath}: ${detail}`,
+        }
+      }
+    }
     // Degraded identity (git timeout/spawn): keying a new task on the main
     // sentinel could bleed a linked worktree's state into main — refuse.
     return {
@@ -513,16 +530,37 @@ export async function startTask(
       taskFields as Parameters<typeof stateStorage.startTask>[1]
     )
   } else {
-    await stateStorage.startTaskInWorkspace(
-      projectId,
-      {
-        ...taskFields,
-        branch: ws.branch ?? isolation?.branch,
-        workspaceId: ws.workspaceId,
-        worktreePath: ws.worktreePath,
-      } as Parameters<typeof stateStorage.startTaskInWorkspace>[1],
-      ws.workspaceId
-    )
+    try {
+      await stateStorage.startTaskInWorkspace(
+        projectId,
+        {
+          ...taskFields,
+          branch: ws.branch ?? isolation?.branch,
+          workspaceId: ws.workspaceId,
+          worktreePath: ws.worktreePath,
+        } as Parameters<typeof stateStorage.startTaskInWorkspace>[1],
+        ws.workspaceId
+      )
+    } catch (error) {
+      if (isolation?.worktreePath) {
+        const { worktreeService } = await import('./worktree-service')
+        try {
+          await worktreeService.remove(isolation.worktreePath, true)
+        } catch {
+          /* rollback is best-effort — surface the registration failure, not the cleanup one */
+        }
+      }
+      throw error
+    }
+    if (isolation?.worktreePath) {
+      const { worktreeService } = await import('./worktree-service')
+      try {
+        await worktreeService.unlock(isolation.worktreePath)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        isolation.reason += ` Task registration succeeded, but the temporary Git lock is still pending: ${detail}`
+      }
+    }
   }
 
   // Quality orchestrator: auto-open judgment ledger when required (never ship).
@@ -948,6 +986,19 @@ export async function setTaskStatus(
       const qaGate = await qaDoneGate(projectId, projectPath, wsTask)
       if (qaGate.blocked) return { ok: false, reason: 'gate-blocked', message: qaGate.blocked }
       if (qaGate.warning) verification.warnings.push(qaGate.warning)
+      if (wsTask.worktreePath) {
+        try {
+          const { worktreeService } = await import('./worktree-service')
+          await worktreeService.unlock(wsTask.worktreePath)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          return {
+            ok: false,
+            reason: 'gate-blocked',
+            message: `Cannot complete this cycle until its worktree lock is released: ${detail}`,
+          }
+        }
+      }
       await memoryService.log(projectPath, STATUS_CHANGE_ACTION, {
         taskId: wsTask.id,
         from: lastStatus ?? null,
@@ -1020,16 +1071,9 @@ export async function setTaskStatus(
   // success — surface it through the existing warnings channel (non-blocking).
   if (normalized === 'done' || normalized === 'completed') {
     try {
-      const { gauntletDoneWarning, warmGauntletInBackground } = await import('./gauntlet')
+      const { gauntletDoneWarning } = await import('./gauntlet')
       const warning = await gauntletDoneWarning(projectPath, projectId)
       if (warning) verification.warnings.push(warning)
-      // Self-provisioning: done kicks a detached gauntlet so ship finds a
-      // fresh receipt without anyone remembering to run it.
-      if (await warmGauntletInBackground(projectPath, projectId)) {
-        verification.warnings.push(
-          'Gauntlet warming in background — the receipt will be fresh for ship.'
-        )
-      }
     } catch {
       /* advisory only */
     }

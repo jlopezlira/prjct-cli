@@ -70,6 +70,8 @@ export const JudgmentFindingSchema = z.object({
   agreedBy: z.array(z.string()).optional(),
   /** Refuter votes recorded (batched; never one task per finding). */
   refuteVotes: z.array(RefuteVerdictSchema).optional(),
+  /** Explicit non-blocking disposition for a finding outside the frozen payload. */
+  scopeDisposition: z.literal('follow-up').optional(),
 })
 export type JudgmentFinding = z.infer<typeof JudgmentFindingSchema>
 
@@ -102,6 +104,14 @@ export const JudgmentLedgerSchema = z.object({
       contradicted: z.number().int().min(0),
     })
     .optional(),
+  /** Persisted reviewer-pass usage so CLI retries cannot spend the same stage twice. */
+  reviewPasses: z
+    .object({
+      initial: z.number().int().min(0),
+      challenge: z.number().int().min(0),
+      rejudge: z.number().int().min(0),
+    })
+    .optional(),
   /** Running precision: verified / (verified + refuted) when enough signal. */
   precisionHint: z.number().min(0).max(1).optional(),
   /**
@@ -118,7 +128,7 @@ export const JudgmentLedgerSchema = z.object({
    */
   contentBound: z
     .object({
-      version: z.literal(1),
+      version: z.union([z.literal(1), z.literal(2)]),
       treeHash: z.string().min(8),
       pathCount: z.number().int().min(0),
       paths: z.array(
@@ -129,6 +139,8 @@ export const JudgmentLedgerSchema = z.object({
       ),
       stampedAt: z.string().min(1),
       headSha: z.string().optional(),
+      payloadBound: z.boolean().optional(),
+      identityBound: z.boolean().optional(),
     })
     .optional(),
 })

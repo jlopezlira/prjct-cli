@@ -707,15 +707,24 @@ export class CeremonyCommands extends PrjctCommandsBase {
       /* best-effort */
     }
 
-    // End-of-session machine verification: warm the gauntlet in the background
-    // so the next ship finds a fresh receipt without anyone remembering to run it.
+    // Remove only clean, inactive worktrees created below <main>/.worktrees
+    // whose commits are already contained in the main worktree's HEAD.
     try {
-      const { warmGauntletInBackground } = await import('../services/gauntlet')
-      if (await warmGauntletInBackground(projectPath, proj.value)) {
-        todo.push('Gauntlet warming in background — machine receipt will be fresh for ship.')
+      const [{ stateStorage }, { worktreeService }] = await Promise.all([
+        import('../storage/state-storage'),
+        import('../services/worktree-service'),
+      ])
+      const removedWorktrees = await worktreeService.clean(projectPath, {
+        isProtected: async (worktreePath) => {
+          const snapshot = await stateStorage.getTaskSnapshot(proj.value)
+          return snapshot.activeTasks.some((task) => task.worktreePath === worktreePath)
+        },
+      })
+      if (removedWorktrees.length > 0) {
+        lines.push(`- [x] Removed stale managed worktrees: ${removedWorktrees.join(', ')}.`, '')
       }
     } catch {
-      /* best-effort */
+      /* best-effort; any uncertainty preserves the worktree */
     }
 
     todo.push(

@@ -3,7 +3,14 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { stampForApprove } from '../../services/content-bound-stamp'
 import {
+  ensureJudgmentLedger,
   formatQualityInject,
   intensityFromQuality,
   qualityFromIntensity,
@@ -17,8 +24,60 @@ import {
   judgmentShipVerdict,
 } from '../../services/precision-judgment'
 import { orchestrationFor } from '../../services/task-orchestration'
+import { judgmentLedgerStorage } from '../../storage/judgment-ledger-storage'
 
 describe('quality ceremony mapping', () => {
+  it('opens from the exact dirty payload, replaces drifted approval, and reuses unchanged progress', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-ledger-payload-'))
+    const projectId = randomUUID()
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    }
+    try {
+      git('init', '-q', '-b', 'main')
+      git('config', 'user.email', 'test@prjct.local')
+      git('config', 'user.name', 'test')
+      await fs.writeFile(path.join(root, 'dirty.ts'), 'base\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'base')
+      await fs.writeFile(path.join(root, 'dirty.ts'), 'v1\n')
+      await fs.writeFile(path.join(root, 'untracked.ts'), 'new\n')
+
+      const first = await ensureJudgmentLedger({
+        projectId,
+        projectPath: root,
+        forceIntensity: 'standard',
+      })
+      expect(first.opened).toBe(true)
+      expect(first.ledger?.scopePaths).toEqual(['dirty.ts', 'untracked.ts'])
+
+      const approved = first.ledger!
+      approved.verdict = 'approved'
+      approved.contentBound = await stampForApprove(root, approved.scopePaths, 't0')
+      judgmentLedgerStorage.set(projectId, approved)
+      await fs.writeFile(path.join(root, 'dirty.ts'), 'v2\n')
+
+      const replaced = await ensureJudgmentLedger({
+        projectId,
+        projectPath: root,
+        forceIntensity: 'standard',
+      })
+      expect(replaced.opened).toBe(true)
+      expect(replaced.ledger?.id).not.toBe(approved.id)
+
+      const reused = await ensureJudgmentLedger({
+        projectId,
+        projectPath: root,
+        forceIntensity: 'standard',
+      })
+      expect(reused.opened).toBe(false)
+      expect(reused.ledger?.id).toBe(replaced.ledger?.id)
+    } finally {
+      judgmentLedgerStorage.clear(projectId)
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('maps intensity ↔ quality', () => {
     expect(qualityFromIntensity('skip')).toBe('none')
     expect(qualityFromIntensity('standard')).toBe('standard')
@@ -97,6 +156,7 @@ describe('formatQualityInject', () => {
     expect(guidance).toContain('comment discipline')
     expect(guidance).toMatch(/changed hunks \+ direct dependencies/i)
     expect(guidance).toMatch(/do not run a separate.*review/i)
+    expect(guidance).toMatch(/do not run tests|reuse.*receipt/i)
 
     ledger.verdict = 'approved'
     expect(reviewDispatchGuidance(buildNextAction(ledger, 'standard'))).toEqual([])

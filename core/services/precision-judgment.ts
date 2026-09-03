@@ -33,6 +33,7 @@ import { MAX_FIX_ROUNDS } from '../schemas/judgment'
 import type { DeliveryTier } from './delivery-geometry'
 import { tierOf } from './delivery-geometry'
 import {
+  canConsumeReviewPass,
   MAX_REVIEW_AGENTS_PER_STAGE,
   type ReviewExecutionBudget,
   reviewBudgetFor,
@@ -238,6 +239,7 @@ export function isActionableSeverity(severity: FindingSeverity): boolean {
 export function applySeverityFloor(finding: JudgmentFinding): JudgmentFinding {
   // Evidence tax first (may demote severity), then floor.
   const taxed = applyEvidenceTax(finding)
+  if (taxed.scopeDisposition === 'follow-up') return { ...taxed, status: 'info' }
   if (!isActionableSeverity(taxed.severity)) {
     return { ...taxed, status: 'info' }
   }
@@ -497,7 +499,7 @@ export function actionableOpen(findings: JudgmentFinding[]): JudgmentFinding[] {
 }
 
 export function canStartFixRound(
-  ledger: Pick<JudgmentLedger, 'fixRound' | 'maxFixRounds' | 'findings'>
+  ledger: Pick<JudgmentLedger, 'intensity' | 'fixRound' | 'maxFixRounds' | 'findings'>
 ): { ok: boolean; reason: string } {
   const open = actionableOpen(ledger.findings)
   if (open.length === 0) {
@@ -507,6 +509,13 @@ export function canStartFixRound(
     return {
       ok: false,
       reason: `convergence budget exhausted (${ledger.fixRound}/${ledger.maxFixRounds}) — leftover stays open; do not start round 3`,
+    }
+  }
+  const budget = reviewBudgetFor(ledger.intensity)
+  if (ledger.fixRound >= budget.maxFixRejudgeRounds) {
+    return {
+      ok: false,
+      reason: `hard review cap reached after ${budget.maxFixRejudgeRounds} fix/rejudge round(s)`,
     }
   }
   return { ok: true, reason: '' }
@@ -592,6 +601,9 @@ export function computePrecisionHint(findings: JudgmentFinding[]): number | unde
 
 export function computeVerdict(ledger: JudgmentLedger): JudgmentVerdict {
   if (ledger.verdict === 'escalated') return 'escalated'
+  // A fix is not review evidence. It must remain non-terminal until the one
+  // scoped re-judge changes it to verified.
+  if (ledger.findings.some((finding) => finding.status === 'fixed')) return 'in_progress'
   // Explicit empty-review attestation (approve with zero findings after reviewers ran)
   if (ledger.verdict === 'approved') return 'approved'
   // Empty ledger ≠ clean review — reviewers have not reported yet
@@ -830,7 +842,8 @@ export function buildNextAction(
   }
 
   if (counts.stands > 0 || counts.open > 0) {
-    if (ledger.fixRound >= ledger.maxFixRounds) {
+    const rejudgeGate = canConsumeReviewPass(ledger, 'rejudge')
+    if (counts.open > 0 || !rejudgeGate.ok) {
       return {
         ...base,
         kind: 'blocked_budget',
@@ -848,9 +861,12 @@ export function buildNextAction(
     return {
       ...base,
       kind: 'fix_ranked',
-      directive: `Fix blast-ranked stands (${counts.stands} open). Top: ${top || '—'}`,
+      directive:
+        ledger.fixRound === 0
+          ? `Fix blast-ranked stands (${counts.stands} open). Top: ${top || '—'}`
+          : `Complete active fix round for ${counts.stands} stand(s). Top: ${top || '—'}`,
       steps: [
-        `prjct judgment fix-round`,
+        ...(ledger.fixRound === 0 ? [`prjct judgment fix-round`] : []),
         `Implementer fixes ONLY stands — order: ${base.rankedFixIds.join(' → ') || '—'}`,
         `prjct judgment fixed ${base.rankedFixIds.join(' ')}`,
         'prjct judgment brief  # scoped re-judge',
@@ -1105,6 +1121,7 @@ export function upsertFinding(
         [...(prev.agreedBy ?? []), ...(f.agreedBy ?? []), f.judge].filter(Boolean) as string[]
       ),
     ],
+    scopeDisposition: f.scopeDisposition ?? prev.scopeDisposition,
     dna,
   })
   const out = [...findings]
@@ -1153,6 +1170,7 @@ export function applyScopeFreeze(
   return {
     ...finding,
     status: 'info',
+    scopeDisposition: 'follow-up',
     evidence:
       (finding.evidence ? `${finding.evidence} · ` : '') +
       'out of frozen review scope (follow-up only; does not enter fix loops or block ship)',
@@ -1217,5 +1235,6 @@ export function createLedger(input: {
     deliveryTier: input.deliveryTier,
     scopePaths: scope,
     scopeFrozenAt: scope ? input.now : undefined,
+    reviewPasses: { initial: 0, challenge: 0, rejudge: 0 },
   }
 }

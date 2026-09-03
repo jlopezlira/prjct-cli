@@ -28,25 +28,45 @@ import path from 'node:path'
 
 process.env.PRJCT_TEST_MODE ??= '1'
 
+const ownedTempPaths = new Set<string>()
+const ownTempPath = (tempPath: string): string => {
+  ownedTempPaths.add(tempPath)
+  return tempPath
+}
+const cleanupOwnedTempPaths = (): void => {
+  for (const tempPath of ownedTempPaths) {
+    try {
+      fs.rmSync(tempPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    } catch {
+      /* best-effort during process teardown */
+    }
+  }
+}
+const exitAfterCleanup = (code: number): void => {
+  cleanupOwnedTempPaths()
+  process.exit(code)
+}
+
+process.once('exit', cleanupOwnedTempPaths)
+process.once('SIGINT', () => exitAfterCleanup(130))
+process.once('SIGTERM', () => exitAfterCleanup(143))
+
 if (!process.env.PRJCT_TEST_HOME) {
-  const homeSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-test-home-'))
+  const homeSandbox = ownTempPath(fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-test-home-')))
   process.env.PRJCT_TEST_HOME = homeSandbox
   process.env.HOME = homeSandbox
   process.env.USERPROFILE = homeSandbox
-  const cleanupHome = () => {
-    try {
-      fs.rmSync(homeSandbox, { recursive: true, force: true })
-    } catch {
-      /* best-effort */
-    }
-  }
-  process.on('exit', cleanupHome)
-  process.on('SIGINT', () => {
-    cleanupHome()
-    process.exit(130)
-  })
+  process.env.XDG_CONFIG_HOME = path.join(homeSandbox, '.config')
+}
+
+// Git subprocesses must not inherit machine-level fsmonitor/hooks/config;
+// those make otherwise hermetic assertions depend on the developer's host.
+if (!process.env.GIT_CONFIG_GLOBAL && process.env.PRJCT_TEST_HOME) {
+  process.env.GIT_CONFIG_GLOBAL = path.join(process.env.PRJCT_TEST_HOME, '.gitconfig')
 }
 
 if (!process.env.PRJCT_CLI_HOME) {
-  process.env.PRJCT_CLI_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-test-cli-home-'))
+  process.env.PRJCT_CLI_HOME = ownTempPath(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-test-cli-home-'))
+  )
 }
