@@ -550,29 +550,6 @@ jobs:
           echo "::error title=npm publish failed::3 attempts exhausted"
           exit 1
 
-      - name: Verify npm publication
-        if: ${{ !inputs.dry_run && steps.push.outputs.superseded != 'true' }}
-        # Registry propagation after publish (especially with --provenance) can
-        # lag well past a single short sleep — a flat `sleep 15` then one
-        # `npm view` showed v2.48.0's release red even though the publish
-        # succeeded, and v4.18.2's packument took ~7 minutes to list the
-        # version even though the tarball was already served. Poll for up to
-        # 10 minutes so a slow-but-successful publish doesn't report a false
-        # failure (and skip the tarball/binaries/GitHub Release that follow).
-        run: |
-          VERSION=${{ steps.version.outputs.new }}
-          ATTEMPTS=40
-          for attempt in $(seq 1 $ATTEMPTS); do
-            if npm view "prjct-cli@$VERSION" version >/dev/null 2>&1; then
-              echo "✅ Published prjct-cli@$VERSION (visible after ~$(( (attempt - 1) * 15 ))s)"
-              exit 0
-            fi
-            echo "not visible yet (attempt $attempt/$ATTEMPTS) — waiting 15s…"
-            sleep 15
-          done
-          echo "::error title=Verify failed::prjct-cli@$VERSION not visible on npm after ~10min"
-          exit 1
-
       - name: Create tarball
         if: ${{ steps.push.outputs.superseded != 'true' }}
         run: |
@@ -656,6 +633,35 @@ jobs:
           prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify npm publication
+        if: ${{ !inputs.dry_run && steps.push.outputs.superseded != 'true' }}
+        # Runs AFTER the tarball, standalone binaries and GitHub Release:
+        # `npm publish` already reported success (or failed the run), and a
+        # slow registry must not leave the tag without its release assets —
+        # v4.18.2 lost its GitHub Release that way. A still-invisible version
+        # after the poll fails the run as a signal, never as a gate.
+        #
+        # Registry propagation after publish (especially with --provenance) can
+        # lag well past a single short sleep — a flat `sleep 15` then one
+        # `npm view` showed v2.48.0's release red even though the publish
+        # succeeded, and v4.18.2's packument took ~7 minutes to list the
+        # version even though the tarball was already served. Poll for up to
+        # 10 minutes so a slow-but-successful publish doesn't report a false
+        # failure (and skip the tarball/binaries/GitHub Release that follow).
+        run: |
+          VERSION=${{ steps.version.outputs.new }}
+          ATTEMPTS=40
+          for attempt in $(seq 1 $ATTEMPTS); do
+            if npm view "prjct-cli@$VERSION" version >/dev/null 2>&1; then
+              echo "✅ Published prjct-cli@$VERSION (visible after ~$(( (attempt - 1) * 15 ))s)"
+              exit 0
+            fi
+            echo "not visible yet (attempt $attempt/$ATTEMPTS) — waiting 15s…"
+            sleep 15
+          done
+          echo "::error title=Verify failed::prjct-cli@$VERSION not visible on npm after ~10min"
+          exit 1
 
       - name: Summary
         run: |
