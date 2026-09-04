@@ -48,5 +48,5 @@ Project memory, work cycles, ships, guardrails, or performance. **You run the ve
 ## Gotchas
 
 - Empty recall ≠ nothing exists. Secrets refused unless `--force`. Worktrees: remove only after PR merged, never --force.
-- SQLite is SoT (use CLI/MCP, never read it directly); project config: `.prjct/prjct.config.json`.
+- SQLite is SoT (use CLI/MCP, never read it directly); mutable project settings live globally under `~/.prjct-cli/projects/{projectId}/`, while `.prjct/prjct.config.json` is only the stable locator.
 

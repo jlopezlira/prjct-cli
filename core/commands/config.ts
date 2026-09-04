@@ -14,6 +14,7 @@
  * effect.
  */
 
+import configManager from '../infrastructure/config-manager'
 import { configPath, getAll, getConfig, setConfig, unsetConfig } from '../services/global-config'
 import type { CommandResult } from '../types/commands'
 import { mdOutput, mdSection } from '../utils/md-formatter'
@@ -27,7 +28,7 @@ interface ConfigOptions {
 export class ConfigCommands extends PrjctCommandsBase {
   async config(
     input: string | null = null,
-    _projectPath: string = process.cwd(),
+    projectPath: string = process.cwd(),
     options: ConfigOptions = {}
   ): Promise<CommandResult> {
     const parts = (input ?? '').trim().split(/\s+/).filter(Boolean)
@@ -42,8 +43,12 @@ export class ConfigCommands extends PrjctCommandsBase {
         return this.set(parts[1], parts.slice(2).join(' '), options)
       case 'unset':
         return this.unset(parts[1], options)
+      case 'migrate-project-settings':
+        return this.migrateProjectSettings(projectPath, parts[1] === 'confirm', options)
       default:
-        out.fail(`Unknown config subcommand: ${sub}. Use: list, get <k>, set <k> <v>, unset <k>.`)
+        out.fail(
+          `Unknown config subcommand: ${sub}. Use: list, get <k>, set <k> <v>, unset <k>, migrate-project-settings [confirm].`
+        )
         return { success: false, error: 'Unknown config subcommand' }
     }
   }
@@ -120,6 +125,47 @@ export class ConfigCommands extends PrjctCommandsBase {
       out.done(msg)
     }
     return { success: true, key }
+  }
+
+  private async migrateProjectSettings(
+    projectPath: string,
+    confirmed: boolean,
+    options: ConfigOptions
+  ): Promise<CommandResult> {
+    const recovered = await configManager.previewLegacyProjectSettings(projectPath)
+    if (!recovered) {
+      const message = 'No recoverable legacy project settings were found.'
+      if (options.md) console.log(mdOutput(mdSection('Project settings migration', message)))
+      else out.info(message)
+      return { success: true, migrated: false }
+    }
+    if (!confirmed) {
+      const preview = JSON.stringify(recovered, null, 2)
+      const instruction =
+        'Nothing was imported. Review the settings above, then run `prjct config migrate-project-settings confirm` to apply them globally.'
+      if (options.md) {
+        console.log(
+          mdOutput(
+            mdSection('Recovered legacy project settings', `\`\`\`json\n${preview}\n\`\`\``),
+            mdSection('Confirmation required', instruction)
+          )
+        )
+      } else {
+        console.log(preview)
+        out.info(instruction)
+      }
+      return { success: false, migrated: false, confirmationRequired: true, settings: recovered }
+    }
+
+    const migrated = await configManager.migrateLegacyProjectSettings(projectPath, {
+      allowGitRecovery: true,
+    })
+    const message = migrated
+      ? 'Recovered settings were imported into the global project store.'
+      : 'No settings were imported.'
+    if (options.md) console.log(mdOutput(mdSection('Project settings migration', message)))
+    else out.done(message)
+    return { success: migrated, migrated }
   }
 }
 

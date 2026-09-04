@@ -109,22 +109,22 @@ export class ShippingCommands extends PrjctCommandsBase {
       const proj = await requireProject(projectPath)
       if (!proj.ok) return proj.result
       const projectId = proj.value
+      // Project identity comes from the stable locator, but every safety gate
+      // below depends on the authoritative global settings. A corrupt settings
+      // file must fail closed before review, task completion, workflow steps,
+      // commit, or push rather than silently degrading strict policy to defaults.
+      const shipConfig = await configManager.readConfig(projectPath)
 
       // B1: delivery kill switch — removes mutation path without fake approval.
       // Outranks --no-judgment-gate / --no-spec-gate / --force-pressure.
-      try {
-        const shipConfigEarly = await configManager.readConfig(projectPath)
-        if (shipConfigEarly?.delivery?.killSwitch === 'on') {
-          return {
-            success: false,
-            error:
-              'Delivery kill-switch ON — mutation path removed. ' +
-              'Lift only by setting `delivery.killSwitch` to `off` in `.prjct/prjct.config.json` ' +
-              '(not via --no-judgment-gate / --no-spec-gate).',
-          }
+      if (shipConfig?.delivery?.killSwitch === 'on') {
+        return {
+          success: false,
+          error:
+            'Delivery kill-switch ON — mutation path removed. ' +
+            'Lift only by setting `delivery.killSwitch` to `off` in the global project settings ' +
+            '(not via --no-judgment-gate / --no-spec-gate).',
         }
-      } catch {
-        /* config read best-effort — never invent kill-on from a bad read */
       }
 
       // Crash recovery: a prior ship that pushed a version but died before
@@ -173,7 +173,6 @@ export class ShippingCommands extends PrjctCommandsBase {
       // SDD strict gate (opt-in via config.sdd.mode === 'strict'): refuse to
       // ship work with no linked spec — the pipeline is mandatory in strict.
       // advisory/off never block here. `--no-spec-gate` is the override.
-      const shipConfig = await configManager.readConfig(projectPath).catch(() => null)
       if (!options.noSpecGate && !linkedSpecId) {
         try {
           const { effectiveSddMode } = await import('./sdd')
@@ -536,8 +535,7 @@ export class ShippingCommands extends PrjctCommandsBase {
       if (!options.noTestGate) {
         try {
           const { effectiveTddMode } = await import('./tdd')
-          const tddConfig = await configManager.readConfig(projectPath).catch(() => null)
-          const tddMode = effectiveTddMode(tddConfig)
+          const tddMode = effectiveTddMode(shipConfig)
           if (tddMode !== 'off') {
             const detected = await detectProjectCommands(projectPath).catch(() => null)
             const testCmd = detected?.test?.command

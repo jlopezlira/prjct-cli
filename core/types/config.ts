@@ -25,8 +25,8 @@ export interface ProjectPersona {
 }
 
 /**
- * Local config - stored in .prjct/prjct.config.json
- * Minimal config that points to global storage
+ * Effective per-project config. Mutable fields are stored in prjct's global
+ * project store; `.prjct/prjct.config.json` contains only the stable locator.
  */
 export interface LocalConfig {
   projectId: string

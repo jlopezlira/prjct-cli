@@ -298,7 +298,7 @@ export async function buildProjectStateParts(
         if (pressure.unknownModel) {
           events.push({
             key: `budget-unknown-model:${pressure.unknownModel}`,
-            text: `# prjct: token budget unavailable\nThis cycle ran on \`${pressure.unknownModel}\`, whose context window prjct does not know, so no budget is being tracked. Set \`maxTokensPerCycle\` in \`.prjct/prjct.config.json\` to track one, or upgrade prjct if this model is newer than your install.`,
+            text: `# prjct: token budget unavailable\nThis cycle ran on \`${pressure.unknownModel}\`, whose context window prjct does not know, so no budget is being tracked. Set \`maxTokensPerCycle\` in the global project settings to track one, or upgrade prjct if this model is newer than your install.`,
           })
         }
       } catch {

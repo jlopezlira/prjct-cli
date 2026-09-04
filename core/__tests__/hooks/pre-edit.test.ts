@@ -195,18 +195,12 @@ describe('pre-edit hook', () => {
       filePath: file,
     })
     expect(token).not.toBeNull()
-    const previous = process.env.PRJCT_SOURCE_INSPECTION
-    process.env.PRJCT_SOURCE_INSPECTION = token!
-    try {
-      const result = await new GuardCommands().guard('core/state.ts', fixture.projectPath, {
-        md: true,
-      })
-      expect(result.success).toBe(true)
-      expect((await runWith({ file_path: file }, 'guard-session')).trim()).toBe('{}')
-    } finally {
-      if (previous === undefined) delete process.env.PRJCT_SOURCE_INSPECTION
-      else process.env.PRJCT_SOURCE_INSPECTION = previous
-    }
+    const result = await new GuardCommands().guard('core/state.ts', fixture.projectPath, {
+      md: true,
+      sourceInspectionToken: token!,
+    })
+    expect(result.success).toBe(true)
+    expect((await runWith({ file_path: file }, 'guard-session')).trim()).toBe('{}')
   })
 
   test('sessionless hosts use a durable guard handshake instead of bricking or failing open', async () => {

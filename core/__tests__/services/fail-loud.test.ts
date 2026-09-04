@@ -129,6 +129,7 @@ describe('a config key prjct ignores is reported', () => {
     const msg = unknownConfigKeysMessage({ tddd: {} }) ?? ''
     expect(msg).toContain('tddd')
     expect(msg).toContain('did you mean `tdd`')
-    expect(msg).toContain('looks exactly like a feature that does not work')
+    expect(msg).toContain("prjct's global project settings")
+    expect(msg).toContain('client locator is not configuration')
   })
 })

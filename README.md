@@ -11,9 +11,8 @@ harness is owned. prjct-cli gives Claude Code, Codex, Gemini, Cursor, OpenCode
   (npm/yarn/pnpm/bun · Cargo · Go · Python · Maven · Gradle · Ruby · PHP ·
   .NET · Elixir · Makefile targets) — and for anything else, declare them:
 
-  ```jsonc
-  // .prjct/prjct.config.json
-  { "gauntlet": { "commands": [{ "kind": "test", "command": "swift test" }] } }
+  ```bash
+  prjct gauntlet set test "swift test"
   ```
 - **Lookup that beats re-deriving.** Bounded, ranked project context (RRF over
   BM25 + semantic, quality measured by `prjct harness retrieval`) instead of an
@@ -164,11 +163,12 @@ State is the source of truth. New knowledge enters via `prjct remember <type>`, 
 
 ### Where data actually lives
 
-Not "all in a local `.prjct/` folder" — that's the pre-v1.24.1 model. Two tiers:
+Not "all in a local `.prjct/` folder" — that's the pre-v1.24.1 model. Three tiers:
 
 | Tier | Location | Commit it? |
 |---|---|---|
-| Config / identity | `<repo>/.prjct/prjct.config.json` (`projectId`, persona) | **Yes** — small, machine-independent |
+| Project locator | `<repo>/.prjct/prjct.config.json` (`projectId`, `dataPath` only) | Optional — immutable pointer |
+| Project settings | `~/.prjct-cli/projects/<projectId>/config.json` | No — prjct-managed |
 | State (source of truth) | `~/.prjct-cli/projects/<projectId>/prjct.db` (SQLite) | No — per-device |
 
 Find a project's data: read `projectId` from `.prjct/prjct.config.json`, then the
@@ -330,7 +330,8 @@ the product surface.
 
 ## Personas & Packs
 
-`.prjct/prjct.config.json` declares the persona. Hooks inject it every session.
+The global project settings declare the persona. Hooks inject it once per session
+through a byte-stable SessionStart block; ordinary prompt turns receive only deltas.
 
 ```json
 {
@@ -566,8 +567,8 @@ prjct-cli/
 
 **How do I initialize / register a new project?**
 In any git repo, run `prjct sync` (it auto-runs on the first `prjct` command) or
-`prjct init`. This creates `.prjct/prjct.config.json` with a `projectId` and
-builds the SQLite store at `~/.prjct-cli/projects/<projectId>/`.
+`prjct init`. This creates a stable project locator and builds the settings +
+SQLite store at `~/.prjct-cli/projects/<projectId>/`.
 
 **How do I start a work cycle?**
 Run `prjct work "<intent>"` from the repo. It registers the work cycle in
@@ -657,16 +658,15 @@ command) and is `.gitignore`d — that's why `git status` never shows it. Find i
 
 ```bash
 ls -la .prjct/                                    # from the repo root
-cat .prjct/prjct.config.json                      # projectId + persona
+cat .prjct/prjct.config.json                      # stable project locator only
 ls -la "$(git rev-parse --show-toplevel)/.prjct/" # from any subdirectory
 git check-ignore -v .prjct                         # why git ignores it
 ```
 
-The path is always `<repoRoot>/.prjct/` (strictly relative to the project — no
-env var, no global lookup). Read `projectId` from `prjct.config.json` to reach
-the state tier: DB at `~/.prjct-cli/projects/<projectId>/prjct.db`
-(`PRJCT_CLI_HOME` overrides the global base). The in-repo `.prjct/` holds only
-config, not state — full detail in
+The locator path is `<repoRoot>/.prjct/`. Read `projectId` from it to reach the
+global settings at `~/.prjct-cli/projects/<projectId>/config.json` and state at
+`~/.prjct-cli/projects/<projectId>/prjct.db` (`PRJCT_CLI_HOME` overrides the
+global base). Mutable settings never live in the repo — full detail in
 [docs/storage-and-paths.md](./docs/storage-and-paths.md).
 
 **How does prjct-cli detect its environment with no configuration?**
@@ -677,8 +677,8 @@ prjct-cli reads those ambient facts (precedence in
 anything.
 
 **Is all project data really in a local `.prjct/` directory? Team/VCS implications?**
-No — only `.prjct/prjct.config.json` (small, **committable** identity) is in the
-repo. State is per-device SQLite under `~/.prjct-cli` (never committed).
+No — only `.prjct/prjct.config.json` (a stable locator) may be in the repo.
+Mutable settings and state live under `~/.prjct-cli` and are never committed.
 Teams coordinate via optional cloud sync, not git. Full
 tradeoffs: [docs/storage-and-paths.md](./docs/storage-and-paths.md).
 

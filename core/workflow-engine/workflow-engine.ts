@@ -250,7 +250,7 @@ async function buildPersonaInstruction(projectPath: string): Promise<string> {
     const config = (await configManager.readConfig(projectPath)) as LocalConfig | null
     const persona = config?.persona as ProjectPersona | undefined
     if (!persona) {
-      return 'No persona declared for this project — `.prjct/prjct.config.json` has no `persona` field.'
+      return 'No persona declared in the global settings for this prjct project.'
     }
     const parts: string[] = [`You are **${persona.role}** in this project.`]
     if (persona.focus) parts.push(`Focus: ${persona.focus}.`)

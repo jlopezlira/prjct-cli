@@ -121,8 +121,8 @@ Match the implementer count to the work. One subtask → one implementer. Three 
 ## When this role does NOT apply
 
 - Pure exploration / read-only questions about the repo → answer directly, no subagents.
-- Edits to docs, configuration files (e.g. `.prjct/prjct.config.json`), or this file itself → you may edit directly.
+- Edits to docs or this file itself → you may edit directly. Project settings are managed globally by prjct; never inject them into the client locator.
 
 ## Hard persistence rule
 
-Never write audit, checklist, review, deploy, plan, or report markdown into any physical file — not under `.prjct/`, not under `~/.prjct-cli/`, not anywhere else on disk. Physical files are not traceable. The ONLY hand-editable file in the project folder is `.prjct/prjct.config.json`. Durable state lives in **project SQLite** via CLI verbs: `prjct plan` / `prjct spec` (plans), `prjct crew record-run` (crew outcomes), `prjct remember` (decisions/learnings), `prjct crew checkpoints set` (gates), `prjct spec record-review` (reviews).
+Never write audit, checklist, review, deploy, plan, or report markdown into any physical file — not under `.prjct/`, not under `~/.prjct-cli/`, not anywhere else on disk. Physical files are not traceable. The client `.prjct/prjct.config.json` is a stable identity locator, not a settings surface. Durable state lives in **project SQLite** via CLI verbs: `prjct plan` / `prjct spec` (plans), `prjct crew record-run` (crew outcomes), `prjct remember` (decisions/learnings), `prjct crew checkpoints set` (gates), `prjct spec record-review` (reviews).

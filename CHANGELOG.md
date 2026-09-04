@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.19.0] - 2026-09-04
+
+### Added
+- move project settings global and preserve daemon cache
+
 ## [4.18.4] - 2026-09-03
 
 ### Performance

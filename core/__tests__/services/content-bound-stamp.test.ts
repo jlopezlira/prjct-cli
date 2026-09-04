@@ -110,6 +110,56 @@ describe('content-bound-stamp', () => {
     }
   })
 
+  it('binds fix-round paths added outside the originally frozen review scope', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stamp-fix-union-'))
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: root })
+      await fs.writeFile(path.join(root, 'base.ts'), 'base\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root })
+      execFileSync('git', ['checkout', '-q', '-b', 'feature'], { cwd: root })
+      await fs.writeFile(path.join(root, 'implementation.ts'), 'implementation\n')
+      const frozenScope = ['implementation.ts']
+      await fs.writeFile(path.join(root, 'implementation.test.ts'), 'regression\n')
+
+      const stamp = await stampForApprove(root, frozenScope, 't0')
+
+      expect(stamp.paths.map((entry) => entry.path)).toEqual([
+        'implementation.test.ts',
+        'implementation.ts',
+      ])
+      expect(await currentTreeHashForStamp(root, stamp)).toBe(stamp.treeHash)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses the final payload when a frozen review path was reverted during fixes', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-stamp-reverted-fix-'))
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
+      execFileSync('git', ['config', 'user.email', 'test@prjct.local'], { cwd: root })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: root })
+      await fs.writeFile(path.join(root, 'a.ts'), 'base a\n')
+      await fs.writeFile(path.join(root, 'b.ts'), 'base b\n')
+      execFileSync('git', ['add', '.'], { cwd: root })
+      execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: root })
+      await fs.writeFile(path.join(root, 'a.ts'), 'changed a\n')
+      await fs.writeFile(path.join(root, 'b.ts'), 'changed b\n')
+      const frozenScope = ['a.ts', 'b.ts']
+      execFileSync('git', ['checkout', 'HEAD', '--', 'a.ts'], { cwd: root })
+
+      const stamp = await stampForApprove(root, frozenScope, 't0')
+
+      expect(stamp.paths.map((entry) => entry.path)).toEqual(['b.ts'])
+      expect(await currentTreeHashForStamp(root, stamp)).toBe(stamp.treeHash)
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('hashes blob content deterministically', () => {
     expect(hashBlobContent('hello')).toBe(hashBlobContent('hello'))
     expect(hashBlobContent('hello')).not.toBe(hashBlobContent('world'))
@@ -152,6 +202,15 @@ describe('content-bound-stamp', () => {
     expect(s1.pathCount).toBe(2)
     expect(s1.version).toBe(CONTENT_BOUND_VERSION)
     expect(s1.paths.every((p) => p.blobHash !== BLOB_MISSING)).toBe(true)
+  })
+
+  it('preserves valid POSIX backslashes and surrounding spaces in paths', () => {
+    if (process.platform === 'win32') return
+    const exactPath = ' leading\\name.ts '
+    const stamp = stampFromContents([{ path: exactPath, content: 'ok' }], { stampedAt: 't0' })
+
+    expect(stamp.paths[0]?.path).toBe(exactPath)
+    expect(stamp.pathCount).toBe(1)
   })
 
   it('stamp changes when file content changes', () => {
