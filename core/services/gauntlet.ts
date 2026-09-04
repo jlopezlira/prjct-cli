@@ -19,6 +19,12 @@ import prjctDb from '../storage/database'
 import { getErrorMessage } from '../types/fs'
 import { gitStdout, listChangedFiles, matchProc, runProc } from '../utils/exec'
 import { detectVerifiedCommands } from './project-command-facts'
+import {
+  sameVerification,
+  unchangedDuringVerification,
+  type VerificationBinding,
+  verificationBinding,
+} from './verification-binding'
 
 const GAUNTLET_DOC_KEY = 'gauntlet:latest'
 const GAUNTLET_EVENT = 'gauntlet-run'
@@ -116,6 +122,7 @@ export async function gauntletBootstrapCue(projectPath: string): Promise<string 
 const EXIT_COMMAND_NOT_FOUND = 127
 
 export interface GauntletReceipt {
+  verification?: VerificationBinding | null
   version: 1
   ranAt: string
   headSha: string | null
@@ -325,20 +332,24 @@ export async function runGauntlet(
 ): Promise<GauntletReceipt> {
   const commands = await gauntletCommands(projectPath)
   const binding = await gitBinding(projectPath)
+  const before = await verificationBinding(projectPath, commands)
 
   const checks: GauntletCheck[] = []
   for (const { kind, command } of commands) {
     checks.push(await runGauntletCheck(projectPath, kind, command, options))
   }
 
+  const after = await currentGauntletVerification(projectPath)
+  const stable = unchangedDuringVerification(before, after)
   const receipt: GauntletReceipt = {
+    verification: stable ? before : null,
     version: 1,
     ranAt: new Date().toISOString(),
     headSha: binding.headSha,
     dirty: binding.dirty,
     // An absent tool never fails the gate; it also never counts as verified —
     // if NOTHING could run, the receipt is vacuous, not green.
-    passed: checks.every((c) => c.ok || c.unavailable),
+    passed: (stable || commands.length === 0) && checks.every((c) => c.ok || c.unavailable),
     vacuous: commands.length === 0 || checks.every((c) => c.unavailable),
     checks,
   }
@@ -415,6 +426,7 @@ export function recordGauntletOverride(projectId: string): void {
 }
 
 export interface GauntletVerdictInput {
+  verification?: VerificationBinding | null
   receipt: GauntletReceipt | null
   nowMs: number
   /** Current HEAD at gate time (null = unknown/non-git). */
@@ -434,6 +446,7 @@ export interface GauntletVerdict {
 
 /** Minimal receipt binding — the gauntlet and QA receipts both satisfy it. */
 export interface ReceiptBinding {
+  verification?: VerificationBinding | null
   ranAt: string
   headSha: string | null
 }
@@ -441,17 +454,20 @@ export interface ReceiptBinding {
 export function isReceiptFresh(
   receipt: ReceiptBinding | null,
   nowMs: number,
-  headSha: string | null
+  headSha: string | null,
+  verification?: VerificationBinding | null
 ): boolean {
   if (!receipt) return false
   const age = nowMs - Date.parse(receipt.ranAt)
-  if (!Number.isFinite(age) || age > GAUNTLET_FRESH_MS) return false
+  if (!Number.isFinite(age) || age < 0 || age > GAUNTLET_FRESH_MS) return false
+  if (verification !== undefined && !sameVerification(receipt.verification, verification))
+    return false
   if (receipt.headSha && headSha && receipt.headSha !== headSha) return false
   return true
 }
 
 function receiptFresh(input: GauntletVerdictInput): boolean {
-  return isReceiptFresh(input.receipt, input.nowMs, input.headSha)
+  return isReceiptFresh(input.receipt, input.nowMs, input.headSha, input.verification)
 }
 
 /** Pure ship-gate verdict — mirrors the judgment gate's shape. */
@@ -480,7 +496,9 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
     }
   }
   if (!fresh) {
-    const why = input.receipt ? 'stale (HEAD moved or older than 30min)' : 'missing'
+    const why = input.receipt
+      ? 'stale (content, commands, HEAD, or verification age changed)'
+      : 'missing'
     if (input.strict) {
       return {
         blocked: true,
@@ -498,7 +516,7 @@ export function gauntletShipVerdict(input: GauntletVerdictInput): GauntletVerdic
   return {
     blocked: false,
     message: verified
-      ? '✓ Gauntlet green for HEAD — machine-verified.'
+      ? '✓ Gauntlet green for verified checkout and commands — machine-verified.'
       : '⚠ Gauntlet receipt is vacuous — no machine verification was performed.',
     verified,
   }
@@ -606,15 +624,22 @@ export async function ensureShipGauntlet(
   }
 ): Promise<GauntletVerdict> {
   const hasCommands = await projectHasGauntletCommands(projectPath)
-  const existing = readGauntletReceipt(projectId)?.data ?? null
   const base = {
+    verification: await currentGauntletVerification(projectPath),
     nowMs: Date.now(),
     headSha: opts.headSha,
     hasCommands,
     strict: opts.strict,
     override: opts.override,
   }
-  if (opts.override || !hasCommands || isReceiptFresh(existing, base.nowMs, opts.headSha)) {
+  // A background run can finish during the asynchronous content scan.
+  // Read its receipt after that scan, before inspecting the running marker.
+  const existing = readGauntletReceipt(projectId)?.data ?? null
+  if (
+    opts.override ||
+    !hasCommands ||
+    isReceiptFresh(existing, base.nowMs, opts.headSha, base.verification)
+  ) {
     return gauntletShipVerdict({ ...base, receipt: existing })
   }
   const onProgress = opts.onProgress ?? ((line: string) => console.log(line))
@@ -623,15 +648,33 @@ export async function ensureShipGauntlet(
     pollIntervalMs: opts.pollIntervalMs,
     onProgress,
   })
-  if (backgroundReceipt) {
-    return gauntletShipVerdict({ ...base, nowMs: Date.now(), receipt: backgroundReceipt })
+  const current = await currentGauntletVerification(projectPath)
+  if (backgroundReceipt && sameVerification(backgroundReceipt.verification, current)) {
+    return gauntletShipVerdict({
+      ...base,
+      verification: current,
+      nowMs: Date.now(),
+      receipt: backgroundReceipt,
+    })
   }
   onProgress('Gauntlet receipt missing or stale — running machine verification now…')
   const receipt = await runGauntlet(projectPath, projectId, {
     onProgress,
     heartbeatMs: opts.progressHeartbeatMs,
   })
-  return gauntletShipVerdict({ ...base, nowMs: Date.now(), receipt })
+  if (!receipt.verification)
+    return {
+      blocked: true,
+      verified: false,
+      message:
+        'Verification content or commands changed during execution, or could not be read. Re-run prjct gauntlet on a stable checkout.',
+    }
+  return gauntletShipVerdict({
+    ...base,
+    verification: await currentGauntletVerification(projectPath),
+    nowMs: Date.now(),
+    receipt,
+  })
 }
 
 /**
@@ -654,7 +697,12 @@ export async function warmGauntletInBackground(
     if (!(await projectHasGauntletCommands(projectPath))) return false
     const binding = await gitBinding(projectPath)
     const stamped = readGauntletReceipt(projectId)
-    const fresh = isReceiptFresh(stamped?.data ?? null, Date.now(), binding.headSha)
+    const fresh = isReceiptFresh(
+      stamped?.data ?? null,
+      Date.now(),
+      binding.headSha,
+      await currentGauntletVerification(projectPath)
+    )
     if (fresh && stamped?.data.passed) return false
     const running = prjctDb.getDocWithStamp<GauntletRunningMarker>(projectId, GAUNTLET_RUNNING_KEY)
     if (running && Date.now() - Date.parse(running.data.startedAt) < RUNNING_STALE_MS) return false
@@ -687,6 +735,7 @@ export async function gauntletDoneWarning(
     const stamped = readGauntletReceipt(projectId)
     const binding = await gitBinding(projectPath)
     const verdict = gauntletShipVerdict({
+      verification: await currentGauntletVerification(projectPath),
       receipt: stamped?.data ?? null,
       nowMs: Date.now(),
       headSha: binding.headSha,
@@ -758,4 +807,10 @@ export function renderGauntletText(receipt: GauntletReceipt): string {
   }
   if (receipt.vacuous) lines.push('  (no verify commands registered — nothing was checked)')
   return lines.join('\n')
+}
+
+export async function currentGauntletVerification(
+  projectPath: string
+): Promise<VerificationBinding | null> {
+  return verificationBinding(projectPath, await gauntletCommands(projectPath))
 }

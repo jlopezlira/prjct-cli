@@ -11,6 +11,7 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { VerificationBindingSchema } from '../services/verification-binding'
 
 export const QA_MODES = ['off', 'advisory', 'strict'] as const
 export const QaModeSchema = z.enum(QA_MODES)
@@ -218,6 +219,7 @@ export const QaCheckSchema = z.object({
 export type QaCheck = z.infer<typeof QaCheckSchema>
 
 export const QaReceiptSchema = z.object({
+  verification: VerificationBindingSchema.nullable().optional(),
   version: z.literal(1),
   taskId: z.string().nullable(),
   ranAt: z.string(),

@@ -10,6 +10,7 @@ import { setTaskStatus, startTask } from '../../services/task-service'
 import { MAIN_WORKSPACE_ID } from '../../services/workspace-id'
 import { prjctDb } from '../../storage/database'
 import { getTaskPipelineState } from '../../storage/task-pipeline-storage'
+import { execFileAsync } from '../../utils/exec'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
 const fixture: {
@@ -124,6 +125,23 @@ describe('task service — QA phase', () => {
   })
 
   it('work start carries the QA directive; strict done blocks until the plan is verified', async () => {
+    await execFileAsync('git', ['init', '-q'], { cwd: fixture.projectPath })
+    await execFileAsync(
+      'git',
+      [
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--allow-empty',
+        '-qm',
+        'seed',
+      ],
+      { cwd: fixture.projectPath }
+    )
     const outcome = await startTask(
       fixture.projectId,
       fixture.projectPath,

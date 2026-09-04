@@ -451,18 +451,19 @@ if(cmd==="hook"){
 }else if(cmd&&!skip.has(cmd)&&process.env.PRJCT_NO_DAEMON!=="1"&&hasEndpoint()){
   const cArgs=[],cOpts={};
   const consumed=new Set();for(const [i,a] of args.entries()){if(consumed.has(i))continue;if(a.startsWith("--")){const r=a.slice(2);if(r.includes("=")){const e=r.indexOf("=");cOpts[r.slice(0,e)]=r.slice(e+1)}else if(i+1<args.length&&!args[i+1].startsWith("--")){cOpts[r]=args[i+1];consumed.add(i+1)}else{cOpts[r]=true}}else if(a.startsWith("-")&&a.length===2){cOpts[a.slice(1)]=true}else if(i>0){cArgs.push(a)}}
-  const msg=JSON.stringify({id:randomUUID(),command:cmd,args:cArgs,options:cOpts,cwd:process.cwd()})+"\\n";
+  const operationId=cOpts["operation-id"]||randomUUID();
+  const msg=JSON.stringify({id:operationId,command:cmd,args:cArgs,options:cOpts,cwd:process.cwd()})+"\\n";
   const sock=connect(sockPath);const chunks=[],completion=new AbortController();
   // Long verbs (ship/sync/…) need 10min; everything else stays at 30s.
-  const LONG=new Set(["ship","sync","dream","update","upgrade","analyze","init","cloud"]);
+  const LONG=new Set(["ship","sync","dream","update","upgrade","analyze","init","cloud","qa","gauntlet"]);
   const waitMs=LONG.has(cmd)?600000:30000;
-  const t=setTimeout(()=>{if(!completion.signal.aborted){completion.abort();sock.destroy();refuse("timed out")}},waitMs);
+  const t=setTimeout(()=>{if(!completion.signal.aborted){completion.abort();sock.destroy();refuse("timed out; operation "+operationId+". Resume the same command with --operation-id="+operationId+"; add --operation-status to inspect")}},waitMs);
   sock.on("connect",()=>sock.write(msg));
-  sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));completion.abort();clearTimeout(t);sock.end();if(r.retry){process.env.PRJCT_NO_DAEMON="1";fallback();return}if(r.stdout)console.log(r.stdout);if(r.stderr)console.error(r.stderr);process.exit(r.exitCode)}});
-  sock.on("error",e=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);if(isSafeRetry(e))fallback();else refuse(e&&e.message||String(e))}});
-  sock.on("close",()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);refuse("Connection closed before response")}});
+  sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));completion.abort();clearTimeout(t);sock.end();if(r.retry){if(cOpts["operation-id"]){refuse("Resume requires a ready daemon; retry the same operation id after restart");return}process.env.PRJCT_NO_DAEMON="1";fallback();return}if(r.stdout)console.log(r.stdout);if(r.stderr)console.error(r.stderr);process.exit(r.exitCode)}});
+  sock.on("error",e=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);if(isSafeRetry(e)&&!cOpts["operation-id"])fallback();else refuse((e&&e.message||String(e))+"; resume with --operation-id="+operationId)}});
+  sock.on("close",()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);refuse("Connection closed before response; resume with --operation-id="+operationId)}});
 }else{fallback()}
-async function fallback(){await import("./prjct-core.mjs")}
+async function fallback(){if(args.some(a=>a==="--operation-id"||a.startsWith("--operation-id="))){refuse("Resume requires the daemon; start it and repeat the same operation id");return}await import("./prjct-core.mjs")}
 `
 }
 

@@ -777,10 +777,11 @@ async function qaDoneGate(
     const mode = effectiveQaMode(cfg)
     if (mode === 'off') return { blocked: null, warning: null }
     const { getQaPlan } = await import('./qa-plan')
-    const { readQaReceipt } = await import('./qa-runner')
+    const { readQaReceipt, currentQaVerification } = await import('./qa-runner')
     const { gitBinding } = await import('./gauntlet')
     const binding = await gitBinding(projectPath)
     const verdict = qaDoneVerdict({
+      verification: await currentQaVerification(projectPath, getQaPlan(projectId, task.id)),
       mode,
       harnessLevel: task.harness?.level,
       plan: getQaPlan(projectId, task.id),

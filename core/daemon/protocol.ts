@@ -88,6 +88,8 @@ export const LONG_RUNNING_COMMANDS: ReadonlySet<string> = new Set([
   'analyze',
   'init',
   'cloud',
+  'qa',
+  'gauntlet',
 ])
 
 /**

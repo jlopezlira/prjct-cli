@@ -15,6 +15,7 @@ import {
 } from '../../services/qa-runner'
 import prjctDb from '../../storage/database'
 import type { LocalConfig } from '../../types/config'
+import { execFileAsync } from '../../utils/exec'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
 const fixture: { tmpRoot: string; projectDir: string; projectId: string } = {
@@ -39,6 +40,23 @@ beforeEach(async () => {
   patchPathManager(fixture.tmpRoot)
   prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0')
   await writeConfig()
+  await execFileAsync('git', ['init', '-q'], { cwd: fixture.projectDir })
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'seed',
+    ],
+    { cwd: fixture.projectDir }
+  )
 })
 
 afterEach(async () => {

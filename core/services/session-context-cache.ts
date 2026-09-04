@@ -125,8 +125,8 @@ export function condenseDelivered<T extends DeliverableEntry>(
 
 /**
  * Single-blob variant of the ledger for MCP tool results: an unchanged
- * repeat collapses the whole result to a one-line pointer that carries the
- * re-fetch instruction. Session-scoped by process lifetime (stdio MCP).
+ * repeat uses a one-line re-fetch pointer only when shorter than the body.
+ * Session-scoped by process lifetime (stdio MCP).
  */
 export function condenseResult(
   scope: string,
@@ -139,8 +139,9 @@ export function condenseResult(
   const repeated = !opts.full && deliveredLedger.get(key) === hash
   ledgerSet(deliveredLedger, key, hash, DELIVERED_LEDGER_MAX)
   if (!repeated) return { text: content, repeated, hash }
+  const pointer = `_${id} unchanged since last delivery this session (hash ${hash.slice(0, 8)}) — pass full:true to re-fetch._`
   return {
-    text: `_${id} unchanged since last delivery this session (hash ${hash.slice(0, 8)}) — pass full:true to re-fetch._`,
+    text: pointer.length < content.length ? pointer : content,
     repeated,
     hash,
   }
@@ -428,13 +429,14 @@ export async function gateDelivery(req: GateRequest): Promise<GateResult> {
     const expired = ttlMs !== null && entry !== undefined && now - entry.t > ttlMs
     const suppress = !req.full && !fresh && !expired
 
-    // TTL entries refresh ONLY on emit — refreshing on suppression turns the
-    // TTL into a sliding window that never expires under steady access, which
-    // would let sessionless suppression outlive its bound indefinitely.
-    if (!req.probe && !(suppress && ttlMs !== null)) {
-      delete stored[subKey]
-      stored[subKey] = { h: hash, t: now } // re-insert last: insertion-order eviction keeps hot keys
-      await writeGateFile(target, stored)
+    // An unchanged cold-process hit needs no disk rewrite. TTL timestamps
+    // likewise refresh only on emission, keeping expiry a hard bound.
+    if (!req.probe) {
+      if (!suppress) {
+        delete stored[subKey]
+        stored[subKey] = { h: hash, t: now }
+        await writeGateFile(target, stored)
+      }
       if (ttlMs === null) ledgerSet(gateL1, l1Key, hash, GATE_L1_MAX)
     }
 

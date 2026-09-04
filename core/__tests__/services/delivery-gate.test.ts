@@ -6,6 +6,9 @@
  */
 
 import { beforeEach, describe, expect, it } from 'bun:test'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { DAEMON_PATHS } from '../../daemon/protocol'
 import {
   _resetDeliveredLedgerForTests,
   condenseDelivered,
@@ -13,6 +16,7 @@ import {
   condenseResult,
   gateDelivery,
   normalizeStateForMaterialChange,
+  sessionStampKey,
 } from '../../services/session-context-cache'
 
 const uid = (): string => `gate-${Math.random().toString(36).slice(2, 10)}`
@@ -70,6 +74,21 @@ describe('gateDelivery — session-scoped suppression', () => {
     _resetDeliveredLedgerForTests() // simulate new hook process: L1 gone
     const repeat = await gateDelivery(req)
     expect(repeat.suppressed).toBe(true)
+  })
+
+  it('cold unchanged deliveries leave the durable stamp untouched', async () => {
+    const req = baseReq()
+    await gateDelivery(req)
+    const key = sessionStampKey(req.projectId, req.projectPath, req.sessionId)
+    const target = path.join(DAEMON_PATHS.runDir(), `scc-${key}-${req.surface}.json`)
+    const before = await fs.readFile(target, 'utf8')
+    await fs.utimes(target, 1, 1)
+    _resetDeliveredLedgerForTests()
+    expect((await gateDelivery(req)).suppressed).toBe(true)
+    expect(await fs.readFile(target, 'utf8')).toBe(before)
+    expect((await fs.stat(target)).mtimeMs).toBe(1000)
+    expect((await gateDelivery({ ...req, full: true })).suppressed).toBe(false)
+    expect((await fs.stat(target)).mtimeMs).toBeGreaterThan(1000)
   })
 
   it('normalize makes counter noise non-material', async () => {
@@ -158,7 +177,7 @@ describe('gateDelivery — noSession policies', () => {
 describe('condenseResult — MCP repeat pointer', () => {
   it('returns full content first, pointer with full:true escape on repeat', () => {
     const scope = uid()
-    const body = '## Analysis\nlots of content here'
+    const body = `## Analysis\n${'Detailed analysis. '.repeat(30)}`
     const first = condenseResult(scope, 'analysis', body)
     expect(first.repeated).toBe(false)
     expect(first.text).toBe(body)
@@ -172,6 +191,17 @@ describe('condenseResult — MCP repeat pointer', () => {
     const forced = condenseResult(scope, 'analysis', body, { full: true })
     expect(forced.repeated).toBe(false)
     expect(forced.text).toBe(body)
+  })
+
+  it('never expands a short or empty response into a longer repeat pointer', () => {
+    for (const body of ['', 'OK', 'No matches.', 'Short summary.']) {
+      const scope = uid()
+      condenseResult(scope, 'analysis', body)
+      const repeat = condenseResult(scope, 'analysis', body)
+      expect(repeat.repeated).toBe(true)
+      expect(repeat.text).toBe(body)
+      expect(condenseResult(scope, 'analysis', body, { full: true }).repeated).toBe(false)
+    }
   })
 
   it('re-delivers when the content changes', () => {

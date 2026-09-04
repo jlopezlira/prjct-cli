@@ -15,6 +15,7 @@ import type { HarnessLevel } from '../schemas/state'
 import type { LocalConfig } from '../types/config'
 import { isReceiptFresh } from './gauntlet'
 import { QA_PLAN_JSON_HINT, qaPlanSummary } from './qa-plan'
+import type { VerificationBinding } from './verification-binding'
 
 const QA_MODE_VALUES: readonly QaMode[] = ['off', 'advisory', 'strict']
 
@@ -51,6 +52,7 @@ export function criterionMet(criterion: QaCriterion, mode: QaMode): boolean {
 }
 
 export interface QaGateInput {
+  verification?: VerificationBinding | null
   mode: QaMode
   harnessLevel?: HarnessLevel
   plan: QaPlan | null
@@ -88,7 +90,7 @@ function probesFresh(input: QaGateInput): boolean {
   const plan = input.plan
   if (!plan || !plan.flows.some((f) => f.probe)) return true
   if (!input.receipt || input.receipt.taskId !== plan.taskId) return false
-  return isReceiptFresh(input.receipt, input.nowMs, input.headSha)
+  return isReceiptFresh(input.receipt, input.nowMs, input.headSha, input.verification)
 }
 
 /** Why the plan is not done yet, in the words the unblock message uses. */
@@ -251,7 +253,7 @@ export function qaShipVerdict(input: QaGateInput & { override: boolean }): QaShi
     receipt &&
     !receipt.vacuous &&
     !receipt.passed &&
-    isReceiptFresh(receipt, input.nowMs, input.headSha) &&
+    isReceiptFresh(receipt, input.nowMs, input.headSha, input.verification) &&
     (!input.plan || receipt.taskId === input.plan.taskId)
   ) {
     const red = receipt.probes.filter((p) => !p.ok && !p.unavailable).map((p) => p.flowId ?? p.type)

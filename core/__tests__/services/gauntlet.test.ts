@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import configManager from '../../infrastructure/config-manager'
 import {
+  currentGauntletVerification,
   ensureShipGauntlet,
   GAUNTLET_FRESH_MS,
   type GauntletReceipt,
@@ -17,6 +19,7 @@ import {
   warmGauntletInBackground,
 } from '../../services/gauntlet'
 import prjctDb from '../../storage/database'
+import { execFileAsync } from '../../utils/exec'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
 const fixture: { tmpRoot: string; projectDir: string; projectId: string } = {
@@ -32,6 +35,23 @@ beforeEach(async () => {
   fixture.projectId = `gauntlet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   patchPathManager(fixture.tmpRoot)
   prjctDb.run(fixture.projectId, 'SELECT 1 WHERE 1=0') // force migrations
+  await execFileAsync('git', ['init', '-q'], { cwd: fixture.projectDir })
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--allow-empty',
+      '-qm',
+      'seed',
+    ],
+    { cwd: fixture.projectDir }
+  )
 })
 
 afterEach(async () => {
@@ -42,7 +62,7 @@ afterEach(async () => {
 function receipt(overrides: Partial<GauntletReceipt> = {}): GauntletReceipt {
   return {
     version: 1,
-    ranAt: new Date().toISOString(),
+    ranAt: new Date(Date.now() - 1000).toISOString(),
     headSha: 'abc123',
     dirty: false,
     passed: true,
@@ -267,8 +287,8 @@ describe('runGauntlet', () => {
     expect(lint?.ok).toBe(false)
     expect(lint?.outcome).toBe('exit:1')
     expect(result.checks.filter((c) => c.ok).map((c) => c.kind)).toEqual(['typecheck', 'test'])
-    // Non-git fixture: binding degrades to null, never fake-clean.
-    expect(result.headSha).toBeNull()
+    // Verification is bound even when the live checkout is dirty.
+    expect(result.headSha).not.toBeNull()
 
     const stored = readGauntletReceipt(fixture.projectId)
     expect(stored?.data.passed).toBe(false)
@@ -296,7 +316,14 @@ describe('runGauntlet', () => {
 })
 
 describe('gauntletShipVerdict', () => {
-  const base = { nowMs: Date.now(), headSha: 'abc123', hasCommands: true, strict: false }
+  const base = {
+    get nowMs() {
+      return Date.now()
+    },
+    headSha: 'abc123',
+    hasCommands: true,
+    strict: false,
+  }
 
   it('a fresh RED receipt always blocks, even outside strict mode', () => {
     const verdict = gauntletShipVerdict({
@@ -373,19 +400,33 @@ describe('ensureShipGauntlet (self-provisioning)', () => {
       startedAt: new Date().toISOString(),
       pid: process.pid,
     })
+    const verification = await currentGauntletVerification(fixture.projectDir)
     const background = setTimeout(() => {
-      prjctDb.setDoc(fixture.projectId, 'gauntlet:latest', receipt({ headSha: null, checks: [] }))
+      prjctDb.setDoc(
+        fixture.projectId,
+        'gauntlet:latest',
+        receipt({ headSha: null, checks: [], verification })
+      )
       prjctDb.deleteDoc(fixture.projectId, 'gauntlet:running')
     }, 20)
-
+    const readConfig = configManager.readConfig.bind(configManager)
+    const state = { reads: 0 }
+    const delayed = spyOn(configManager, 'readConfig').mockImplementation(async (projectPath) => {
+      // Finish background work during the second read (content binding), after
+      // command discovery. This pins the race independently of machine speed.
+      if (++state.reads === 2) await new Promise((resolve) => setTimeout(resolve, 50))
+      return readConfig(projectPath)
+    })
     const verdict = await ensureShipGauntlet(fixture.projectDir, fixture.projectId, {
       headSha: null,
       strict: false,
       override: false,
       backgroundWaitMs: 100,
       pollIntervalMs: 5,
+    }).finally(() => {
+      delayed.mockRestore()
+      clearTimeout(background)
     })
-    clearTimeout(background)
 
     expect(verdict.blocked).toBe(false)
     expect(readGauntletReceipt(fixture.projectId)?.data.passed).toBe(true)
