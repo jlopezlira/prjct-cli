@@ -16,7 +16,7 @@ The latest minor on `main` plus the previous minor receive security fixes. Older
 
 prjct-cli is designed with privacy and security as core principles:
 
-- **Project data lives locally** in `~/.prjct-cli/projects/{id}/` (SQLite) and `.prjct/prjct.config.json` in the repo
+- **Project data lives locally** in `~/.prjct-cli/projects/{id}/`; the repo contains only a stable `.prjct/prjct.config.json` locator
 - **No telemetry or analytics** — we don't track usage
 - **Offline by default** — core CLI, hooks, MCP, and SQLite work with no network
 - **Optional cloud sync** — only when the user signs in (`prjct login` / cloud link). Tokens never go in plaintext config files; they use the OS credential store (macOS Keychain, libsecret, Windows Credential Manager). Login fails closed if no secure store is available
@@ -38,7 +38,7 @@ prjct-cli is designed with privacy and security as core principles:
 
 ### Data Policy
 
-We store: project config (`.prjct/prjct.config.json`), task history and memory in SQLite under `~/.prjct-cli/`, and session activity. We do **not** store API keys in the project tree. Source code bodies are not bulk-uploaded; analysis keeps paths and derived signals. `prjct remember` and `prjct capture` refuse content that looks like a secret or like a prompt-injection payload unless invoked with `--force`.
+We store: mutable project settings and SQLite state under `~/.prjct-cli/`, plus a stable project locator in `.prjct/prjct.config.json`. We do **not** store API keys or mutable policy in the project tree. Source code bodies are not bulk-uploaded; analysis keeps paths and derived signals. `prjct remember` and `prjct capture` refuse content that looks like a secret or like a prompt-injection payload unless invoked with `--force`.
 
 When cloud sync is enabled, only entities the user links are exchanged with the prjct cloud API over authenticated channels. Review cloud product docs for retention if you enable it.
 
@@ -85,7 +85,7 @@ When cloud sync is enabled, only entities the user links are exchanged with the 
 ## Security Best Practices for Users
 
 1. **Keep prjct-cli updated** — `npm update -g prjct-cli` (or `prjct upgrade`)
-2. **Review before committing** — Check `.prjct/prjct.config.json` and workflow rules under `.prjct/workflows/` before pushing to public repos
+2. **Review before committing** — Check the stable `.prjct/prjct.config.json` locator and workflow rules under `.prjct/workflows/` before pushing to public repos
 3. **Avoid storing secrets** — Don't put API keys or passwords in memory captures, specs, or workflow scripts
 4. **Use .gitignore** — `.prjct/` local state should stay out of public remotes when it holds machine-local paths (init helps)
 5. **Treat local shell workflow rules as code** — only enable rules you trust

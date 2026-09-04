@@ -96,8 +96,8 @@ export function unknownConfigKeysMessage(config: unknown): string | null {
       : `  \`${key}\` is ignored — not a prjct config key.`
   )
   return [
-    `${unknown.length} unrecognised key${unknown.length === 1 ? '' : 's'} in \`.prjct/prjct.config.json\`:`,
+    `${unknown.length} unrecognised project setting${unknown.length === 1 ? '' : 's'}:`,
     ...lines,
-    `An ignored key looks exactly like a feature that does not work. Remove it or fix the spelling.`,
+    `Fix it in prjct's global project settings; the client locator is not configuration.`,
   ].join('\n')
 }

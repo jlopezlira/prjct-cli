@@ -15,6 +15,7 @@ import path from 'node:path'
 import { GuardCommands } from '../../commands/guard'
 import configManager from '../../infrastructure/config-manager'
 import { projectMemory } from '../../memory/project-memory'
+import { sourceInspectionToken, wasSourceInspected } from '../../services/source-first-gate'
 
 async function freshProject(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-guard-test-'))
@@ -128,5 +129,32 @@ describe('guard verb', () => {
     })
     expect(result.success).toBe(true)
     expect(result.hits).toBe(2)
+  })
+
+  test('stamps the typed source-inspection token without process-global state', async () => {
+    const file = 'core/tokenized.ts'
+    const config = await configManager.readConfig(fixture.projectPath)
+    const token = sourceInspectionToken({
+      projectId: config!.projectId,
+      projectPath: fixture.projectPath,
+      sessionId: 'token-session',
+      filePath: file,
+    })
+    expect(token).not.toBeNull()
+
+    const result = await fixture.cmd.guard(file, fixture.projectPath, {
+      md: true,
+      sourceInspectionToken: token!,
+    })
+
+    expect(result.success).toBe(true)
+    expect(
+      await wasSourceInspected({
+        projectId: config!.projectId,
+        projectPath: fixture.projectPath,
+        sessionId: 'token-session',
+        filePath: file,
+      })
+    ).toBe(true)
   })
 })

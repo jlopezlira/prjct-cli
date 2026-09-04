@@ -232,7 +232,7 @@ export function sourceFirstDenyMessage(
       : null,
     syncedPatterns,
     token
-      ? `Read the existing implementation or run \`PRJCT_SOURCE_INSPECTION=${token} prjct guard "${file}" --md\`, reuse its abstractions/patterns, then retry the edit.`
+      ? `Read the existing implementation or run \`prjct guard "${file}" --source-inspection-token=${token} --md\`, reuse its abstractions/patterns, then retry the edit.`
       : `Read the existing implementation or run \`prjct guard "${file}" --md\`, reuse its abstractions/patterns, then retry the edit.`,
   ]
     .filter(Boolean)

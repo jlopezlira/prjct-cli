@@ -103,6 +103,17 @@ describe('ship() — workflow-first', () => {
     expect(exists).toBe(false)
   })
 
+  test('fails closed before review when authoritative project settings are malformed', async () => {
+    await fs.writeFile(configManager.getProjectSettingsPath(fixture.projectId), '{ malformed')
+
+    const result = await fixture.cmd.ship('release notes', fixture.projectPath, { md: true })
+
+    expect(result.success).toBe(false)
+    expect(String(result.error)).toContain('Project settings')
+    expect(judgmentLedgerStorage.get(fixture.projectId)).toBeNull()
+    expect(await shippedStorage.getCount(fixture.projectId)).toBe(0)
+  })
+
   test('register-only intent records the shipped row without touching files', async () => {
     const result = await fixture.cmd.ship('write blog post', fixture.projectPath, {
       md: true,

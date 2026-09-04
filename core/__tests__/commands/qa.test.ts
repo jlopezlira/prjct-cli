@@ -5,6 +5,7 @@ import path from 'node:path'
 import { COMMANDS } from '../../commands/command-data'
 import { _internal, QaCommands } from '../../commands/qa'
 import { REGISTERED_VERBS_SET } from '../../commands/verb-names'
+import configManager from '../../infrastructure/config-manager'
 import prjctDb from '../../storage/database'
 import type { LocalConfig } from '../../types/config'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
@@ -16,9 +17,7 @@ const fixture: { tmpRoot: string; projectDir: string; projectId: string } = {
 }
 
 async function readConfig(): Promise<LocalConfig> {
-  return JSON.parse(
-    await fs.readFile(path.join(fixture.projectDir, '.prjct', 'prjct.config.json'), 'utf8')
-  ) as LocalConfig
+  return (await configManager.readConfig(fixture.projectDir))!
 }
 
 beforeEach(async () => {

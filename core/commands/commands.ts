@@ -444,7 +444,7 @@ class PrjctCommands {
   async guard(
     input: string | null = null,
     projectPath: string = process.cwd(),
-    options: MdOption & { limit?: number } = {}
+    options: MdOption & { limit?: number; sourceInspectionToken?: string } = {}
   ): Promise<CommandResult> {
     return (await this.guardCmdsG()).guard(input, projectPath, options)
   }

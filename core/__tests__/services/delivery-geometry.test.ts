@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  computeCommittedChangeset,
   computeWorkingTreeChangeset,
   geometryBlockMessage,
   geometryOf,
@@ -65,6 +66,63 @@ describe('delivery-geometry', () => {
         'staged.ts',
         'untracked.ts',
       ])
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('finds committed payloads when the default branch is not main or master', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-review-trunk-'))
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    }
+    try {
+      git('init', '-q', '-b', 'trunk')
+      git('config', 'user.email', 'test@prjct.local')
+      git('config', 'user.name', 'test')
+      await fs.writeFile(path.join(root, 'base.ts'), 'base\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'base')
+      git('checkout', '-q', '-b', 'feature')
+      await fs.writeFile(path.join(root, 'feature.ts'), 'feature\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'feature')
+      if (process.platform !== 'win32') {
+        await fs.writeFile(path.join(root, ' leading\\name.ts '), 'exact\n')
+      }
+
+      expect(await resolveReviewPayloadPaths(root)).toEqual(
+        process.platform === 'win32' ? ['feature.ts'] : [' leading\\name.ts ', 'feature.ts']
+      )
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let an auxiliary branch truncate earlier feature commits', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-review-auxiliary-'))
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: root, stdio: 'ignore' })
+    }
+    try {
+      git('init', '-q', '-b', 'trunk')
+      git('config', 'user.email', 'test@prjct.local')
+      git('config', 'user.name', 'test')
+      await fs.writeFile(path.join(root, 'base.ts'), 'base\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'base')
+      git('checkout', '-q', '-b', 'feature')
+      await fs.writeFile(path.join(root, 'first.ts'), 'first\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'first feature commit')
+      git('branch', 'backup')
+      await fs.writeFile(path.join(root, 'second.ts'), 'second\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'second feature commit')
+      git('branch', '-D', 'trunk')
+
+      expect(await resolveReviewPayloadPaths(root)).toEqual(['first.ts', 'second.ts'])
+      expect(await computeCommittedChangeset(root)).toMatchObject({ files: 2, loc: 2 })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

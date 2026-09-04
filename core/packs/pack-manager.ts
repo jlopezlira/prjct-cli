@@ -1,7 +1,7 @@
 /**
  * Pack manager — read/write which packs are active in a project.
  *
- * Source of truth: `persona.packs: string[]` in `.prjct/prjct.config.json`.
+ * Source of truth: `persona.packs: string[]` in global project settings.
  * Pack manifests live in code (`manifests.ts`), not on disk — the user
  * doesn't need to author them, only activate/deactivate.
  *

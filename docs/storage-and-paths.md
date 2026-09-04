@@ -1,9 +1,9 @@
 # Where prjct stores data — and what to commit
 
 A common misconception is that prjct keeps "all project data in a local
-`.prjct/` directory." That is **not** how it works since v1.24.1. prjct uses a
-deliberate three-tier layout that separates *committable identity* from
-*per-device state* from a *regenerated readable snapshot*.
+`.prjct/` directory." prjct separates a stable repo locator from globally
+managed project settings and SQLite state. Mutable policy never belongs in the
+client worktree.
 
 ## Quickly find your project's `.prjct/` directory
 
@@ -15,7 +15,7 @@ never shows up in `git status`. Locate it with one of these:
 ```bash
 # From the project root (most common):
 ls -la .prjct/
-cat .prjct/prjct.config.json          # projectId + persona
+cat .prjct/prjct.config.json          # projectId + dataPath only
 
 # From any subdirectory of the repo — resolve the repo root first:
 ls -la "$(git rev-parse --show-toplevel)/.prjct/"
@@ -34,16 +34,17 @@ Programmatically, the path is always `<repoRoot>/.prjct/` and the config file is
 `path.join(projectPath, '.prjct', 'prjct.config.json')` (no env var, no global
 lookup — it is strictly relative to the project directory).
 
-Reading `prjct.config.json` gives you the `projectId`, which is the key to the
-global SQLite tier described below.
+Reading `prjct.config.json` gives you the stable `projectId` locator. Effective
+settings come from `~/.prjct-cli/projects/<projectId>/config.json`.
 
 ---
 
-## The two tiers
+## The three tiers
 
 | Tier | Location | Contents | In git? |
 |---|---|---|---|
-| **Config (identity)** | `<repo>/.prjct/prjct.config.json` | `projectId`, persona (`role`/`focus`/`mcps`/`packs`) | **Committable** (the `.prjct/` dir is gitignored, but you may track this one file) |
+| **Locator** | `<repo>/.prjct/prjct.config.json` | `projectId`, `dataPath` only | Optional immutable pointer |
+| **Project settings** | `~/.prjct-cli/projects/<projectId>/config.json` | persona, modes, budgets, cloud, QA, gauntlet | **No** — prjct-managed |
 | **State (source of truth)** | `~/.prjct-cli/projects/<projectId>/prjct.db` | Tasks, memory, events, metrics, analysis — everything | **No** — per-device, never in the repo |
 
 State (SQLite) is the source of truth, and agents read it through tools
@@ -55,10 +56,10 @@ human-facing document generator; humans consume the data through cloud.
 
 Resolution lives in `core/infrastructure/path-manager.ts`.
 
-1. **Config:** `<repo>/.prjct/prjct.config.json`
+1. **Locator:** `<repo>/.prjct/prjct.config.json`
    (`getLocalConfigPath` → `path.join(projectPath, '.prjct', 'prjct.config.json')`).
-   Open it to read the `projectId`.
-2. **Database:** `~/.prjct-cli/projects/<projectId>/prjct.db`
+2. **Settings:** `~/.prjct-cli/projects/<projectId>/config.json`.
+3. **Database:** `~/.prjct-cli/projects/<projectId>/prjct.db`
    (`getGlobalProjectPath` → `<globalBase>/projects/<projectId>`). The global base
    is `~/.prjct-cli` unless **`PRJCT_CLI_HOME`** overrides it.
 
@@ -74,9 +75,9 @@ single source of truth fixed concurrency and durability.
 
 ## Team collaboration & version control
 
-**Commit:** `.prjct/prjct.config.json`. It is small and machine-independent — a
-stable `projectId` plus persona/pack declarations. Committing it means every
-clone resolves to the same logical project and the same persona.
+**Optional commit:** `.prjct/prjct.config.json`. It is an immutable locator only;
+committing it lets every clone resolve to the same logical project. Changing a
+mode, persona, QA command, or budget never rewrites this file.
 
 **Never commit (and prjct never puts in the repo):**
 

@@ -75,7 +75,8 @@ export function buildTreeHash(entries: ReadonlyArray<{ path: string; blobHash: s
 }
 
 export function normalizeStampPath(p: string): string {
-  return p.replace(/\\/g, '/').replace(/^\.\//, '').trim()
+  const separatorsNormalized = process.platform === 'win32' ? p.replace(/\\/g, '/') : p
+  return separatorsNormalized.replace(/^\.\//, '')
 }
 
 /**
@@ -272,10 +273,14 @@ export async function stampProjectPaths(
 /** Full approve-time stamp: resolve paths + hash + optional HEAD. */
 export async function stampForApprove(
   projectPath: string,
-  scopePaths: readonly string[] | undefined,
+  _scopePaths: readonly string[] | undefined,
   stampedAt: string
 ): Promise<ContentBoundStamp> {
-  const paths = await resolveStampPaths(projectPath, scopePaths)
+  // Approval binds the exact final delivery manifest. Frozen review scope can
+  // contain a path reverted during fixes, while the fix itself can add a new
+  // regression test. Hashing the live payload here makes approve and ship use
+  // the same set and still catches every post-approval addition or edit.
+  const paths = await resolveReviewPayloadPaths(projectPath)
   const headSha = (await safeGit(projectPath, ['rev-parse', 'HEAD'])) ?? undefined
   return stampProjectPaths(projectPath, paths, { stampedAt, headSha, payloadBound: true })
 }

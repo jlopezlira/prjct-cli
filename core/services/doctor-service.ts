@@ -10,7 +10,6 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import chalk from 'chalk'
 import { verifyCodexPRouterReady } from '../infrastructure/codex-skill'
@@ -366,8 +365,7 @@ class DoctorService {
       const unknown = await (async () => {
         try {
           const { unknownConfigKeys } = await import('./config-validation')
-          const raw = await fs.readFile(configPath, 'utf-8')
-          return unknownConfigKeys(JSON.parse(raw))
+          return unknownConfigKeys(await configManager.readConfig(this.projectPath))
         } catch {
           return []
         }
@@ -379,7 +377,7 @@ class DoctorService {
         return {
           name: 'prjct config',
           status: 'error',
-          message: `${unknown.length} ignored key(s): ${detail} — an ignored key looks like a broken feature. Fix or remove it in .prjct/prjct.config.json`,
+          message: `${unknown.length} ignored global project setting(s): ${detail} — fix or remove them from prjct's project settings`,
         }
       }
       return {

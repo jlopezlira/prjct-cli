@@ -83,7 +83,7 @@ export function buildPrjctSkillBody(): string {
     '## Gotchas',
     '',
     '- Empty recall ≠ nothing exists. Secrets refused unless `--force`. Worktrees: remove only after PR merged, never --force.',
-    '- SQLite is SoT (use CLI/MCP, never read it directly); project config: `.prjct/prjct.config.json`.',
+    '- SQLite is SoT (use CLI/MCP, never read it directly); mutable project settings live globally under `~/.prjct-cli/projects/{projectId}/`, while `.prjct/prjct.config.json` is only the stable locator.',
     '',
   ].join('\n')
 }
@@ -108,7 +108,7 @@ export function buildPrjctSkillReference(): string {
     '',
     '## Knowledge (moved from L0)',
     '',
-    '- Types: `decision · learning · gotcha · fact · context · …` plus the **sovereign knowledge base** facets `identity · voice · glossary · framework` — `prjct remember <facet>` / `prjct context memory <facet>`; never injected into CLAUDE.md / AGENTS.md. SQLite SoT; `.prjct/prjct.config.json`.',
+    '- Types: `decision · learning · gotcha · fact · context · …` plus the **sovereign knowledge base** facets `identity · voice · glossary · framework` — `prjct remember <facet>` / `prjct context memory <facet>`; never injected into CLAUDE.md / AGENTS.md. SQLite is SoT; the client `.prjct/prjct.config.json` is only a locator.',
     '- Close: `prjct land` (Session close) or living context via `prjct remember context`. Hygiene: `dream` / `close` / `forget`.',
     '',
     '## Full verb intent map — you run the verb, the user never types it',

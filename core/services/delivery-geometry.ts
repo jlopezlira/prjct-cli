@@ -5,7 +5,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { gitStdout } from '../utils/exec'
+import { gitInfraErrorOf, gitStdout, runGit } from '../utils/exec'
 
 export type DeliveryTier = 'trivial' | 'normal' | 'large'
 export type DeliveryGeometry = 'direct' | 'single' | 'split'
@@ -43,6 +43,15 @@ export function geometryOf(tier: DeliveryTier): DeliveryGeometry {
 // decide the polarity of their gate).
 async function safeGit(projectPath: string, args: string[]): Promise<string | null> {
   return gitStdout(projectPath, args)
+}
+
+/** NUL-delimited git paths; unlike trimmed line output, every POSIX name survives. */
+async function gitPathList(projectPath: string, args: string[]): Promise<string[]> {
+  const result = await runGit([...args, '-z'], { cwd: projectPath })
+  if (result.ok) return result.stdout.split('\0').filter((file) => file.length > 0)
+  const infra = gitInfraErrorOf(result)
+  if (infra) throw infra
+  return []
 }
 
 function parseShortstat(shortstat: string): { files: number; loc: number } {
@@ -85,38 +94,39 @@ async function untrackedLoc(projectPath: string, files: readonly string[]): Prom
 
 async function resolveDefaultBase(projectPath: string): Promise<string | null> {
   const originHead = await safeGit(projectPath, ['rev-parse', '--abbrev-ref', 'origin/HEAD'])
-  const defaultRef =
-    originHead && originHead !== 'origin/HEAD'
-      ? originHead
-      : await (async () => {
-          for (const candidate of ['main', 'master']) {
-            if (
-              (await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', candidate])) !== null
-            ) {
-              return candidate
-            }
-          }
-          return ''
-        })()
-  if (!defaultRef) return null
-  return safeGit(projectPath, ['merge-base', defaultRef, 'HEAD'])
+  if (originHead && originHead !== 'origin/HEAD') {
+    const originBase = await safeGit(projectPath, ['merge-base', originHead, 'HEAD'])
+    if (originBase) return originBase
+  }
+
+  const configured = await safeGit(projectPath, ['config', '--get', 'init.defaultBranch'])
+  for (const candidate of [configured, 'main', 'master'].filter(Boolean) as string[]) {
+    if ((await safeGit(projectPath, ['rev-parse', '--verify', '--quiet', candidate])) !== null) {
+      const base = await safeGit(projectPath, ['merge-base', candidate, 'HEAD'])
+      if (base) return base
+    }
+  }
+
+  // No branch ref is authoritative here: every remaining ref may point inside
+  // the feature history. The first-parent root is conservative (it can review
+  // extra history) but cannot truncate an earlier feature commit.
+  const roots = await safeGit(projectPath, [
+    'rev-list',
+    '--first-parent',
+    '--max-parents=0',
+    'HEAD',
+  ])
+  return roots?.split('\n').find(Boolean) ?? null
 }
 
 export async function resolveReviewPayloadPaths(projectPath: string): Promise<string[]> {
   const base = await resolveDefaultBase(projectPath)
   const [committed, tracked, untracked] = await Promise.all([
-    base ? safeGit(projectPath, ['diff', '--name-only', `${base}..HEAD`]) : Promise.resolve(''),
-    safeGit(projectPath, ['diff', '--name-only', 'HEAD']),
-    safeGit(projectPath, ['ls-files', '--others', '--exclude-standard']),
+    base ? gitPathList(projectPath, ['diff', '--name-only', `${base}..HEAD`]) : [],
+    gitPathList(projectPath, ['diff', '--name-only', 'HEAD']),
+    gitPathList(projectPath, ['ls-files', '--others', '--exclude-standard']),
   ])
-  return [
-    ...new Set(
-      [committed, tracked, untracked]
-        .flatMap((output) => (output ?? '').split('\n'))
-        .map((file) => file.trim().replace(/\\/g, '/'))
-        .filter(Boolean)
-    ),
-  ].sort()
+  return [...new Set([...committed, ...tracked, ...untracked])].sort()
 }
 
 /** Committed range vs merge-base with default branch (review-risk path). */
@@ -129,14 +139,9 @@ export async function computeCommittedChangeset(projectPath: string): Promise<Ch
   const shortstat = await safeGit(projectPath, ['diff', '--shortstat', `${base}..HEAD`])
   if (shortstat === null) return null
   const { files, loc } = parseShortstat(shortstat)
-  const names = (await safeGit(projectPath, ['diff', '--name-only', `${base}..HEAD`])) ?? ''
+  const names = await gitPathList(projectPath, ['diff', '--name-only', `${base}..HEAD`])
   const dirs = [
-    ...new Set(
-      names
-        .split('\n')
-        .filter(Boolean)
-        .map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))
-    ),
+    ...new Set(names.map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))),
   ].sort()
 
   return { base: base.slice(0, 7), files, loc, dirs, source: 'committed' }
@@ -145,15 +150,18 @@ export async function computeCommittedChangeset(projectPath: string): Promise<Ch
 /** Uncommitted working tree (staged + unstaged) — gate before more implementation. */
 export async function computeWorkingTreeChangeset(projectPath: string): Promise<Changeset | null> {
   const shortstat = await safeGit(projectPath, ['diff', '--shortstat', 'HEAD'])
-  const untracked = await safeGit(projectPath, ['ls-files', '--others', '--exclude-standard'])
-  if (shortstat === null && untracked === null) return null
+  const untrackedNames = await gitPathList(projectPath, [
+    'ls-files',
+    '--others',
+    '--exclude-standard',
+  ])
+  if (shortstat === null && untrackedNames.length === 0) return null
   const tracked = parseShortstat(shortstat ?? '')
-  const untrackedNames = (untracked ?? '').split('\n').filter(Boolean)
   const files = tracked.files + untrackedNames.length
   const loc = tracked.loc + (await untrackedLoc(projectPath, untrackedNames))
   if (files === 0 && loc === 0) return null
-  const trackedNames = (await safeGit(projectPath, ['diff', '--name-only', 'HEAD'])) ?? ''
-  const names = [...trackedNames.split('\n').filter(Boolean), ...untrackedNames]
+  const trackedNames = await gitPathList(projectPath, ['diff', '--name-only', 'HEAD'])
+  const names = [...trackedNames, ...untrackedNames]
   const dirs = [
     ...new Set(names.map((f) => (f.includes('/') ? f.slice(0, f.indexOf('/')) : '.'))),
   ].sort()

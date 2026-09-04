@@ -1504,7 +1504,11 @@ export const COMMANDS: CommandMeta[] = [
     group: 'core',
     surface: 'ai-agile',
     routing: { group: 'guard', method: 'guard' },
-    optionSchema: { numbers: ['limit'], strings: ['diff'], booleans: ['strict'] },
+    optionSchema: {
+      numbers: ['limit'],
+      strings: ['diff', 'sourceInspectionToken'],
+      booleans: ['strict'],
+    },
     description:
       'Surface preventive memory (gotchas, anti-patterns, recurring-bugs) recorded against a file BEFORE you edit it — anticipation, provider-agnostic.',
     usage: {
@@ -1534,9 +1538,9 @@ export const COMMANDS: CommandMeta[] = [
     description: 'Read/write global prjct config — auto-update opt-in, suggestions toggle, etc.',
     usage: {
       claude: 'p. config list',
-      terminal: 'prjct config <list|get|set|unset> [key] [value]',
+      terminal: 'prjct config <list|get|set|unset|migrate-project-settings> [key|confirm] [value]',
     },
-    params: '<list|get|set|unset> [key] [value]',
+    params: '<list|get|set|unset|migrate-project-settings> [key|confirm] [value]',
     implemented: true,
     hasTemplate: false,
     requiresProject: false,
@@ -1545,6 +1549,7 @@ export const COMMANDS: CommandMeta[] = [
       'Opt into silent auto-update: prjct config set auto-update on',
       'Toggle proactive suggestions: prjct config set suggestions off',
       'Booleans accept on/off/true/false; numbers parsed automatically',
+      'Legacy project settings recovered from Git require preview + explicit confirm',
     ],
   },
   // ===== SDD: spec-driven development primitives =====

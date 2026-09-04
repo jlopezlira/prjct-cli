@@ -5,8 +5,8 @@
  * the caller — errors are collected on the result.
  *
  * ## HARD LAW (customer worktree)
- * The ONLY allowed file under `.prjct/` in a client repo is
- * `prjct.config.json`. Everything else is product state and MUST live in
+ * The ONLY allowed config file under `.prjct/` in a client repo is the stable
+ * `prjct.config.json` locator. Everything else is product state and MUST live in
  * project SQLite (`~/.prjct-cli/projects/<id>/prjct.db`). Physical dumps
  * are not traceable.
  *
@@ -108,8 +108,8 @@ export interface LegacySweepResult {
 }
 
 /**
- * Entries allowed under client `.prjct/`. `prjct.config.json` is the only
- * hand-editable file; `memory-export/` is a legitimate product feature
+ * Entries allowed under client `.prjct/`. `prjct.config.json` is an identity
+ * locator, not a mutable settings surface; `memory-export/` is a legitimate product feature
  * (`prjct memory export|import`, memory-export.ts) — a git-shareable,
  * intentionally-committed directory, not ghost/leftover state. Excluding it
  * here previously meant the very next `prjct sync` after an export silently
@@ -204,7 +204,7 @@ async function sweepCheckpoints(
         out.checkpointsMigrated = true
         await captureInboxWarning(
           projectPath,
-          `Legacy .prjct/CHECKPOINTS.md migrated into kv_store crew:checkpoints and DELETED from the client worktree. Manage with 'prjct crew checkpoints show|set|reset|export'. Product law: nothing but prjct.config.json under client .prjct/.`,
+          `Legacy .prjct/CHECKPOINTS.md migrated into kv_store crew:checkpoints and DELETED from the client worktree. Manage with 'prjct crew checkpoints show|set|reset|export'. Product law: only the stable prjct.config.json locator belongs under client .prjct/.`,
           { 'migration:v3.79': '1', topic: 'crew-checkpoints' }
         )
       } else if (mtimeMs > flag.mtime_ms) {
@@ -433,7 +433,7 @@ async function purgeWorktreeGhostDirs(
         : ''
     await captureInboxWarning(
       projectPath,
-      `Purged forbidden prjct ghost dir(s) from the customer worktree: ${out.ghostDirsPurged.map((d) => `.prjct/${d}/`).join(', ')}.${ingested} Product law: plans and work data live ONLY in project SQLite (prjct plan / prjct spec / prjct remember / prjct crew record-run) — never as physical files in the repo or under ~/.prjct-cli. The only hand-editable file under .prjct/ is prjct.config.json.`,
+      `Purged forbidden prjct ghost dir(s) from the customer worktree: ${out.ghostDirsPurged.map((d) => `.prjct/${d}/`).join(', ')}.${ingested} Product law: plans and work data live ONLY in project SQLite (prjct plan / prjct spec / prjct remember / prjct crew record-run) — never as physical files in the repo or under ~/.prjct-cli. The client prjct.config.json is a stable locator, not a settings surface.`,
       { 'migration:v3.77': '1', topic: 'worktree-ghost-purge' }
     )
     writeFlag(projectId, FLAG_GHOST_PURGE_WARN, Date.now())

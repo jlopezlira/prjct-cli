@@ -49,12 +49,12 @@ describe('B1 delivery kill switch', () => {
     fixture.projectPath = await fs.mkdtemp(path.join(os.tmpdir(), 'prjct-kill-'))
     await fs.mkdir(path.join(fixture.projectPath, '.prjct'), { recursive: true })
     fixture.projectId = `kill-${Math.random().toString(36).slice(2, 10)}`
+    patchPathManager(fixture.projectPath)
     await configManager.writeConfig(fixture.projectPath, {
       projectId: fixture.projectId,
       dataPath: path.join(fixture.projectPath, '.prjct-data'),
       delivery: { killSwitch: 'on' },
     })
-    patchPathManager(fixture.projectPath)
     prjctDb.get(fixture.projectId, 'SELECT 1')
     fixture.cmd = new ShippingCommands()
   })

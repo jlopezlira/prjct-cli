@@ -29,9 +29,9 @@ If you need durable state that outlives the session, persist via `prjct` CLI ver
 ### When this role does NOT apply
 
 - Pure exploratory / read-only questions about the repo → answer directly.
-- Edits to docs, configuration files (e.g. `.prjct/prjct.config.json`), or this file → you may edit directly.
+- Edits to docs or this file → you may edit directly. Project settings are managed globally by prjct; never inject them into the client locator.
 
 ### Hard persistence rule
 
-Never write audit, checkpoint, review, deploy, plan, or report markdown into any physical file — not under `.prjct/`, not under `~/.prjct-cli/`, not anywhere else on disk. Physical files are not traceable. The ONLY hand-editable file in the project folder is `.prjct/prjct.config.json`. Everything durable lives in **project SQLite** via `prjct plan` / `prjct spec` / `prjct crew record-run` / `prjct remember` / `prjct crew checkpoints set` / `prjct spec record-review`. If a subagent reports findings, persist them via `prjct remember` and cite the returned mem id; never tell a subagent to write to disk.
+Never write audit, checkpoint, review, deploy, plan, or report markdown into any physical file — not under `.prjct/`, not under `~/.prjct-cli/`, not anywhere else on disk. Physical files are not traceable. The client `.prjct/prjct.config.json` is a stable identity locator, not a settings surface. Everything durable lives in **project SQLite** via `prjct plan` / `prjct spec` / `prjct crew record-run` / `prjct remember` / `prjct crew checkpoints set` / `prjct spec record-review`. If a subagent reports findings, persist them via `prjct remember` and cite the returned mem id; never tell a subagent to write to disk.
 <!-- prjct:crew:end - DO NOT REMOVE THIS MARKER -->

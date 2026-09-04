@@ -33,6 +33,8 @@ import { requireProject } from './guards'
 
 interface GuardOptions extends MdOption {
   limit?: number
+  /** Per-edit handshake token emitted by the source-first gate. */
+  sourceInspectionToken?: string
   /** Diff range for CI/PR mode (e.g. `main...HEAD`); overrides the file arg. */
   diff?: string
   /** With --diff: exit non-zero when any trap matches (gate mode for CI). */
@@ -101,7 +103,7 @@ export class GuardCommands extends PrjctCommandsBase {
       sessionId: resolveCallerIdentity('guard').sessionId,
       filePath: file,
     })
-    const sourceToken = process.env.PRJCT_SOURCE_INSPECTION?.trim()
+    const sourceToken = options.sourceInspectionToken?.trim()
     if (sourceToken) {
       await markSourceInspectionToken({
         projectId: guard.value,
