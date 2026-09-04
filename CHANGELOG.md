@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.21.0] - 2026-09-04
+
+### Added
+- Bind verification to executed content, reconcile token observations, and enforce honest harness evidence (round 1 of 3)
+
 ## [4.20.0] - 2026-09-04
 
 ### Added
