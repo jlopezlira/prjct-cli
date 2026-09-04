@@ -33,19 +33,17 @@ function isDarwin(): boolean {
   return process.platform === 'darwin'
 }
 
-async function readKeychain(): Promise<string | null> {
+async function readKeychain(signal?: AbortSignal): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('security', [
-      'find-generic-password',
-      '-a',
-      KEYCHAIN_ACCOUNT,
-      '-s',
-      KEYCHAIN_SERVICE,
-      '-w',
-    ])
+    const { stdout } = await execFileAsync(
+      'security',
+      ['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', KEYCHAIN_SERVICE, '-w'],
+      { signal, timeout: 10_000, killSignal: 'SIGKILL' }
+    )
     const v = stdout.trim()
     return v || null
   } catch {
+    signal?.throwIfAborted()
     return null
   }
 }
@@ -60,14 +58,18 @@ function readFileKey(): string | null {
 }
 
 /** Resolve the key (env → Keychain → file), cached for the process. */
-export async function getEmbeddingsKey(): Promise<string | null> {
+export async function getEmbeddingsKey(
+  options: { signal?: AbortSignal } = {}
+): Promise<string | null> {
+  options.signal?.throwIfAborted()
   if (keyCache.value !== undefined) return keyCache.value
   const env = process.env[EMBEDDINGS_API_KEY_ENV]?.trim()
   if (env) {
     keyCache.value = env
     return env
   }
-  const resolved = (isDarwin() ? await readKeychain() : null) ?? readFileKey()
+  const resolved = (isDarwin() ? await readKeychain(options.signal) : null) ?? readFileKey()
+  options.signal?.throwIfAborted()
   keyCache.value = resolved
   return resolved
 }

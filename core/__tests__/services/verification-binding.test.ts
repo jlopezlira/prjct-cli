@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,7 +11,11 @@ import {
 } from '../../services/gauntlet'
 import { upsertQaPlan } from '../../services/qa-plan'
 import { ensureShipQa, runQa } from '../../services/qa-runner'
-import { sameVerification, verificationBinding } from '../../services/verification-binding'
+import {
+  sameVerification,
+  unchangedDuringVerification,
+  verificationBinding,
+} from '../../services/verification-binding'
 import { execFileAsync } from '../../utils/exec'
 
 const fixture = { root: '', id: '' }
@@ -35,6 +39,47 @@ afterEach(async () => {
 })
 
 describe('verification content and execution binding', () => {
+  it('binds dirty submodule content and detects edits restored during a run', async () => {
+    await git([
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      '-q',
+      '--',
+      fixture.root,
+      'dep',
+    ])
+    const before = await verificationBinding(fixture.root, [])
+    expect(before).not.toBeNull()
+    const file = path.join(fixture.root, 'dep/app.txt')
+    await fs.writeFile(file, 'regression')
+    expect(sameVerification(before, await verificationBinding(fixture.root, []))).toBe(false)
+    await fs.writeFile(file, 'pass')
+    const restored = await verificationBinding(fixture.root, [])
+    expect(sameVerification(before, restored)).toBe(true)
+    expect(unchangedDuringVerification(before, restored)).toBe(false)
+    await fs.writeFile(path.join(fixture.root, 'dep/new.txt'), 'new dependency')
+    expect(sameVerification(before, await verificationBinding(fixture.root, []))).toBe(false)
+  })
+  it('rejects QA configuration changed between execution capture and verification', async () => {
+    const original = await configManager.readConfig(fixture.root)
+    const state = { reads: 0 }
+    const mocked = spyOn(configManager, 'readConfig').mockImplementation(async () => ({
+      ...original!,
+      qa: {
+        commands: [{ kind: 'smoke' as const, command: state.reads++ === 0 ? 'true' : 'false' }],
+      },
+    }))
+    try {
+      const result = await runQa(fixture.root, fixture.id, { plan: null })
+      expect(result.checks[0]?.ok).toBe(true)
+      expect(result.passed).toBe(false)
+      expect(result.verification).toBeNull()
+    } finally {
+      mocked.mockRestore()
+    }
+  })
   for (const kind of ['tracked', 'staged', 'untracked', 'deleted', 'mode']) {
     it(`invalidates ${kind} drift without a new commit`, async () => {
       const before = await verificationBinding(fixture.root, ['test'])

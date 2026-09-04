@@ -201,7 +201,7 @@ export async function runQa(
   )
   const needsApp = flows.some((f) => f.probe?.type === 'http' || f.probe?.type === 'browser')
   const binding = await gitBinding(projectPath)
-  const before = await currentQaVerification(projectPath, opts.plan, opts)
+  const before = await currentQaVerification(projectPath, opts.plan, opts, config)
 
   const execute = async (baseUrl: string | null) => {
     const checks: QaCheck[] = []
@@ -421,10 +421,12 @@ export function renderQaReceiptText(receipt: QaReceipt): string {
 export async function currentQaVerification(
   projectPath: string,
   plan: QaPlan | null,
-  opts: { flowId?: string; serve?: boolean } = {}
+  opts: { flowId?: string; serve?: boolean } = {},
+  executionConfig?: Awaited<ReturnType<typeof configManager.readConfig>>
 ): Promise<VerificationBinding | null> {
   try {
-    const config = await configManager.readConfig(projectPath)
+    const config =
+      executionConfig === undefined ? await configManager.readConfig(projectPath) : executionConfig
     return verificationBinding(projectPath, {
       taskId: plan?.taskId ?? null,
       criteria: plan?.criteria.map(({ id, text, verifiable }) => ({ id, text, verifiable })),

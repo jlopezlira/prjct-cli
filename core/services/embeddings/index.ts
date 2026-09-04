@@ -149,7 +149,7 @@ export class HttpEmbeddingProvider implements EmbeddingProvider {
     )
     try {
       controller.signal.throwIfAborted()
-      const key = await getEmbeddingsKey()
+      const key = await getEmbeddingsKey({ signal: controller.signal })
       controller.signal.throwIfAborted()
       const { url, init } = buildEmbeddingsRequest(this.baseUrl, this.model, texts, key, this.auth)
       const res = await fetch(url, { ...init, signal: controller.signal })

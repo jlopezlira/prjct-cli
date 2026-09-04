@@ -36,7 +36,13 @@ export function canonicalUsage(rows: UsageObservation[]): {
   const context = rows.filter(isContextUsage)
   const groups = new Map<string, UsageObservation[]>()
   const ambiguous = new Set<string>()
-  for (const row of rows.filter((r) => !isContextUsage(r))) {
+  for (const original of rows.filter((r) => !isContextUsage(r))) {
+    // Pre-migration writers already encoded provider/session identity in source.
+    const session = /^([^:]+)-session:([^:]+):/.exec(original.source ?? '')
+    const row =
+      !original.observation_id && session
+        ? { ...original, observation_id: `${session[1]}:${session[2]}` }
+        : original
     const key = JSON.stringify([row.work_cycle_id, row.observation_id ?? null])
     const group = groups.get(key) ?? []
     group.push(row)

@@ -32,12 +32,10 @@ export async function verificationBinding(
   plan: unknown
 ): Promise<VerificationBinding | null> {
   try {
-    const files = await runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
-      cwd: projectPath,
-    })
+    const files = await checkoutPaths(projectPath)
     const head = await runGit(['rev-parse', 'HEAD'], { cwd: projectPath })
-    if (!files.ok || !head.ok) return null
-    const paths = [...new Set(files.stdout.split('\0').filter(Boolean))].sort()
+    if (!head.ok) return null
+    const paths = [...new Set(files)].sort()
     const revisionHash = await revisionOf(projectPath, paths)
     const stamp = await stampProjectPaths(projectPath, paths, {
       stampedAt: new Date().toISOString(),
@@ -54,6 +52,28 @@ export async function verificationBinding(
   } catch {
     return null
   }
+}
+
+/** Include initialized nested worktrees; missing or recursive gitlinks fail closed. */
+async function checkoutPaths(root: string, ancestors = new Set<string>()): Promise<string[]> {
+  const real = await fs.realpath(root)
+  if (ancestors.has(real) || ancestors.size >= 16) throw new Error('Recursive submodule tree')
+  const seen = new Set([...ancestors, real])
+  const [files, staged] = await Promise.all([
+    runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }),
+    runGit(['ls-files', '--stage', '-z'], { cwd: root }),
+  ])
+  if (!files.ok || !staged.ok) throw new Error('Cannot enumerate checkout')
+  const paths = files.stdout.split('\0').filter(Boolean)
+  for (const entry of staged.stdout.split('\0')) {
+    if (!entry.startsWith('160000 ')) continue
+    const relative = entry.slice(entry.indexOf('\t') + 1)
+    const child = path.join(root, relative)
+    // Git otherwise discovers the parent's repository for an uninitialized gitlink.
+    await fs.lstat(path.join(child, '.git'))
+    paths.push(...(await checkoutPaths(child, seen)).map((file) => path.join(relative, file)))
+  }
+  return paths
 }
 
 export function sameVerification(

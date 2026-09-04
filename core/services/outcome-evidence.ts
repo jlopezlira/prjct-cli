@@ -62,6 +62,29 @@ export function evaluateOutcomeEvidence(input?: unknown): OutcomeEvidenceReport 
     }
   const runs = parsed.data
   if (!runs.length) return empty
+  const identities = new Map<string, string>()
+  const hashes = new Map<string, string>()
+  for (const run of runs) {
+    const identity = JSON.stringify([
+      run.taskHash,
+      run.category,
+      run.model,
+      run.effort,
+      run.configurationHash,
+    ])
+    if (
+      (identities.has(run.taskId) && identities.get(run.taskId) !== identity) ||
+      (hashes.has(run.taskHash) && hashes.get(run.taskHash) !== run.taskId)
+    )
+      return {
+        ...empty,
+        status: 'invalid',
+        reason:
+          'Task content, category and evaluation settings must be stable across repetitions; aliased task content cannot count as distinct tasks.',
+      }
+    identities.set(run.taskId, identity)
+    hashes.set(run.taskHash, run.taskId)
+  }
   const groups = new Map<string, OutcomeRun[]>()
   for (const run of runs) {
     const key = JSON.stringify([run.taskId, run.repetition])
@@ -86,9 +109,9 @@ export function evaluateOutcomeEvidence(input?: unknown): OutcomeEvidenceReport 
     }
   const tasks = new Map<string, Set<number>>()
   for (const run of runs) {
-    const repeats = tasks.get(run.taskId) ?? new Set<number>()
+    const repeats = tasks.get(run.taskHash) ?? new Set<number>()
     repeats.add(run.repetition)
-    tasks.set(run.taskId, repeats)
+    tasks.set(run.taskHash, repeats)
   }
   const baseline = runs.filter((r) => r.arm === 'baseline')
   const harness = runs.filter((r) => r.arm === 'harness')

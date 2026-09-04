@@ -7,6 +7,7 @@ import { buildRetrievalReport } from '../../eval/report'
 import configManager from '../../infrastructure/config-manager'
 import { enrichedRecall } from '../../memory/enriched-recall'
 import { HttpEmbeddingProvider } from '../../services/embeddings'
+import { getEmbeddingsKey } from '../../services/embeddings/secure-key'
 import { buildInferenceCostReport } from '../../services/inference-cost'
 import { evaluateOutcomeEvidence } from '../../services/outcome-evidence'
 import { canonicalUsage, type UsageObservation } from '../../services/usage-accounting'
@@ -16,6 +17,7 @@ import {
   recordTaskTokenUsage,
 } from '../../services/work-cost-service'
 import prjctDb from '../../storage/database'
+import { execFileAsync } from '../../utils/exec'
 
 const row = (overrides: Partial<UsageObservation> = {}): UsageObservation => ({
   work_cycle_id: 'cycle',
@@ -30,6 +32,22 @@ const row = (overrides: Partial<UsageObservation> = {}): UsageObservation => ({
 const tokens = (rows: UsageObservation[]) =>
   rows.reduce((n, r) => n + r.input_tokens + r.output_tokens, 0)
 describe('accounting contracts', () => {
+  it('preserves legacy session identity and reconciles it with migrated observations', () => {
+    const legacy = [
+      row({ source: 'codex-session:s1:m', model_id: 'm' }),
+      row({ source: 'codex-session:s2:m', model_id: 'm' }),
+    ]
+    expect(tokens(canonicalUsage(legacy).rows)).toBe(2400)
+    expect(canonicalUsage(legacy).ambiguousCycles).toEqual([])
+    expect(
+      tokens(
+        canonicalUsage([
+          ...legacy,
+          { ...legacy[0]!, observation_id: 'codex:s1', usage_kind: 'model' },
+        ]).rows
+      )
+    ).toBe(2400)
+  })
   it('reconciles measured total/model/source after later context tax', () => {
     const id = `accounting-${crypto.randomUUID()}`
     recordTaskTokenUsage(id, 'cycle', 1000000, 234560, { source: 'test-transcript' })
@@ -98,6 +116,35 @@ const request = (id: string) => ({
   cwd: process.cwd(),
 })
 describe('operation resumption contracts', () => {
+  it('reclaims persisted completed records while preserving running operations', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'journal-capacity-'))
+    const state = { finish: () => {} }
+    const journal = new RequestJournal({ storageDir: () => dir, maxEntries: 2 })
+    const pending = journal.run(
+      request('pending'),
+      () =>
+        new Promise((resolve) => {
+          state.finish = () => resolve({ id: 'pending', success: true, exitCode: 0 })
+        })
+    )
+    try {
+      await journal.run(request('done'), async () => ({ id: 'done', success: true, exitCode: 0 }))
+      expect(
+        (
+          await journal.run(request('next'), async () => ({
+            id: 'next',
+            success: true,
+            exitCode: 0,
+          }))
+        ).success
+      ).toBe(true)
+      expect((await fs.readdir(dir)).length).toBe(2)
+    } finally {
+      state.finish()
+      await pending
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
   it('does not expire an operation that is still running', async () => {
     const clock = { now: 1 }
     const journal = new RequestJournal({ ttlMs: 10, now: () => clock.now })
@@ -170,6 +217,42 @@ describe('operation resumption contracts', () => {
 })
 
 describe('embedding request budgets', () => {
+  it('terminates a stalled Keychain subprocess when the request is cancelled', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'keychain-cancel-'))
+    const pidFile = path.join(dir, 'pid')
+    try {
+      await fs.writeFile(
+        path.join(dir, 'security'),
+        '#!/bin/sh\necho $$ > "$PRJCT_TEST_KEY_PID"\nexec sleep 60\n',
+        { mode: 0o755 }
+      )
+      const modulePath = path.resolve(__dirname, '../../services/embeddings/secure-key.ts')
+      const script = `import fs from 'node:fs'; import { getEmbeddingsKey } from ${JSON.stringify(modulePath)};
+        Object.defineProperty(process, 'platform', { value: 'darwin' });
+        delete process.env.PRJCT_EMBEDDINGS_API_KEY;
+        const controller = new AbortController();
+        const poll = setInterval(() => { if (fs.existsSync(process.env.PRJCT_TEST_KEY_PID)) controller.abort(new Error('cancel-keychain')); }, 5);
+        try { await getEmbeddingsKey({ signal: controller.signal }); process.exitCode = 1; }
+        catch (error) { if (!String(error).includes('cancel-keychain')) throw error; }
+        finally { clearInterval(poll); }
+      `
+      await execFileAsync('bun', ['-e', script], {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PRJCT_TEST_KEY_PID: pidFile },
+        timeout: 3000,
+      })
+      const pid = Number((await fs.readFile(pidFile, 'utf8')).trim())
+      expect(() => process.kill(pid, 0)).toThrow()
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+  it('propagates cancellation through credential resolution, including cached credentials', async () => {
+    const controller = new AbortController()
+    controller.abort(new Error('key lookup cancelled'))
+    await expect(getEmbeddingsKey({ signal: controller.signal })).rejects.toThrow(
+      'key lookup cancelled'
+    )
+  })
   it('supports cancellation before sending', async () => {
     const controller = new AbortController()
     controller.abort(new Error('cancelled'))
@@ -214,6 +297,41 @@ describe('embedding request budgets', () => {
 })
 
 describe('outcome evidence contracts', () => {
+  it('requires distinct content and stable categories across repetitions', () => {
+    const runs = Array.from({ length: 100 }, (_, task) =>
+      [0, 1, 2].flatMap((repetition) =>
+        ['baseline', 'harness'].map((arm) => ({
+          taskId: `task-${task}`,
+          taskHash: `hash-${task}`,
+          category: `category-${task % 4}`,
+          repetition,
+          arm,
+          model: 'test-model',
+          effort: 'medium',
+          configurationHash: 'config',
+          heldOut: true,
+          grader: 'independent',
+          evidencePath: 'fixture-only',
+          completed: true,
+          escapedCriticalRegressions: 0,
+          inputTokens: 10,
+          outputTokens: 5,
+          contextTokens: 0,
+          latencyMs: 100,
+          resumed: false,
+        }))
+      )
+    ).flat()
+    expect(evaluateOutcomeEvidence(runs).qualified).toBe(true)
+    expect(
+      evaluateOutcomeEvidence(runs.map((run) => ({ ...run, taskHash: 'one-task' }))).status
+    ).toBe('invalid')
+    expect(
+      evaluateOutcomeEvidence(
+        runs.map((run) => ({ ...run, category: `${run.category}-${run.repetition}` }))
+      ).status
+    ).toBe('invalid')
+  })
   it('keeps missing evidence incomplete', () => {
     expect(evaluateOutcomeEvidence().qualified).toBe(false)
   })
@@ -282,6 +400,18 @@ describe('served retrieval eligibility and evaluation', () => {
       expect(report.served.explicit.recallAtK).toBe(1)
       expect(report.served.proxy.queries).toBe(0)
       expect(prjctDb.query(id, 'SELECT * FROM memory_surface_log')).toEqual(before)
+      prjctDb.run(
+        id,
+        'INSERT INTO memory_embeddings (memory_id, vector, model, dims, norm, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        target,
+        Buffer.from(new Float32Array([1, 0]).buffer),
+        'test',
+        2,
+        1,
+        new Date().toISOString()
+      )
+      const indexed = await buildRetrievalReport(id, 3, root)
+      expect(indexed.snapshotHash).not.toBe(report.snapshotHash)
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

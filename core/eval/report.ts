@@ -97,7 +97,18 @@ export async function buildRetrievalReport(
   const config = await configManager.readConfig(projectPath)
   const usefulness = () =>
     JSON.stringify(prjctDb.query(projectId, 'SELECT * FROM memory_usefulness ORDER BY memory_id'))
-  const before = JSON.stringify({ entries, pairs, usefulness: usefulness(), config })
+  const semanticIndex = () =>
+    prjctDb.query(
+      projectId,
+      'SELECT rowid, memory_id, hex(vector) AS vector, model, dims, norm, created_at FROM memory_embeddings ORDER BY rowid'
+    )
+  const before = JSON.stringify({
+    entries,
+    pairs,
+    usefulness: usefulness(),
+    config,
+    semanticIndex: semanticIndex(),
+  })
   const allowedIds = new Set(entries.map((e) => e.id))
   const nowMs = Date.now()
   const servedCases: Array<{ pair: LabeledPair; ranked: string[]; relevant: Set<string> }> = []
@@ -169,6 +180,7 @@ export async function buildRetrievalReport(
       pairs: after.pairs,
       usefulness: usefulness(),
       config: await configManager.readConfig(projectPath),
+      semanticIndex: semanticIndex(),
     })
   )
     throw new Error(

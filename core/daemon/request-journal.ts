@@ -222,10 +222,15 @@ export class RequestJournal {
         /* preserve corrupt records; never grant replay */
       }
     }
+    const nonterminal =
+      fs.readdirSync(dir).filter((name) => name.endsWith('.json')).length - terminal.length
     terminal
       .sort((a, b) => b.time - a.time)
       .forEach((entry, i) => {
-        if (now - entry.time > this.ttlMs || i >= this.maxEntries - reserve)
+        if (
+          now - entry.time > this.ttlMs ||
+          i >= Math.max(0, this.maxEntries - reserve - nonterminal)
+        )
           fs.unlinkSync(entry.file)
       })
   }
