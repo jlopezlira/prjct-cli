@@ -624,7 +624,6 @@ export async function ensureShipGauntlet(
   }
 ): Promise<GauntletVerdict> {
   const hasCommands = await projectHasGauntletCommands(projectPath)
-  const existing = readGauntletReceipt(projectId)?.data ?? null
   const base = {
     verification: await currentGauntletVerification(projectPath),
     nowMs: Date.now(),
@@ -633,6 +632,9 @@ export async function ensureShipGauntlet(
     strict: opts.strict,
     override: opts.override,
   }
+  // A background run can finish during the asynchronous content scan.
+  // Read its receipt after that scan, before inspecting the running marker.
+  const existing = readGauntletReceipt(projectId)?.data ?? null
   if (
     opts.override ||
     !hasCommands ||

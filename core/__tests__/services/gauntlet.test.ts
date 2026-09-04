@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import configManager from '../../infrastructure/config-manager'
 import {
   currentGauntletVerification,
   ensureShipGauntlet,
@@ -408,15 +409,24 @@ describe('ensureShipGauntlet (self-provisioning)', () => {
       )
       prjctDb.deleteDoc(fixture.projectId, 'gauntlet:running')
     }, 20)
-
+    const readConfig = configManager.readConfig.bind(configManager)
+    const state = { reads: 0 }
+    const delayed = spyOn(configManager, 'readConfig').mockImplementation(async (projectPath) => {
+      // Finish background work during the second read (content binding), after
+      // command discovery. This pins the race independently of machine speed.
+      if (++state.reads === 2) await new Promise((resolve) => setTimeout(resolve, 50))
+      return readConfig(projectPath)
+    })
     const verdict = await ensureShipGauntlet(fixture.projectDir, fixture.projectId, {
       headSha: null,
       strict: false,
       override: false,
       backgroundWaitMs: 100,
       pollIntervalMs: 5,
+    }).finally(() => {
+      delayed.mockRestore()
+      clearTimeout(background)
     })
-    clearTimeout(background)
 
     expect(verdict.blocked).toBe(false)
     expect(readGauntletReceipt(fixture.projectId)?.data.passed).toBe(true)
