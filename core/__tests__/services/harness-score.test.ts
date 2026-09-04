@@ -36,14 +36,17 @@ describe('harness score', () => {
     expect(report.criteria.find((c) => c.id === 'skill-tokens')?.status).toBe('green')
     expect(report.criteria.find((c) => c.id === 'mcp-default')?.status).toBe('green')
     expect(report.criteria.find((c) => c.id === 'context-tiers')?.status).toBe('green')
-    expect(report.programDone).toBe(true)
+    expect(report.structuralReady).toBe(true)
+    expect(report.programDone).toBe(false)
+    expect(report.outcomeEvidence.status).toBe('missing')
   })
 
   it('renders markdown scorecard', () => {
     const md = renderHarnessScoreMd(computeHarnessScore())
     expect(md).toContain('# Harness score')
     expect(md).toContain('Always-on skill tokens')
-    expect(md).toMatch(/done|in progress/)
+    expect(md).toContain('Outcome quality')
+    expect(md).toContain('missing')
   })
 
   it('carries no unmeasured competitor marketing (retired 2026-08-25)', () => {

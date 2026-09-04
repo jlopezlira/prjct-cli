@@ -246,6 +246,9 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
                     // — both used to default to 'cli' and silently clobber each
                     // other via the token_usage upsert (ON CONFLICT(event_key)).
                     source: `${runtime}-transcript`,
+                    observationId: input.session_id ? `${runtime}:${input.session_id}` : undefined,
+                    usageKind: 'total',
+                    runtime,
                   }
                 )
                 // Per-model breakdown: one token_usage row per model this
@@ -268,6 +271,11 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
                         model,
                         agent: runtime,
                         source: `${runtime}-transcript:${model}`,
+                        observationId: input.session_id
+                          ? `${runtime}:${input.session_id}`
+                          : undefined,
+                        usageKind: 'model',
+                        runtime,
                       }
                     )
                   }

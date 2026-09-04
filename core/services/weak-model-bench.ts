@@ -110,8 +110,8 @@ export function runWeakModelBench(): WeakBenchReport {
   const score = computeHarnessScore()
   push(
     'harness score',
-    score.programDone && score.grade >= 4.5,
-    `grade ${score.grade}/5 done=${score.programDone}`
+    score.structuralReady && score.grade >= 4.5,
+    `structural grade ${score.grade}/5; outcome evidence=${score.outcomeEvidence.status}`
   )
 
   push(

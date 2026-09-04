@@ -137,7 +137,11 @@ export function sendRequest(
       if (!completion.signal.aborted) {
         completion.abort()
         socket.destroy()
-        reject(new Error('Daemon request timed out'))
+        reject(
+          new Error(
+            `Daemon request timed out; operation ${request.id}. Resume the same command with --operation-id=${request.id}; add --operation-status to inspect.`
+          )
+        )
       }
     }, timeoutMs)
 
@@ -220,6 +224,15 @@ export async function executeViaDaemon(
   const namedPipe = isDaemonNamedPipe(socketPath)
 
   if (!namedPipe && !fs.existsSync(socketPath)) {
+    if (options['operation-id']) {
+      if (autoStart) await spawnDaemon().catch(() => {})
+      return {
+        id: String(options['operation-id']),
+        success: false,
+        exitCode: 1,
+        stderr: 'Resume requires a running daemon. Start it and repeat the same operation id.',
+      }
+    }
     if (autoStart) {
       // Spawn daemon in background for future commands
       spawnDaemon().catch(() => {})
@@ -227,13 +240,15 @@ export async function executeViaDaemon(
     return null // Daemon not running — fall back for this command
   }
 
+  const operationId =
+    typeof options['operation-id'] === 'string' ? options['operation-id'] : crypto.randomUUID()
   try {
     // Caller identity resolves HERE (client inherits the agent's env); the
     // daemon's env is frozen at spawn and must never be consulted for it.
     const { resolveCallerIdentity } = await import('../services/agent-identity')
     const caller = resolveCallerIdentity(command)
     return await sendRequest({
-      id: crypto.randomUUID(),
+      id: operationId,
       command,
       args,
       options,
@@ -245,7 +260,15 @@ export async function executeViaDaemon(
         identity: caller.identity,
       },
     })
-  } catch {
+  } catch (error) {
+    if (!shouldUnlinkDaemonSocket(error) || options['operation-id']) {
+      return {
+        id: operationId,
+        success: false,
+        exitCode: 1,
+        stderr: `Daemon operation ${operationId} has an uncertain outcome: ${error instanceof Error ? error.message : String(error)}. Resume with --operation-id=${operationId}; execution was not replayed.`,
+      }
+    }
     if (autoStart) {
       // Named pipes need a connect attempt to discover absence; spawn for next command.
       spawnDaemon().catch(() => {})

@@ -2,6 +2,7 @@ import prjctDb from '../storage/database'
 import { count, query } from '../storage/query-helpers'
 import { publishCRUD } from '../sync/publish-helper'
 import { durationMinutes, nullableNumber, sinceIso } from '../utils/date-helper'
+import { canonicalUsage, type UsageObservation } from './usage-accounting'
 
 interface CostTaskRow {
   id: string
@@ -67,6 +68,11 @@ export interface WorkCostSnapshot {
   tokensOut: number
   tokensTotal: number
   tokenCoveragePercent: number
+  exactTokenCycles: number
+  estimatedTokenCycles: number
+  missingTokenCycles: number
+  contextTokensEstimated: number
+  ambiguousTokenCycles: number
   measuredSessions: number
   surfacedContext: number
   usefulContext: number
@@ -109,8 +115,8 @@ function upsertEstimatedChars(
     prjctDb.run(
       projectId,
       `INSERT INTO token_usage
-         (id, work_cycle_id, event_key, source, is_estimated, input_tokens, output_tokens, model_id, description, measured_at, created_at)
-       VALUES (?, ?, ?, ?, 1, ?, 0, NULL, 'prjct-delivered context (chars/4 estimate)', ?, ?)
+         (id, work_cycle_id, event_key, source, is_estimated, input_tokens, output_tokens, model_id, description, measured_at, created_at, usage_kind)
+       VALUES (?, ?, ?, ?, 1, ?, 0, NULL, 'prjct-delivered context (chars/4 estimate)', ?, ?, 'context')
        ON CONFLICT(event_key) DO UPDATE SET
          input_tokens = MIN(token_usage.input_tokens + excluded.input_tokens, ${TOKEN_COUNT_MAX}),
          measured_at = excluded.measured_at`,
@@ -199,6 +205,8 @@ export function recordTaskTokenUsage(
     source?: string
     /** Epoch ms. Default now. Historical backfill must pass the session/task time. */
     measuredAt?: number
+    observationId?: string
+    usageKind?: 'total' | 'model'
   }
 ): void {
   if (!taskId || tokensIn + tokensOut <= 0) return
@@ -229,6 +237,8 @@ export function recordTaskTokenUsage(
         ...(meta?.runtime ? { runtime: meta.runtime } : {}),
         ...(meta?.isEstimated !== undefined ? { isEstimated: meta.isEstimated } : {}),
         ...(meta?.source ? { source: meta.source } : {}),
+        ...(meta?.observationId ? { observationId: meta.observationId } : {}),
+        ...(meta?.usageKind ? { usageKind: meta.usageKind } : {}),
       },
       taskId
     )
@@ -263,7 +273,15 @@ export function recordTaskTokenUsage(
   // wins). The CHECK bound silently rejects corrupted values. Best-effort.
   try {
     const source = meta?.source ?? 'cli'
-    const eventKey = `${taskId}:${source}`
+    const eventKey = meta?.observationId
+      ? JSON.stringify([
+          taskId,
+          meta.observationId,
+          source,
+          meta.usageKind ?? (meta.model ? 'model' : 'total'),
+          meta.model ?? null,
+        ])
+      : `${taskId}:${source}`
     const measuredAt =
       typeof meta?.measuredAt === 'number' && Number.isFinite(meta.measuredAt)
         ? meta.measuredAt
@@ -271,15 +289,17 @@ export function recordTaskTokenUsage(
     prjctDb.run(
       projectId,
       `INSERT INTO token_usage
-         (id, work_cycle_id, event_key, source, is_estimated, input_tokens, output_tokens, model_id, description, measured_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, work_cycle_id, event_key, source, is_estimated, input_tokens, output_tokens, model_id, description, measured_at, created_at, observation_id, usage_kind, runtime)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(event_key) DO UPDATE SET
          input_tokens = excluded.input_tokens,
          output_tokens = excluded.output_tokens,
          is_estimated = excluded.is_estimated,
          model_id = excluded.model_id,
          description = COALESCE(excluded.description, token_usage.description),
-         measured_at = excluded.measured_at`,
+         measured_at = excluded.measured_at,
+         observation_id = excluded.observation_id, usage_kind = excluded.usage_kind, runtime = excluded.runtime
+       WHERE excluded.is_estimated < token_usage.is_estimated OR (excluded.is_estimated = token_usage.is_estimated AND excluded.measured_at >= token_usage.measured_at)`,
       eventKey,
       taskId,
       eventKey,
@@ -290,7 +310,10 @@ export function recordTaskTokenUsage(
       meta?.model ?? null,
       meta?.description ?? null,
       measuredAt,
-      measuredAt
+      measuredAt,
+      meta?.observationId ?? null,
+      meta?.usageKind ?? (meta?.model ? 'model' : 'total'),
+      meta?.runtime ?? meta?.agent ?? null
     )
   } catch {
     /* best-effort typed mirror — the event row stays the source of truth */
@@ -300,40 +323,18 @@ export function recordTaskTokenUsage(
 // (measuredCyclesFromEvents removed — token_usage is the single read source for
 // cost; the memory.task_tokens events remain only as the append-only audit log.)
 
-interface TokenUsageRow {
-  work_cycle_id: string | null
-  input_tokens: number
-  output_tokens: number
-  is_estimated: number
-  description: string | null
-}
-
-/**
- * C2 read path: aggregate measured usage from the typed `token_usage` table —
- * one cycle per work_cycle_id, latest measurement wins (ORDER BY measured_at
- * DESC). Structured (exact/estimated is a column), no JSON.parse.
- */
-function measuredCyclesFromTokenUsage(projectId: string, since: string): Map<string, WorkCostTask> {
-  const sinceMs = Date.parse(since)
-  const rows = query<TokenUsageRow>(
-    projectId,
-    `SELECT work_cycle_id, input_tokens, output_tokens, is_estimated, description
-     FROM token_usage
-     WHERE measured_at >= ?
-     ORDER BY measured_at DESC`,
-    Number.isFinite(sinceMs) ? sinceMs : 0
-  )
+function measuredCyclesFromTokenUsage(rows: UsageObservation[]): Map<string, WorkCostTask> {
   const byCycle = new Map<string, WorkCostTask>()
   for (const row of rows) {
     const id = row.work_cycle_id
-    if (!id || byCycle.has(id)) continue // first seen = latest (DESC)
-    const tokensIn = nullableNumber(row.input_tokens) ?? 0
-    const tokensOut = nullableNumber(row.output_tokens) ?? 0
-    if (tokensIn + tokensOut <= 0) continue
+    if (!id) continue
+    const previous = byCycle.get(id)
+    const tokensIn = (previous?.tokensIn ?? 0) + row.input_tokens
+    const tokensOut = (previous?.tokensOut ?? 0) + row.output_tokens
     byCycle.set(id, {
       id,
       description: row.description ?? id,
-      status: row.is_estimated ? 'estimated' : 'measured',
+      status: row.is_estimated || previous?.status === 'estimated' ? 'estimated' : 'measured',
       tokensIn,
       tokensOut,
       tokensTotal: tokensIn + tokensOut,
@@ -391,11 +392,19 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
   // the SAME CHECK bound to both writes, so this fallback can never surface a
   // value token_usage would have rejected. The `memory.task_tokens` events
   // are no longer read for cost — they remain as the append-only audit log.
+  const usage = canonicalUsage(
+    query<UsageObservation>(
+      projectId,
+      'SELECT * FROM token_usage WHERE measured_at >= ?',
+      Date.parse(since)
+    )
+  )
+  const cycles = measuredCyclesFromTokenUsage(usage.rows)
   const merged = new Map<string, WorkCostTask>()
   for (const task of taskRows.map(toCostTask)) {
     if (task) merged.set(task.id, task)
   }
-  for (const [id, cycle] of measuredCyclesFromTokenUsage(projectId, since)) {
+  for (const [id, cycle] of cycles) {
     const prev = merged.get(id)
     merged.set(id, {
       ...cycle,
@@ -487,7 +496,7 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
   // have tokens yet; event inflation used to tank healthy projects).
   const inferredWorkCycles = Math.max(taskRows.length, eventWorkStarts, eventShips)
   const finishedTaskRows = taskRows.filter((r) => r.completed_at || r.shipped_at)
-  const tokenUsageIds = new Set(measuredCyclesFromTokenUsage(projectId, since).keys())
+  const tokenUsageIds = new Set(cycles.keys())
   const sessionTaskIds = (() => {
     try {
       return new Set(
@@ -505,28 +514,18 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
       return new Set<string>()
     }
   })()
-  const finishedWithTokens = finishedTaskRows.filter((r) => {
-    const tin = Number(r.tokens_in ?? 0)
-    const tout = Number(r.tokens_out ?? 0)
-    return tin + tout > 0 || tokenUsageIds.has(r.id)
-  }).length
-  // Eligible = finished cycles where an agent signal exists (tokens or session).
-  // Purely manual closes without agent activity don't penalize coverage.
-  const finishedEligible = finishedTaskRows.filter((r) => {
-    const tin = Number(r.tokens_in ?? 0) + Number(r.tokens_out ?? 0)
-    return tin > 0 || tokenUsageIds.has(r.id) || sessionTaskIds.has(r.id)
-  }).length
-  const tokenCoverageBase =
-    finishedEligible > 0
-      ? finishedEligible
-      : finishedTaskRows.length > 0
-        ? finishedTaskRows.length
-        : taskRows.length > 0
-          ? taskRows.length
-          : inferredWorkCycles
-  // knownTokenCycles = all measured cycles (task rows or token_usage-only).
-  // Coverage % uses finished-with-tokens over agent-eligible finished base.
-  const knownTokenCycles = Math.max(finishedWithTokens, measuredTasks.length)
+  const eligibleIds = new Set([
+    ...taskRows.map((r) => r.id),
+    ...sessionTaskIds,
+    ...tokenUsageIds,
+    ...usage.context.flatMap((r) => (r.work_cycle_id ? [r.work_cycle_id] : [])),
+  ])
+  const exactTokenCycles = measuredTasks.filter((t) => t.status === 'measured').length
+  const estimatedTokenCycles = measuredTasks.length - exactTokenCycles
+  const missingTokenCycles = Math.max(0, eligibleIds.size - measuredTasks.length)
+  const tokenCoverageBase = eligibleIds.size
+  const knownTokenCycles = measuredTasks.length
+  const finishedWithTokens = finishedTaskRows.filter((r) => merged.has(r.id)).length
 
   const gaps: string[] = []
   if (inferredWorkCycles === 0) {
@@ -550,72 +549,60 @@ export function buildWorkCostSnapshot(projectId: string, days: number): WorkCost
     )
   }
 
-  // Per-model spend: the claude-transcript:<model> rows written per turn.
-  // model_id IS NOT NULL keeps the un-attributed totals row out of the split.
-  const byModel: WorkCostSnapshot['byModel'] = (() => {
-    try {
-      return prjctDb
-        .query<{ model: string; t_in: number; t_out: number }>(
-          projectId,
-          `SELECT COALESCE(model_id, 'unknown') AS model,
-                SUM(input_tokens) AS t_in, SUM(output_tokens) AS t_out
-         FROM token_usage
-         WHERE model_id IS NOT NULL AND measured_at >= ?
-         GROUP BY COALESCE(model_id, 'unknown')
-         ORDER BY t_in + t_out DESC`,
-          Date.parse(since)
-        )
-        .map((r) => ({ model: r.model, tokensIn: r.t_in, tokensOut: r.t_out }))
-    } catch {
-      return []
+  const legacyRows: UsageObservation[] = measuredTasks
+    .filter((t) => !cycles.has(t.id))
+    .map((t) => ({
+      work_cycle_id: t.id,
+      source: 'legacy-task',
+      model_id: null,
+      input_tokens: t.tokensIn,
+      output_tokens: t.tokensOut,
+      is_estimated: 1,
+      measured_at: Date.parse(since),
+    }))
+  const aggregate = (key: (r: UsageObservation) => string) => {
+    const groups = new Map<string, { tokensIn: number; tokensOut: number }>()
+    for (const row of [...usage.rows, ...legacyRows]) {
+      const value = key(row)
+      const prev = groups.get(value) ?? { tokensIn: 0, tokensOut: 0 }
+      groups.set(value, {
+        tokensIn: prev.tokensIn + row.input_tokens,
+        tokensOut: prev.tokensOut + row.output_tokens,
+      })
     }
-  })()
-
-  // Per-host/source spend: source is the attribution axis the window-burn
-  // question actually needs ("which host is eating my subscription") — the
-  // data was always in token_usage.source, it was just never grouped.
-  const bySource: WorkCostSnapshot['bySource'] = (() => {
-    try {
-      return prjctDb
-        .query<{ source: string; t_in: number; t_out: number }>(
-          projectId,
-          `SELECT COALESCE(source, 'unknown') AS source,
-                SUM(input_tokens) AS t_in, SUM(output_tokens) AS t_out
-         FROM token_usage
-         WHERE measured_at >= ?
-         GROUP BY COALESCE(source, 'unknown')
-         ORDER BY t_in + t_out DESC`,
-          Date.parse(since)
-        )
-        .map((r) => ({ source: r.source, tokensIn: r.t_in, tokensOut: r.t_out }))
-    } catch {
-      return []
-    }
-  })()
+    return [...groups.entries()].sort(
+      (a, b) => b[1].tokensIn + b[1].tokensOut - a[1].tokensIn - a[1].tokensOut
+    )
+  }
+  const byModel = aggregate((r) => r.model_id ?? 'unknown').map(([model, counts]) => ({
+    model,
+    ...counts,
+  }))
+  const bySource = aggregate((r) => r.source?.split(':')[0] ?? 'unknown').map(
+    ([source, counts]) => ({ source, ...counts })
+  )
+  if (usage.ambiguousCycles.length)
+    gaps.push(
+      `${usage.ambiguousCycles.length} cycles have ambiguous overlapping historical usage; conservative totals selected.`
+    )
 
   return {
     id: `work-cost-${days}d`,
     windowDays: days,
     generatedAt: now,
-    workCycles: taskRows.length > 0 ? taskRows.length : inferredWorkCycles,
+    workCycles: Math.max(eligibleIds.size, inferredWorkCycles),
     knownTokenCycles,
     tokensIn,
     tokensOut,
     tokensTotal: tokensIn + tokensOut,
-    tokenCoveragePercent:
-      tokenCoverageBase === 0
-        ? 0
-        : Math.min(
-            100,
-            Math.round(
-              (Math.max(
-                finishedWithTokens,
-                measuredTasks.filter((t) => tokenUsageIds.has(t.id) || t.tokensTotal > 0).length
-              ) /
-                tokenCoverageBase) *
-                100
-            )
-          ),
+    tokenCoveragePercent: tokenCoverageBase
+      ? Math.round((exactTokenCycles / tokenCoverageBase) * 100)
+      : 0,
+    exactTokenCycles,
+    estimatedTokenCycles,
+    missingTokenCycles,
+    contextTokensEstimated: usage.context.reduce((n, r) => n + r.input_tokens + r.output_tokens, 0),
+    ambiguousTokenCycles: usage.ambiguousCycles.length,
     measuredSessions: Math.max(measuredSessions, cyclesWithSession),
     surfacedContext,
     usefulContext,

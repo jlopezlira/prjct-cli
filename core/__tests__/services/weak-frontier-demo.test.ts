@@ -31,10 +31,10 @@ describe('weak-frontier-demo', () => {
 
   test('markdown table is public-demo shaped', () => {
     const md = formatDemoMarkdown(buildDemoRows())
-    expect(md).toContain('Weak model + prjct')
-    expect(md).toContain('Frontier (no harness)')
-    expect(md).toContain('Passive capture')
-    expect(md).toContain('Land hand-off')
+    expect(md).toContain('synthetic routing fixtures')
+    expect(md).toContain('No live model comparison')
+    expect(md).not.toContain('Structural proof')
+    expect(md).not.toContain('Frontier (no harness)')
     expect(md).toContain('demo:weak-vs-frontier')
   })
 

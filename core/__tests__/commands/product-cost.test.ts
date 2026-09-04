@@ -91,7 +91,8 @@ describe('insights cost', () => {
 
       expect(result.success).toBe(true)
       expect(snapshot.tokensTotal).toBe(15000)
-      expect(snapshot.tokenCoveragePercent).toBe(100)
+      expect(snapshot.tokenCoveragePercent).toBe(0)
+      expect(snapshot.estimatedTokenCycles).toBe(1)
       expect(snapshot.surfacedContext).toBe(1)
     } finally {
       log.mockRestore()

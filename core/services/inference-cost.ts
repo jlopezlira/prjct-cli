@@ -10,6 +10,7 @@ import {
   providerLabel,
   resolveModelRate,
 } from './model-pricing'
+import { canonicalUsage, type UsageObservation } from './usage-accounting'
 
 export interface CostWindowOptions {
   /** `null` = all recorded history. */
@@ -80,14 +81,6 @@ export interface InferenceCostReport {
   byModel: InferenceCostModelSlice[]
 }
 
-interface UsageRow {
-  work_cycle_id: string | null
-  source: string | null
-  model_id: string | null
-  input_tokens: number
-  output_tokens: number
-}
-
 function sinceMs(days: number | null): number {
   if (days === null) return 0
   return Date.now() - days * 86_400_000
@@ -97,42 +90,18 @@ function windowLabel(days: number | null): string {
   return days === null ? 'all recorded history' : `last ${days} day(s)`
 }
 
-/**
- * Prefer per-model rows. Cycle-total rows (no model_id) are kept only for
- * cycles that have no per-model breakdown, taking the fattest source so
- * cli + transcript totals of the same session are not summed twice.
- */
-function selectRows(rows: UsageRow[]): UsageRow[] {
-  const cyclesWithModel = new Set(rows.filter((r) => r.model_id).map((r) => r.work_cycle_id ?? ''))
-  const noModelByCycle = new Map<string, UsageRow>()
-  const withModel: UsageRow[] = []
-  for (const row of rows) {
-    if (row.model_id) {
-      withModel.push(row)
-      continue
-    }
-    const cycle = row.work_cycle_id ?? row.source ?? 'unknown'
-    if (cyclesWithModel.has(row.work_cycle_id ?? '')) continue
-    const prev = noModelByCycle.get(cycle)
-    const total = (row.input_tokens ?? 0) + (row.output_tokens ?? 0)
-    const prevTotal = prev ? (prev.input_tokens ?? 0) + (prev.output_tokens ?? 0) : -1
-    if (!prev || total > prevTotal) noModelByCycle.set(cycle, row)
-  }
-  return [...withModel, ...noModelByCycle.values()]
-}
-
 export function buildInferenceCostReport(
   projectId: string,
   window: CostWindowOptions
 ): InferenceCostReport {
-  const rows = query<UsageRow>(
+  const rows = query<UsageObservation>(
     projectId,
-    `SELECT work_cycle_id, source, model_id, input_tokens, output_tokens
+    `SELECT *
      FROM token_usage
      WHERE measured_at >= ?`,
     sinceMs(window.days)
   )
-  const counted = selectRows(rows)
+  const counted = canonicalUsage(rows).rows
 
   const byModelMap = new Map<string, InferenceCostModelSlice>()
   const byProviderMap = new Map<ProviderId, InferenceCostSlice>()
@@ -150,11 +119,7 @@ export function buildInferenceCostReport(
   })
 
   for (const row of counted) {
-    const modelId = row.model_id?.trim() ?? ''
-    // Context-tax estimates (hook-injection / cli-md) have no model — that
-    // is `prjct insights cost`. This report is inference: every host that
-    // recorded a model on the work cycle, not only the agent currently in use.
-    if (!modelId) continue
+    const modelId = row.model_id?.trim() || 'unknown'
     const tokensIn = Number(row.input_tokens) || 0
     const tokensOut = Number(row.output_tokens) || 0
     const rate = resolveModelRate(modelId)

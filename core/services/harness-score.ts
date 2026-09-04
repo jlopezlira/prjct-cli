@@ -1,7 +1,7 @@
 /**
  * Absolute harness scorecard for `prjct harness score`.
  *
- * Grade 0–5 per criterion. Done = mean ≥ 4.5 and every criterion ≥ 4.
+ * Structural grade 0–5; outcome readiness requires independently graded paired runs.
  */
 
 import { Buffer } from 'node:buffer'
@@ -15,6 +15,7 @@ import {
   MCP_TOOLS_CORE_MAX,
   measureL0Budget,
 } from './context-tiers'
+import { evaluateOutcomeEvidence, type OutcomeEvidenceReport } from './outcome-evidence'
 import { MINIMAL_ROUTING_BODY } from './routing-block'
 import { buildPrjctSkill } from './skill-generator/prjct-skill-body'
 
@@ -28,6 +29,8 @@ export interface HarnessCriterion {
 }
 
 export interface HarnessScoreReport {
+  structuralReady: boolean
+  outcomeEvidence: OutcomeEvidenceReport
   grade: number
   programDone: boolean
   criteria: HarnessCriterion[]
@@ -100,6 +103,7 @@ function countDefaultTools(): number {
 export function computeHarnessScore(
   options: {
     /** Live multi-runtime organic grade from probeHarnessCoverage (0–5). */
+    pairedRuns?: unknown
     multiRuntimeOrganicGrade?: number
     multiRuntimeOrganicMeasured?: string
   } = {}
@@ -238,17 +242,18 @@ export function computeHarnessScore(
 
   const grade =
     Math.round((criteria.reduce((sum, c) => sum + c.score, 0) / criteria.length) * 10) / 10
-  const programDone =
+  const structuralReady =
     grade >= WORLD_CLASS.meanGreen &&
     criteria.every((c) => c.score >= WORLD_CLASS.minCriterionGreen)
 
-  const reds = criteria.filter((c) => c.status === 'red').map((c) => c.id)
-  const summary = programDone
-    ? `Grade ${grade}/5 — program done (all criteria ≥${WORLD_CLASS.minCriterionGreen}).`
-    : `Grade ${grade}/5 — not done yet${reds.length ? ` (red: ${reds.join(', ')})` : ''}.`
+  const outcomeEvidence = evaluateOutcomeEvidence(options.pairedRuns)
+  const programDone = structuralReady && outcomeEvidence.qualified
+  const summary = `Structural grade ${grade}/5 (${structuralReady ? 'meets structural budgets' : 'incomplete'}). Outcome evidence: ${outcomeEvidence.status}. ${outcomeEvidence.reason}`
 
   return {
     grade,
+    structuralReady,
+    outcomeEvidence,
     programDone,
     criteria,
     summary,
@@ -278,7 +283,7 @@ export function renderHarnessScoreMd(
   return [
     '# Harness score',
     '',
-    `**Grade:** ${report.grade}/5 ${report.programDone ? '✓ done' : '— in progress'}`,
+    `**Structural grade:** ${report.grade}/5 · **Outcome quality:** ${report.outcomeEvidence.status}`,
     '',
     report.summary,
     '',

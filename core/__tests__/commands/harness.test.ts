@@ -58,10 +58,10 @@ describe('prjct harness command', () => {
     await fs.rm(dir, { recursive: true, force: true })
   })
 
-  it('score reports a done grade', async () => {
+  it('score keeps missing model outcome evidence incomplete', async () => {
     const r = await cmd.score(process.cwd(), { md: true })
     expect(r.success).toBe(true)
-    expect(r.programDone).toBe(true)
+    expect(r.programDone).toBe(false)
     expect(logged()).toContain('Harness score')
   })
 

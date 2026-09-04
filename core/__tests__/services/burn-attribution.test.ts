@@ -61,7 +61,9 @@ describe('bySource cost grouping', () => {
     const bySource = new Map(snapshot.bySource.map((s) => [s.source, s]))
     expect(bySource.get('kimi-transcript')?.tokensIn).toBe(1000)
     expect(bySource.get('codex-transcript')?.tokensIn).toBe(5000)
-    expect(bySource.get('hook-injection:kimi')?.tokensIn).toBe(1000) // 4000 chars / 4
+    expect(bySource.has('hook-injection:kimi')).toBe(false)
+    expect(snapshot.contextTokensEstimated).toBe(1000) // 4000 chars / 4; overlapping tax
+    expect(snapshot.tokensTotal).toBe(6600)
   })
 })
 

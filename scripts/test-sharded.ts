@@ -76,7 +76,7 @@ process.once('SIGTERM', () => stop('SIGTERM'))
 async function runShard(name: string, dirs: readonly string[]): Promise<ShardResult> {
   const shardTemp = path.join(tempRoot, name)
   mkdirSync(shardTemp, { recursive: true })
-  const result = await runProc('bun', ['test', '--dots', ...dirs], {
+  const result = await runProc('bun', ['test', '--timeout', '20000', '--dots', ...dirs], {
     cwd: process.cwd(),
     env: { ...process.env, TMPDIR: shardTemp },
     timeoutMs: SHARD_TIMEOUT_MS,

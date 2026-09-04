@@ -173,7 +173,7 @@ export function renderHarnessDeltaMd(delta: HarnessDeltaReport = computeHarnessD
   return [
     '## Harness Δ (bare vs prjct)',
     '',
-    'Public proof of the north star: weak model + harness beats bare discipline.',
+    'Synthetic regex-routing fixture comparison. No model was executed; these results do not measure model quality or token savings.',
     '',
     '| Metric | Bare (no harness) | With prjct | Pass |',
     '|---|---|---|:---:|',
@@ -203,58 +203,39 @@ export function buildDemoRows(): DemoRow[] {
   return [
     {
       capability: 'Always-on skill size',
-      frontierNoHarness: 'Unbounded host prompt / skill dump',
+      frontierNoHarness: 'Not measured',
       weakWithPrjct: `${skillTok} tok (SLO ≤${WORLD_CLASS.skillTokensMax})`,
       weakOk: skillTok <= WORLD_CLASS.skillTokensMax,
     },
     {
       capability: 'Routing body (AGENTS map)',
-      frontierNoHarness: 'Full methodology inline every turn',
+      frontierNoHarness: 'Not measured',
       weakWithPrjct: `${routingB} B (SLO ≤${WORLD_CLASS.routingBodyBytesMax})`,
       weakOk: routingB <= WORLD_CLASS.routingBodyBytesMax,
     },
     {
       capability: 'MCP default surface',
-      frontierNoHarness: 'All tools loaded (context bloat)',
+      frontierNoHarness: 'Not measured',
       weakWithPrjct: `tier=${resolveTier(undefined)} · ${mcpCount} tools (core)`,
       weakOk: mcpDefault && mcpCount <= WORLD_CLASS.mcpToolsCoreMax,
     },
     {
       capability: 'Multi-provider model maps',
-      frontierNoHarness: 'Single-vendor hardcode',
+      frontierNoHarness: 'Not measured',
       weakWithPrjct: `${providers} providers (min ${WORLD_CLASS.providerMapsMin})`,
       weakOk: providers >= WORLD_CLASS.providerMapsMin,
     },
     {
       capability: 'Harness scorecard',
-      frontierNoHarness: 'No structural grade',
+      frontierNoHarness: 'Not measured',
       weakWithPrjct: `grade ${score.grade}/5 · programDone=${score.programDone}`,
-      weakOk: score.programDone && score.grade >= 4.5,
+      weakOk: score.structuralReady && score.grade >= 4.5,
     },
     {
       capability: 'Intent routing accuracy',
       frontierNoHarness: `${Math.round(bareRate * 100)}% bare (wraps bin verbs as work)`,
       weakWithPrjct: `${Math.round(harnessRate * 100)}% with verb map (need ≥95%)`,
       weakOk: harnessRate >= DELTA_MIN_HARNESS_RATE,
-    },
-    {
-      capability: 'Passive capture (typed)',
-      frontierNoHarness: 'Must call remember or lose the turn',
-      weakWithPrjct: 'Stop hook auto-captures decision/learning/gotcha/fact (v2 labels)',
-      weakOk: true,
-    },
-    {
-      capability: 'Land hand-off',
-      frontierNoHarness: 'Agent must remember to remember context',
-      weakWithPrjct: 'prjct land auto-synthesizes Session close (source:land-auto)',
-      weakOk: true,
-    },
-    {
-      capability: 'Multi-runtime organic wire',
-      frontierNoHarness: 'Single host or re-prompt per IDE',
-      weakWithPrjct:
-        'Claude+Codex+Gemini+Cursor native adapters; Grok inherits Claude — one install',
-      weakOk: true,
     },
     {
       capability: 'Intent A/B vs bare',
@@ -268,11 +249,11 @@ export function buildDemoRows(): DemoRow[] {
 export function formatDemoMarkdown(rows: DemoRow[]): string {
   const delta = computeHarnessDelta()
   const lines = [
-    '# Weak model + prjct  vs  Frontier without harness',
+    '# Structural harness and synthetic routing fixtures',
     '',
-    'Structural proof that harness SLOs make a constrained model match frontier *discipline*.',
+    'Structural budgets and synthetic regex-routing fixtures only. No live model comparison was performed.',
     '',
-    '| Capability | Frontier (no harness) | Weak + prjct | Pass |',
+    '| Capability | Baseline evidence | prjct measurement | Pass |',
     '|---|---|---|:---:|',
   ]
   for (const r of rows) {
@@ -282,7 +263,7 @@ export function formatDemoMarkdown(rows: DemoRow[]): string {
   }
   const pass = rows.filter((r) => r.weakOk).length
   lines.push('')
-  lines.push(`**Weak+prjct: ${pass}/${rows.length} SLOs**`)
+  lines.push(`**Structural fixtures: ${pass}/${rows.length} SLOs**`)
   lines.push('')
   lines.push(delta.line)
   lines.push('')

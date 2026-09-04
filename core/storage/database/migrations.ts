@@ -2736,6 +2736,20 @@ export const migrations: Migration[] = [
       )
     },
   },
+  {
+    version: 66,
+    name: 'usage-observation-identity',
+    up: (db: SqliteDatabase) => {
+      db.run('ALTER TABLE token_usage ADD COLUMN observation_id TEXT')
+      db.run(
+        "ALTER TABLE token_usage ADD COLUMN usage_kind TEXT CHECK (usage_kind IN ('total', 'model', 'context'))"
+      )
+      db.run('ALTER TABLE token_usage ADD COLUMN runtime TEXT')
+      db.run(
+        'CREATE INDEX IF NOT EXISTS ix_token_usage_observation ON token_usage(work_cycle_id, observation_id)'
+      )
+    },
+  },
 ]
 
 export const LATEST_SCHEMA_VERSION = migrations[migrations.length - 1]?.version ?? 0

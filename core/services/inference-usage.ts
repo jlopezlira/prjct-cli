@@ -35,6 +35,8 @@ export function recordInferenceUsage(
     source: `${usage.host}-session:${usage.sessionId}:${model}`,
     isEstimated: usage.estimated === true,
     measuredAt: usage.measuredAt,
+    observationId: `${usage.host}:${usage.sessionId}`,
+    usageKind: 'model',
   })
 }
 

@@ -27,6 +27,11 @@ import { withApp } from './qa-app'
 import { effectiveQaMode, type QaShipGateVerdict, qaAppliesTo, qaShipVerdict } from './qa-gate'
 import { getQaPlan, markFlow } from './qa-plan'
 import { runProbe } from './qa-probes'
+import {
+  unchangedDuringVerification,
+  type VerificationBinding,
+  verificationBinding,
+} from './verification-binding'
 
 const QA_LATEST_KEY = 'qa:latest'
 const receiptKey = (taskId: string): string => `qa:receipt:${taskId}`
@@ -196,6 +201,7 @@ export async function runQa(
   )
   const needsApp = flows.some((f) => f.probe?.type === 'http' || f.probe?.type === 'browser')
   const binding = await gitBinding(projectPath)
+  const before = await currentQaVerification(projectPath, opts.plan, opts)
 
   const execute = async (baseUrl: string | null) => {
     const checks: QaCheck[] = []
@@ -234,13 +240,17 @@ export async function runQa(
   const { checks, probes } = ran.result
   const appError = 'appError' in ran.result ? ran.result.appError : undefined
   const all = [...checks, ...probes]
+  const currentPlan = opts.plan ? (getQaPlan(projectId, opts.plan.taskId) ?? opts.plan) : null
+  const after = await currentQaVerification(projectPath, currentPlan, opts)
+  const stable = unchangedDuringVerification(before, after)
   const receipt: QaReceipt = {
+    verification: stable ? before : null,
     version: 1,
     taskId: opts.plan?.taskId ?? null,
     ranAt: new Date().toISOString(),
     headSha: binding.headSha,
     dirty: binding.dirty,
-    passed: !appError && all.every((r) => r.ok || r.unavailable),
+    passed: (stable || all.length === 0) && !appError && all.every((r) => r.ok || r.unavailable),
     vacuous: all.length === 0 || all.every((r) => r.unavailable),
     app: { ...ran.app, ...(appError ? { error: appError } : {}) },
     checks,
@@ -286,19 +296,33 @@ export async function ensureShipQa(
   if (!opts.taskId) return { blocked: false, message: null, checklist: [] }
   const plan = getQaPlan(projectId, opts.taskId)
   const existing = readQaReceipt(projectId, opts.taskId)?.data ?? null
-  const base = { mode: opts.mode, harnessLevel: opts.harnessLevel, plan, headSha: opts.headSha }
+  const base = {
+    mode: opts.mode,
+    harnessLevel: opts.harnessLevel,
+    plan,
+    headSha: opts.headSha,
+    verification: await currentQaVerification(projectPath, plan),
+  }
   const hasProbes = Boolean(plan?.flows.some((f) => f.probe))
   const fresh =
     existing !== null &&
     existing.taskId === (plan?.taskId ?? null) &&
-    isReceiptFresh(existing, Date.now(), opts.headSha)
+    isReceiptFresh(existing, Date.now(), opts.headSha, base.verification)
   if (opts.override || !qaAppliesTo(opts.harnessLevel, opts.mode) || !hasProbes || fresh) {
     return qaShipVerdict({ ...base, receipt: existing, nowMs: Date.now(), override: opts.override })
   }
   console.log('QA receipt missing or stale — running probes now…')
   const receipt = await runQa(projectPath, projectId, { plan })
+  if (!receipt.verification)
+    return {
+      blocked: true,
+      message:
+        'QA content or plan changed during execution, or could not be read. Re-run prjct qa run on a stable checkout.',
+      checklist: [],
+    }
   return qaShipVerdict({
     ...base,
+    verification: await currentQaVerification(projectPath, getQaPlan(projectId, opts.taskId)),
     plan: opts.taskId ? getQaPlan(projectId, opts.taskId) : null,
     receipt,
     nowMs: Date.now(),
@@ -391,4 +415,35 @@ export function renderQaReceiptText(receipt: QaReceipt): string {
   if (receipt.vacuous)
     lines.push('  (nothing verified by machine — add probes or dispatch the QA subagent)')
   return lines.join('\n')
+}
+
+/** Bind execution inputs only: result status/evidence updates do not alter the plan. */
+export async function currentQaVerification(
+  projectPath: string,
+  plan: QaPlan | null,
+  opts: { flowId?: string; serve?: boolean } = {}
+): Promise<VerificationBinding | null> {
+  try {
+    const config = await configManager.readConfig(projectPath)
+    return verificationBinding(projectPath, {
+      taskId: plan?.taskId ?? null,
+      criteria: plan?.criteria.map(({ id, text, verifiable }) => ({ id, text, verifiable })),
+      flows: plan?.flows.map(({ id, name, kind, given, when, then, probe, testFile }) => ({
+        id,
+        name,
+        kind,
+        given,
+        when,
+        then,
+        probe,
+        testFile,
+      })),
+      extras: qaExtraCommands(config),
+      app: config?.qa?.app,
+      flowId: opts.flowId,
+      serve: opts.serve !== false,
+    })
+  } catch {
+    return null
+  }
 }

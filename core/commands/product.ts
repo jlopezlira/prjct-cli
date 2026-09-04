@@ -1206,19 +1206,16 @@ function formatNetSavingsMd(snapshot: WorkCostSnapshot): string[] {
 
   if (avgMeasured === null || avgDeclared === null || avgDeclared === 0) {
     lines.push(
-      '- Insufficient data yet: need at least one token-measured cycle and one declared baseline mention.',
+      '- Insufficient data yet: need independently graded same-model paired task runs.',
       ''
     )
     return lines
   }
 
-  const deltaPct = Math.round(((avgDeclared - avgMeasured) / avgDeclared) * 100)
-  const verdict = deltaPct > 0 ? `${deltaPct}% fewer` : `${Math.abs(deltaPct)}% more`
-  lines.push('| Metric | Value |', '|---|---:|')
-  lines.push(`| Avg measured tokens/cycle | ${Math.round(avgMeasured).toLocaleString()} |`)
-  lines.push(`| Avg declared baseline tokens | ${Math.round(avgDeclared).toLocaleString()} |`)
-  lines.push(`| Net | **${verdict} tokens/cycle** |`)
-  lines.push('')
+  lines.push(
+    'Declared token mentions are not matched task baselines. Net savings remain unmeasured until independently graded same-model paired runs are available.',
+    ''
+  )
   return lines
 }
 
@@ -1227,7 +1224,14 @@ function formatCostMd(snapshot: WorkCostSnapshot): string {
   lines.push('## Subscription Burn', '', '| Metric | Value |', '|---|---:|')
   lines.push(`| Work cycles | ${snapshot.workCycles} |`)
   lines.push(`| Token-measured cycles | ${snapshot.knownTokenCycles} |`)
-  lines.push(`| Token coverage | ${snapshot.tokenCoveragePercent}% |`)
+  lines.push(`| Exact token coverage | ${snapshot.tokenCoveragePercent}% |`)
+  lines.push(
+    `| Exact / estimated / missing cycles | ${snapshot.exactTokenCycles} / ${snapshot.estimatedTokenCycles} / ${snapshot.missingTokenCycles} |`
+  )
+  lines.push(
+    `| Context tax estimate (overlaps host input) | ${(snapshot.contextTokensEstimated ?? 0).toLocaleString()} |`
+  )
+  lines.push(`| Cycles with ambiguous overlap | ${snapshot.ambiguousTokenCycles} |`)
   lines.push(`| Input tokens | ${snapshot.tokensIn.toLocaleString()} |`)
   lines.push(`| Output tokens | ${snapshot.tokensOut.toLocaleString()} |`)
   lines.push(`| Total tokens | ${snapshot.tokensTotal.toLocaleString()} |`)

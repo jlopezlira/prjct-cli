@@ -218,7 +218,11 @@ function hashIdentity(kind: string, mode: string, value: string | Buffer): strin
   )
 }
 
-async function hashProjectPath(projectPath: string, relativePath: string): Promise<string> {
+async function hashProjectPath(
+  projectPath: string,
+  relativePath: string,
+  strict = false
+): Promise<string> {
   const root = path.resolve(projectPath)
   const abs = path.resolve(root, relativePath)
   if (abs === root || !abs.startsWith(`${root}${path.sep}`)) return BLOB_MISSING
@@ -238,6 +242,7 @@ async function hashProjectPath(projectPath: string, relativePath: string): Promi
     return hashIdentity('blob', mode, await fs.readFile(abs))
   } catch (error) {
     if (error instanceof GitInfraError) throw error
+    if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     return BLOB_MISSING
   }
 }
@@ -246,13 +251,13 @@ async function hashProjectPath(projectPath: string, relativePath: string): Promi
 export async function stampProjectPaths(
   projectPath: string,
   paths: readonly string[],
-  opts: { stampedAt: string; headSha?: string; payloadBound?: boolean }
+  opts: { stampedAt: string; headSha?: string; payloadBound?: boolean; strict?: boolean }
 ): Promise<ContentBoundStamp> {
   const entries: ContentBoundPathStamp[] = []
   for (const p of paths) {
     const norm = normalizeStampPath(p)
     if (!norm) continue
-    entries.push({ path: norm, blobHash: await hashProjectPath(projectPath, norm) })
+    entries.push({ path: norm, blobHash: await hashProjectPath(projectPath, norm, opts.strict) })
   }
   const byPath = new Map(entries.map((entry) => [entry.path, entry.blobHash]))
   const all = [...byPath.entries()]
