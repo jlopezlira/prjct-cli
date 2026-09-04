@@ -24,6 +24,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'tdd',
   'sdd',
   'maxTurnsPerCycle',
+  'maxTurnsPerSession',
   'maxTokensPerCycle',
   'contextPressure',
   'delivery',

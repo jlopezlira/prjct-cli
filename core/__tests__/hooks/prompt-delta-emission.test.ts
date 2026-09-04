@@ -80,12 +80,16 @@ afterEach(async () => {
 })
 
 /** Run one prompt through the hook and return the model-visible content. */
-async function runTurn(host: HookHost, prompt: string): Promise<string> {
+async function runTurn(
+  host: HookHost,
+  prompt: string,
+  sessionId = 'delta-session'
+): Promise<string> {
   _resetGitSnapshotCacheForTests()
   const captured: string[] = []
   const afterEmits: Array<() => Promise<void>> = []
   await runPromptHook(fixture.projectPath, {
-    input: { prompt, session_id: 'delta-session' },
+    input: { prompt, session_id: sessionId },
     hookHost: host,
     sink: (chunk) => captured.push(chunk),
     detachAfterEmit: (fn) => afterEmits.push(fn),
@@ -306,6 +310,27 @@ describe('prompt guidance and delta emission across hook hosts', () => {
       detachAfterEmit: () => undefined,
     })
     expect(captured.join('')).toContain('# prjct: project state')
+  })
+
+  it('emits stable rollover thresholds once without per-turn prompt churn', async () => {
+    await configManager.writeConfig(fixture.projectPath, {
+      projectId: fixture.projectId,
+      dataPath: path.join(fixture.projectPath, '.prjct-data'),
+      maxTurnsPerSession: 5,
+    } as Parameters<typeof configManager.writeConfig>[1])
+    const sessionId = `rollover-${crypto.randomUUID()}`
+
+    await runTurn('codex', 'continue', sessionId)
+    await runTurn('codex', 'continue', sessionId)
+    await runTurn('codex', 'continue', sessionId)
+    const warning = await runTurn('codex', 'continue', sessionId)
+    const stopped = await runTurn('codex', 'continue', sessionId)
+    const unchanged = await runTurn('codex', 'continue', sessionId)
+
+    expect(warning).toContain('session rollover approaching')
+    expect(warning).toContain('80%')
+    expect(stopped).toContain('SESSION ROLLOVER REQUIRED')
+    expect(unchanged).not.toContain('SESSION ROLLOVER REQUIRED')
   })
 })
 

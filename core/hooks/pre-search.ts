@@ -24,7 +24,8 @@
 
 import { hasSymbolIndex, searchSymbols } from '../domain/symbol-graph'
 import configManager from '../infrastructure/config-manager'
-import { gateDelivery } from '../services/session-context-cache'
+import { gateDelivery, readSessionTurnCount } from '../services/session-context-cache'
+import { sessionRolloverVerdict } from '../services/session-rollover'
 import { type HookIo, runHook } from './_runner'
 import { safeTruncate } from './_shared'
 
@@ -153,16 +154,27 @@ async function decideKnowledgeFirst(
   projectPath: string,
   input: HookInput
 ): Promise<{ deny: string } | null> {
-  const started = Date.now()
   try {
     const tool = (input.tool_name ?? '').toLowerCase()
     if (tool && !/grep|glob|search/i.test(tool)) return null
 
+    const config = await configManager.readConfig(projectPath)
+    if (!config?.projectId) return null
+    const sessionId = input.session_id?.trim() || input.conversation_id?.trim() || undefined
+    const sessionTurns = await readSessionTurnCount({
+      projectId: config.projectId,
+      projectPath,
+      sessionId,
+    })
+    const rollover = sessionRolloverVerdict(config, sessionTurns)
+    if (rollover.stopped && rollover.cue) return { deny: rollover.cue }
+
     const token = extractToken(input)
     if (!token || token.length < 4) return null
 
-    const config = await configManager.readConfig(projectPath)
-    if (!config?.projectId) return null
+    // The wall-clock budget belongs only to optional knowledge recall. The
+    // deterministic rollover gate above must neither consume nor inherit it.
+    const started = Date.now()
     if (config.enforce?.knowledgeFirst === false) return null
     if (Date.now() - started > HARD_CAP_MS) return null
 

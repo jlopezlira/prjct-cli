@@ -24,8 +24,10 @@ import { loopGuardVerdict } from '../services/loop-guard'
 import {
   gateDelivery,
   markRepositoryContextDeliveredThisTurn,
+  readSessionTurnCount,
   repositoryContextDeliveredThisTurn,
 } from '../services/session-context-cache'
+import { sessionRolloverVerdict } from '../services/session-rollover'
 import { sotBindVerdict } from '../services/sot-bind'
 import {
   repoRelativeFile,
@@ -213,12 +215,21 @@ async function buildPreEditContext(
  */
 async function decideHardStop(
   projectPath: string,
+  sessionId: string | undefined,
   filePath?: string
 ): Promise<{ deny: string } | null> {
   const started = Date.now()
   try {
     const config = await configManager.readConfig(projectPath)
     if (!config?.projectId) return null
+
+    const sessionTurns = await readSessionTurnCount({
+      projectId: config.projectId,
+      projectPath,
+      sessionId,
+    })
+    const rollover = sessionRolloverVerdict(config, sessionTurns)
+    if (rollover.stopped && rollover.cue) return { deny: rollover.cue }
 
     const task = await stateStorage.getCurrentTask(config.projectId)
 
@@ -347,9 +358,10 @@ export function runPreEditHook(projectPath: string = process.cwd(), io?: HookIo)
         const secretDecision = decideSecrets(input)
         if (secretDecision) return secretDecision
         const filePaths = editFilePaths(input)
-        if (filePaths.length === 0) return decideHardStop(p)
+        const sessionId = hookSessionId(input)
+        if (filePaths.length === 0) return decideHardStop(p, sessionId)
         for (const filePath of filePaths) {
-          const hardStop = await decideHardStop(p, filePath)
+          const hardStop = await decideHardStop(p, sessionId, filePath)
           if (hardStop) return hardStop
           const sourceFirst = await decideSourceFirst(p, filePath, hookSessionId(input))
           if (sourceFirst) return sourceFirst

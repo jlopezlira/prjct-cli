@@ -315,7 +315,7 @@ Cursor uses its installed prjct hooks/router file; other agents use a native ski
 | `prjct sync` | Re-index files, git co-change, imports; refresh project analysis. |
 | `prjct agents doctor` | Show the auditable compatibility matrix for local and project agent runtimes. |
 | `prjct review-risk` | Advisory change-size + delivery-geometry signal for the branch (read-only; never gates, never splits). |
-| `prjct prime` / `prjct land` | Open / close a session: restore full work state · persist hand-off + trigger memory consolidation. |
+| `prjct prime` / `prjct land` | Open / close a session: restore full work state · persist hand-off + trigger memory consolidation. Code packs warn at 80 turns and stop project tools at 100 unless `maxTurnsPerSession` overrides the global project policy. |
 | `prjct dream` | Consolidate memory: orient / gather / consolidate / prune. |
 | `prjct ready` / `claim` / `depend` / `phases` | Multi-agent work graph: ready frontier, race-free claim, dependency edges, topological phases. |
 | `prjct crew` | Multi-subagent crew flow: leader / implementers / reviewer. |
@@ -361,7 +361,7 @@ Slots ship **empty** — the human or the agent fills them on demand.
 
 ## Hooks Adapter (opt-in) — Claude Code + Kimi Code CLI
 
-`prjct install` writes the Claude Code hooks adapter to `~/.claude/settings.json`, writes the native Kimi Code CLI hooks adapter as `[[hooks]]` entries in `~/.kimi-code/config.toml` (marked with a `# prjct-managed` comment each — TOML forbids extra entry fields, and user entries or other tools' blocks stay byte-identical), and repairs detected Codex config in `~/.codex/config.toml` (prjct MCP + TUI `status_line`). prjct never writes `AGENTS.md`, `CLAUDE.md`, `PRJCT.md`, or IDE rule files into the client repository. Most of the 13 hook subcommands inject `additionalContext` (plain stdout text under Kimi, which appends it to context); two guard: the credential guard denies tool calls that would leak secrets, and the package guard denies unknown installs under strict packs. Kimi applies hook config on the next session (or after `/reload`). Other agents use the support level shown by `prjct agents doctor`.
+`prjct install` writes the Claude Code hooks adapter to `~/.claude/settings.json`, writes the native Kimi Code CLI hooks adapter as `[[hooks]]` entries in `~/.kimi-code/config.toml` (marked with a `# prjct-managed` comment each — TOML forbids extra entry fields, and user entries or other tools' blocks stay byte-identical), and installs native Codex hooks in `~/.codex/hooks.json` plus prjct MCP and TUI status line configuration in `~/.codex/config.toml`. prjct never writes `AGENTS.md`, `CLAUDE.md`, `PRJCT.md`, or IDE rule files into the client repository. Most hook subcommands inject `additionalContext`; the credential, package, source-first, loop, and session-rollover gates can deny supported tool calls. Kimi applies hook config on the next session (or after `/reload`); Codex asks the user to trust newly installed hooks once through `/hooks`. Other agents use the support level shown by `prjct agents doctor`.
 
 | Event | Does | Kimi |
 |---|---|---|
@@ -425,9 +425,12 @@ applies every known safe repair (project setup, Context7, managed hooks/adapters
 and heavy Kimi MCP configuration), then exits non-zero if a required error is
 still present. Heavy third-party Kimi MCP entries are preserved and set to
 `enabled: false`; prjct itself is pinned to the micro tool tier. Doctor never
-deletes an integration or kills an active agent session, so host-boundary fixes
-such as reloading Kimi or starting a fresh Codex session remain explicit
-`ACTION REQUIRED` errors until they are actually resolved.
+deletes an integration or kills an active agent session. Code packs instead
+prevent marathons prospectively: the prompt hook emits one rollover warning at
+80 turns and project Edit/Bash/Search hooks stop at 100. Run `prjct land --md`,
+start a fresh host session without resuming the old one, then run
+`prjct prime --md`. Set global project `maxTurnsPerSession` to override the
+limit (`0` disables it); normal turns emit no extra bytes.
 
 ## Memory
 
@@ -645,12 +648,13 @@ non-interactive/non-TTY, so prjct-cli emits the same static, prompt-free status
 line as any agent; add `--md` for fully markdown-structured output.
 
 **What does Codex get from prjct?**
-Three global surfaces, all installed/healed automatically: a compact skill at
+Four global surfaces, all installed/healed automatically: a compact skill at
 `~/.codex/skills/prjct/SKILL.md` (kept under Codex's ~1KB skill cap), the
 prjct MCP server wired into `~/.codex/config.toml` (`prjct_*` tools), and a
-Codex TUI `status_line` in that same config unless the user already set one.
-Codex has no lifecycle hooks, so the skill + MCP are its session-start context
-and live tool surface. prjct never writes an `AGENTS.md` into the project.
+Codex TUI `status_line` in that same config unless the user already set one,
+plus native lifecycle/tool hooks in `~/.codex/hooks.json`. The hooks require a
+one-time trust decision through Codex `/hooks`. prjct never writes an
+`AGENTS.md` into the project.
 
 **How do I quickly find the local `.prjct/` directory?**
 It's in your **project repo root** (created by `prjct init` / first `prjct`
