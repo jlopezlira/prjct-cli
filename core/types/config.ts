@@ -106,6 +106,13 @@ export interface LocalConfig {
    */
   maxTurnsPerCycle?: number
   /**
+   * Hard boundary for one host conversation across any number of work cycles.
+   * Warns once at 80%, then stops project tools at the limit until the user
+   * lands and starts a fresh (non-resumed) session. Code packs default to
+   * 100; an explicit zero disables that pack default.
+   */
+  maxTurnsPerSession?: number
+  /**
    * Soft token budget per work cycle. When set, the per-turn state block
    * warns at 80% and calls for a split/check-in at 100% — measurement-backed
    * loop discipline (tokens, not just turns). Advisory: never blocks edits.

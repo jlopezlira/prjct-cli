@@ -305,6 +305,7 @@ describe('global project settings authority', () => {
     await configManager.writeConfig(projectPath, {
       ...(await configManager.readConfig(projectPath))!,
       qa: { mode: 'strict' },
+      maxTurnsPerSession: 100,
     })
 
     expect(await buildSessionContext(projectPath)).toBe(before)

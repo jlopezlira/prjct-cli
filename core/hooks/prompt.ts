@@ -44,11 +44,13 @@ import {
 } from '../services/private-skill-router'
 import { detectRepositoryWorkflowState } from '../services/repository-workflow-state'
 import {
+  advanceSessionTurn,
   beginPromptTurn,
   gateDelivery,
   markRepositoryContextDeliveredThisTurn,
   normalizeStateForMaterialChange,
 } from '../services/session-context-cache'
+import { sessionRolloverLimit, sessionRolloverVerdict } from '../services/session-rollover'
 import { buildTaskHarness } from '../services/task-harness'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
@@ -147,6 +149,8 @@ interface HookInput {
 export interface StateEvent {
   key: string
   text: string
+  /** Lifecycle events reserve the first lane under the prompt budget. */
+  required?: boolean
 }
 
 export interface ProjectStateParts {
@@ -174,7 +178,7 @@ export interface ProjectStateParts {
 export async function buildProjectStateParts(
   projectPath: string,
   preloaded?: LocalConfig | null,
-  opts: { skipHandoff?: boolean } = {}
+  opts: { skipHandoff?: boolean; sessionTurns?: number | null } = {}
 ): Promise<ProjectStateParts | null> {
   const config = preloaded !== undefined ? preloaded : await configManager.readConfig(projectPath)
   if (!config?.projectId) return null
@@ -186,6 +190,14 @@ export async function buildProjectStateParts(
 
   const lines: string[] = ['# prjct: project state']
   const events: StateEvent[] = []
+  const rollover = sessionRolloverVerdict(config, opts.sessionTurns)
+  if (rollover.cue) {
+    events.push({
+      key: `session-rollover:${rollover.level}`,
+      text: rollover.cue,
+      required: true,
+    })
+  }
   const scope = { id: null as string | null, description: null as string | null }
   // Active work — most useful single fact. Resolved PER worktree so a parallel
   // agent sees its own work, not a sibling's. Falls back to singular outside a
@@ -986,6 +998,16 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         if (!config?.projectId) return null
         const sessionId = input.session_id ?? input.conversation_id
         const deliverySessionId = sessionId ?? 'sessionless'
+        const rolloverLimit = sessionRolloverLimit(config)
+        const sessionTurns =
+          rolloverLimit > 0
+            ? await advanceSessionTurn({
+                projectId: config.projectId,
+                projectPath: p,
+                sessionId,
+                maxCount: rolloverLimit,
+              })
+            : null
         const promptTurnId = await beginPromptTurn({
           projectId: config.projectId,
           projectPath: p,
@@ -1013,6 +1035,7 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
         // block flows through the delivery gate; a silent turn emits nothing.
         const parts = await buildProjectStateParts(p, config, {
           skipHandoff: Boolean(kimiInjection),
+          sessionTurns,
         })
         const sessionContext = kimiInjection
           ? kimiInjection === 'reanchor'
@@ -1067,9 +1090,16 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           // it cannot loop. Stamping truncated-away content would suppress
           // it for the whole session without the model ever seeing it.
           const standingFresh = Boolean(parts?.standing) && standingGate?.suppressed === false
+          const requiredEvents = freshEvents.filter((event) => event.required)
+          const optionalEvents = freshEvents.filter((event) => !event.required)
           const stateCandidates: Array<{ key?: string; text: string; standing: boolean }> = [
+            ...requiredEvents.map((event) => ({
+              key: `event:${event.key}`,
+              text: event.text,
+              standing: false,
+            })),
             ...(standingFresh && parts?.standing ? [{ text: parts.standing, standing: true }] : []),
-            ...freshEvents.map((event) => ({
+            ...optionalEvents.map((event) => ({
               key: `event:${event.key}`,
               text: event.text,
               standing: false,

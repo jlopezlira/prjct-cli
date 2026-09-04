@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.20.0] - 2026-09-04
+
+### Added
+- session rollover guard
+
 ## [4.19.0] - 2026-09-04
 
 ### Added

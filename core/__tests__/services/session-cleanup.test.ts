@@ -90,6 +90,7 @@ describe('runSessionCleanup', () => {
     const staleAfterEmit = path.join(runDir, 'prompt-afteremit-staleproj-deadbeef.json')
     const staleStop = path.join(runDir, 'stop-heavy-staleproj.stamp')
     const staleKimi = path.join(runDir, 'kimi-session-staleproj-nosession-kimi.pending')
+    const staleSessionTurns = path.join(runDir, 'session-turns-staleproj-deadbeef.count')
     const freshStamp = path.join(runDir, 'prompt-state-freshproj-alive.hash')
     const notAStamp = path.join(runDir, 'daemon.pid')
     for (const file of [
@@ -98,23 +99,32 @@ describe('runSessionCleanup', () => {
       staleAfterEmit,
       staleStop,
       staleKimi,
+      staleSessionTurns,
       freshStamp,
       notAStamp,
     ]) {
       await fs.writeFile(file, 'x')
     }
     const old = new Date(Date.now() - 48 * 60 * 60 * 1000)
-    for (const file of [staleStamp, staleGit, staleAfterEmit, staleStop, staleKimi]) {
+    for (const file of [
+      staleStamp,
+      staleGit,
+      staleAfterEmit,
+      staleStop,
+      staleKimi,
+      staleSessionTurns,
+    ]) {
       await fs.utimes(file, old, old)
     }
 
     const r = await runSessionCleanup(fixture.projectId)
-    expect(r.stampsRemoved).toBe(5)
+    expect(r.stampsRemoved).toBe(6)
     const remaining = await fs.readdir(runDir)
     expect(remaining).toContain('prompt-state-freshproj-alive.hash')
     expect(remaining).toContain('daemon.pid')
     expect(remaining).not.toContain('prompt-state-staleproj-deadbeef.hash')
     expect(remaining).not.toContain('kimi-session-staleproj-nosession-kimi.pending')
+    expect(remaining).not.toContain('session-turns-staleproj-deadbeef.count')
   })
 
   it('archives inbox entries older than the threshold', async () => {

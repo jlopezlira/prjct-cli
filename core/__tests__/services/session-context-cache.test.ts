@@ -8,8 +8,10 @@
 import { beforeEach, describe, expect, it } from 'bun:test'
 import {
   _resetDeliveredLedgerForTests,
+  advanceSessionTurn,
   condenseDelivered,
   normalizeStateForMaterialChange,
+  readSessionTurnCount,
 } from '../../services/session-context-cache'
 
 beforeEach(() => {
@@ -90,5 +92,43 @@ describe('normalizeStateForMaterialChange', () => {
     )
     const withCue = `${base}\n  ↳ Turn 10 on this cycle — still advancing the goal?`
     expect(normalizeStateForMaterialChange(base)).not.toBe(normalizeStateForMaterialChange(withCue))
+  })
+})
+
+describe('host session turn counter', () => {
+  it('increments in bounded state and resets for a new session identity', async () => {
+    const projectId = `session-count-${crypto.randomUUID()}`
+    const projectPath = `/tmp/${projectId}`
+
+    expect(await advanceSessionTurn({ projectId, projectPath, sessionId: 'session-a' })).toBe(1)
+    expect(await advanceSessionTurn({ projectId, projectPath, sessionId: 'session-a' })).toBe(2)
+    expect(await readSessionTurnCount({ projectId, projectPath, sessionId: 'session-a' })).toBe(2)
+    expect(await advanceSessionTurn({ projectId, projectPath, sessionId: 'session-b' })).toBe(1)
+    expect(await readSessionTurnCount({ projectId, projectPath, sessionId: undefined })).toBeNull()
+  })
+
+  it('does not lose concurrent prompt increments', async () => {
+    const projectId = `session-concurrent-${crypto.randomUUID()}`
+    const projectPath = `/tmp/${projectId}`
+    const input = { projectId, projectPath, sessionId: 'shared-session' }
+
+    await Promise.all(Array.from({ length: 20 }, () => advanceSessionTurn(input)))
+
+    expect(await readSessionTurnCount(input)).toBe(20)
+  })
+
+  it('saturates storage at the configured limit', async () => {
+    const projectId = `session-saturated-${crypto.randomUUID()}`
+    const input = {
+      projectId,
+      projectPath: `/tmp/${projectId}`,
+      sessionId: 'stopped-session',
+      maxCount: 2,
+    }
+
+    await Promise.all(Array.from({ length: 20 }, () => advanceSessionTurn(input)))
+
+    expect(await readSessionTurnCount(input)).toBe(2)
+    expect(await advanceSessionTurn(input)).toBe(2)
   })
 })

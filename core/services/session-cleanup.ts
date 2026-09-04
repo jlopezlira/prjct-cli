@@ -185,6 +185,7 @@ const STAMP_PREFIXES = [
   'scc-',
   'stop-heavy-',
   'kimi-session-',
+  'session-turns-',
 ]
 
 async function sweepRunDirStamps(): Promise<number> {

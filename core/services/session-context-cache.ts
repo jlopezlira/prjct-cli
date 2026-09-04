@@ -216,6 +216,7 @@ const GATE_STAMP_PREFIX = 'scc-'
 const GATE_L1_MAX = 256
 const GATE_KEYED_MAX_ENTRIES = 200
 const TURN_CONTEXT_PREFIX = 'turn-context-'
+const SESSION_TURN_PREFIX = 'session-turns-'
 
 /** In-process fast path over the disk stamps (warm daemon). */
 const gateL1 = new Map<string, string>()
@@ -234,6 +235,60 @@ interface TurnContextStamp {
 function turnContextPath(projectId: string, projectPath: string, sessionId: string): string {
   const key = sessionStampKey(projectId, projectPath, sessionId)
   return path.join(DAEMON_PATHS.runDir(), `${TURN_CONTEXT_PREFIX}${key}.json`)
+}
+
+function sessionTurnPath(projectId: string, projectPath: string, sessionId: string): string {
+  const key = sessionStampKey(projectId, projectPath, sessionId)
+  return path.join(DAEMON_PATHS.runDir(), `${SESSION_TURN_PREFIX}${key}.count`)
+}
+
+/**
+ * Count one host prompt without parsing its ever-growing transcript.
+ *
+ * Each prompt appends one byte with O_APPEND, so concurrent daemon requests
+ * cannot overwrite each other. `maxCount` saturates the file at the configured
+ * rollover limit, making storage constant-size even when a host ignores the
+ * stop. The stamp is swept after 24h of inactivity.
+ */
+export async function advanceSessionTurn(input: {
+  projectId: string
+  projectPath: string
+  sessionId: string | undefined
+  maxCount?: number
+}): Promise<number | null> {
+  if (!input.sessionId) return null
+  const target = sessionTurnPath(input.projectId, input.projectPath, input.sessionId)
+  try {
+    await fs.mkdir(DAEMON_PATHS.runDir(), { recursive: true })
+    if (input.maxCount && input.maxCount > 0) {
+      const current = await fs.stat(target).catch(() => null)
+      if (current && current.size >= input.maxCount) return input.maxCount
+    }
+    await fs.appendFile(target, '1')
+    const size = (await fs.stat(target)).size
+    if (input.maxCount && input.maxCount > 0 && size > input.maxCount) {
+      await fs.truncate(target, input.maxCount)
+      return input.maxCount
+    }
+    return size
+  } catch {
+    return null
+  }
+}
+
+/** Read-only seam shared by project tool gates. Missing identity/state fails open. */
+export async function readSessionTurnCount(input: {
+  projectId: string
+  projectPath: string
+  sessionId: string | undefined
+}): Promise<number | null> {
+  if (!input.sessionId) return null
+  try {
+    return (await fs.stat(sessionTurnPath(input.projectId, input.projectPath, input.sessionId)))
+      .size
+  } catch {
+    return null
+  }
 }
 
 /** Start a new host prompt turn, clearing cross-hook delivery for that turn. */

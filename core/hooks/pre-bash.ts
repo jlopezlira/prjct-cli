@@ -8,7 +8,8 @@
 
 import configManager from '../infrastructure/config-manager'
 import { broadProcessTerminationDenial } from '../services/instruction-guidance'
-import { gateDelivery } from '../services/session-context-cache'
+import { gateDelivery, readSessionTurnCount } from '../services/session-context-cache'
+import { isSessionRolloverSafeCommand, sessionRolloverVerdict } from '../services/session-rollover'
 import { type HookIo, runHook } from './_runner'
 import { buildPreCommitContext, type CommitHookInput, isCommitInput } from './pre-commit'
 import {
@@ -18,7 +19,9 @@ import {
 } from './pre-package'
 import { decideSecrets, type SecretHookInput } from './pre-secrets'
 
-type BashHookInput = SecretHookInput & CommitHookInput & PackageHookInput
+type BashHookInput = SecretHookInput &
+  CommitHookInput &
+  PackageHookInput & { session_id?: string; conversation_id?: string }
 
 const packageEvaluationCache = new WeakMap<object, Promise<PrePackageEvaluation | null>>()
 
@@ -38,6 +41,26 @@ export function decideBroadProcessTermination(input: BashHookInput): { deny: str
   const command = extractCommand(input)
   const denial = command ? broadProcessTerminationDenial(command) : null
   return denial ? { deny: denial } : null
+}
+
+async function decideSessionRollover(
+  projectPath: string,
+  input: BashHookInput
+): Promise<{ deny: string } | null> {
+  const sessionId = input.session_id?.trim() || input.conversation_id?.trim() || undefined
+  if (!sessionId) return null
+  const config = await configManager.readConfig(projectPath)
+  if (!config?.projectId) return null
+  const turns = await readSessionTurnCount({
+    projectId: config.projectId,
+    projectPath,
+    sessionId,
+  })
+  const verdict = sessionRolloverVerdict(config, turns)
+  if (!verdict.stopped || !verdict.cue || isSessionRolloverSafeCommand(extractCommand(input))) {
+    return null
+  }
+  return { deny: verdict.cue }
 }
 
 function evaluatePackageOnce(
@@ -61,6 +84,8 @@ export function runPreBashHook(projectPath: string = process.cwd(), io?: HookIo)
         try {
           const secretDecision = decideSecrets(input)
           if (secretDecision) return secretDecision
+          const rolloverDecision = await decideSessionRollover(p, input)
+          if (rolloverDecision) return rolloverDecision
           const processDecision = decideBroadProcessTermination(input)
           if (processDecision) return processDecision
           const evaluation = await evaluatePackageOnce(p, input)
