@@ -272,6 +272,44 @@ describe('dot', () => {
 })
 
 describe('embeddings — backfill + semanticSearch', () => {
+  it('does not embed a query when its model has no indexed candidates', async () => {
+    embeddingService.store(fixture.projectId, 'mem_other', [1, 0], 'other-model', NOW)
+    const calls: string[][] = []
+    const hits = await embeddingService.semanticSearch(
+      fixture.projectId,
+      'query',
+      enabledConfig,
+      10,
+      {
+        model: 'empty-model',
+        embed: async (texts) => {
+          calls.push(texts)
+          return [[1, 0]]
+        },
+      }
+    )
+    expect(hits).toEqual([])
+    expect(calls).toEqual([])
+  })
+
+  it('fills the result budget with eligible entries beyond the first ranked batch', async () => {
+    for (const index of Array.from({ length: 12 }, (_, n) => n)) {
+      const id = write('gotcha', `noise ${index}`)
+      embeddingService.store(fixture.projectId, id, [1, 0], 'fake-1', NOW)
+    }
+    const target = write('decision', 'eligible')
+    embeddingService.store(fixture.projectId, target, [0.8, 0.2], 'fake-1', NOW)
+    const hits = await embeddingService.semanticSearch(
+      fixture.projectId,
+      'query',
+      enabledConfig,
+      1,
+      new FakeProvider({ query: [1, 0] }),
+      (entry) => entry.type === 'decision'
+    )
+    expect(hits.map((entry) => entry.id)).toEqual([target])
+  })
+
   it('ranks the nearest entry first and round-trips the stored vector', async () => {
     const a = write('decision', 'alpha')
     write('decision', 'beta')

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.23.0] - 2026-09-04
+
+### Added
+- Prevent native mutation replay and eliminate wasted retrieval work, round 3
+
 ## [4.22.0] - 2026-09-04
 
 ### Added
