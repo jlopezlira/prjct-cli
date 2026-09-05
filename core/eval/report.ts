@@ -3,12 +3,9 @@
  * `prjct harness retrieval` verb, the `scripts/eval-retrieval.mjs` script, and
  * the CI baseline test. Scores the retrievers prjct actually serves (BM25 over
  * the real FTS5 index; the local hashing embedder) over a project's own
- * author-declared ledger pairs, with a leak-free temporal split. No LLM, no API
- * tokens.
- *
- * Phase 0 scores the LEGS. Scoring the blended `enrichedRecall` pipeline needs a
- * side-effect-free recall (it records fetches today) — that lands in Phase 2
- * alongside the RRF fusion this baseline exists to gate.
+ * distinct queries. The served pipeline disables attribution; comparison gates
+ * use explicit references only. Date cohorts rank the current frozen corpus,
+ * not a historical replay. A configured HTTP embedder may consume provider tokens.
  */
 
 import configManager from '../infrastructure/config-manager'
@@ -56,9 +53,9 @@ export interface RetrievalReport {
   cutoff: string
   trainSize: number
   evalSize: number
-  /** All labeled pairs — more signal at low volume. */
+  /** All distinct explicit-reference queries; proxies never qualify a swap. */
   all: RetrievalLeg | null
-  /** Held-out newest 20% — the honest, leak-free number. */
+  /** Newest 20% of explicit queries against the current frozen corpus. */
   heldOut: RetrievalLeg | null
 }
 
@@ -88,7 +85,8 @@ export async function buildRetrievalReport(
   projectPath = process.cwd()
 ): Promise<RetrievalReport> {
   const { entries, pairs } = exportLedgerPairs(projectId)
-  const split = temporalSplit(pairs, 0.2)
+  const explicitPairs = pairs.filter((pair) => pair.source !== 'ship-surfaced')
+  const split = temporalSplit(explicitPairs, 0.2)
   const labelSources = pairs.reduce<Record<string, number>>((acc, pair) => {
     const source = pair.source ?? 'reference-edge'
     acc[source] = (acc[source] ?? 0) + 1
@@ -117,7 +115,7 @@ export async function buildRetrievalReport(
       topic: pair.queryText,
       limit: k,
       recordAttribution: false,
-      excludeIds: [pair.anchorId],
+      excludeIds: [pair.anchorId, ...(pair.excludeIds ?? [])],
       allowedIds,
       nowMs,
       configSnapshot: config,
@@ -154,7 +152,7 @@ export async function buildRetrievalReport(
     cutoff: split.cutoff,
     trainSize: split.train.length,
     evalSize: split.evalSet.length,
-    all: await scoreLeg(projectId, entries, pairs, k, provider),
+    all: await scoreLeg(projectId, entries, explicitPairs, k, provider),
     heldOut: await scoreLeg(projectId, entries, split.evalSet, k, provider),
     snapshotHash: hashBlobContent(before),
     servedCost:
@@ -211,7 +209,7 @@ export function renderRetrievalReportMd(report: RetrievalReport): string {
     Object.entries(report.labelSources)
       .map(([source, n]) => `${source}=${n}`)
       .join(', ') || 'none'
-  const rows = [['ALL', report.all] as const, ['held-out', report.heldOut] as const]
+  const rows = [['explicit', report.all] as const, ['held-out explicit', report.heldOut] as const]
     .filter(([, leg]) => leg !== null)
     .flatMap(([label, leg]) => {
       const l = leg as RetrievalLeg
@@ -226,11 +224,13 @@ export function renderRetrievalReportMd(report: RetrievalReport): string {
     `## Retrieval baseline — project ${report.projectId}`,
     '',
     `- corpus (model-worthy): ${report.corpusSize} entries`,
-    `- labeled pairs: ${report.pairCount} (${sources})`,
-    `- temporal split @ ${report.cutoff || 'n/a'} — train ${report.trainSize} / held-out ${report.evalSize}`,
+    `- distinct labeled queries: ${report.pairCount} (${sources})`,
+    `- explicit date split @ ${report.cutoff || 'n/a'} — train ${report.trainSize} / held-out ${report.evalSize}`,
+    '- Date cohorts use the current frozen corpus; this is not a historical replay.',
     `- served retrieval cost: ${report.servedCost === 'local' ? 'local CPU + SQLite' : 'configured embedding provider; provider usage is not measured here'}`,
     `- frozen inputs: ${report.snapshotHash}; evaluation attribution disabled`,
     '- Ship-surfaced labels are proxy relevance, not explicit usage evidence.',
+    '- Comparison gates use distinct explicit-reference queries only; proxy counts cannot satisfy their sample threshold.',
     '',
     `| served pipeline label set | queries | Recall@${report.k} | MRR | nDCG |`,
     '|---|---:|---:|---:|---:|',
@@ -241,14 +241,16 @@ export function renderRetrievalReportMd(report: RetrievalReport): string {
     '',
     report.pairCount === 0
       ? '_No labeled pairs yet — reference an older `mem_N` when you capture, or ship work that surfaces memory._'
-      : [
-          `| set | retriever | Recall@${report.k} | MRR | nDCG@${report.k} |`,
-          '|---|---|---|---|---|',
-          ...rows,
-          '',
-          `Swap gate (hashing vs BM25): ${gate ? gateLine(gate) : 'n/a'}`,
-          `**Fusion gate (RRF vs BM25): ${gate ? gateLine((report.heldOut ?? report.all)?.fusionGate ?? gate) : 'n/a'}**`,
-        ].join('\n'),
+      : !report.all
+        ? '_No explicit-reference queries; proxy diagnostics cannot qualify a comparison gate._'
+        : [
+            `| set | retriever | Recall@${report.k} | MRR | nDCG@${report.k} |`,
+            '|---|---|---|---|---|',
+            ...rows,
+            '',
+            `Swap gate (hashing vs BM25): ${gate ? gateLine(gate) : 'n/a'}`,
+            `**Fusion gate (RRF vs BM25): ${gate ? gateLine((report.heldOut ?? report.all)?.fusionGate ?? gate) : 'n/a'}**`,
+          ].join('\n'),
     '',
   ].join('\n')
 }
@@ -259,11 +261,12 @@ export function renderRetrievalReportText(report: RetrievalReport): string {
   const lines = [
     `Retrieval baseline · project ${report.projectId}`,
     `  served explicit n=${report.served.explicit.queries}; proxy n=${report.served.proxy.queries}; snapshot=${report.snapshotHash}`,
-    `  corpus ${report.corpusSize} · pairs ${report.pairCount} · split @ ${report.cutoff || 'n/a'} (train ${report.trainSize}, held-out ${report.evalSize})`,
+    `  corpus ${report.corpusSize} · distinct queries ${report.pairCount} · explicit split @ ${report.cutoff || 'n/a'} (train ${report.trainSize}, held-out ${report.evalSize})`,
+    '  Comparison gates exclude proxies. Date cohorts use the current frozen corpus, not historical replay.',
   ]
   for (const [label, leg] of [
-    ['ALL', report.all],
-    ['held-out', report.heldOut],
+    ['explicit', report.all],
+    ['held-out explicit', report.heldOut],
   ] as const) {
     if (!leg) continue
     lines.push(`  ${label}`)

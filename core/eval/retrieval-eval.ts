@@ -18,10 +18,10 @@ import { type AggregateMetrics, aggregate } from './retrieval-metrics'
 function rankByVector(
   queryVec: number[],
   corpusVecs: Array<{ id: string; vec: number[] }>,
-  excludeId: string
+  excludeIds: ReadonlySet<string>
 ): string[] {
   return corpusVecs
-    .filter((c) => c.id !== excludeId)
+    .filter((c) => !excludeIds.has(c.id))
     .map((c) => ({ id: c.id, score: cosineSimilarity(queryVec, c.vec) }))
     .sort((a, b) => b.score - a.score)
     .map((c) => c.id)
@@ -46,7 +46,7 @@ export async function evalProvider(
   for (const p of pairs) {
     const [qv] = await provider.embed([p.queryText])
     if (!qv) continue
-    const ranked = rankByVector(qv, corpusVecs, p.anchorId)
+    const ranked = rankByVector(qv, corpusVecs, new Set([p.anchorId, ...(p.excludeIds ?? [])]))
     cases.push({ ranked, relevant: new Set(p.positives) })
   }
   return aggregate(cases, k)
@@ -62,7 +62,7 @@ function bm25Ranking(projectId: string, pair: LabeledPair): string[] {
     return projectMemory
       .searchFts(projectId, keywords, 100)
       .map((entry) => entry.id)
-      .filter((id) => id !== pair.anchorId)
+      .filter((id) => id !== pair.anchorId && !pair.excludeIds?.includes(id))
   } catch {
     return []
   }
@@ -102,7 +102,9 @@ export async function evalFused(
   const cases: Array<{ ranked: string[]; relevant: Set<string> }> = []
   for (const p of pairs) {
     const [qv] = await provider.embed([p.queryText])
-    const semantic = qv ? rankByVector(qv, corpusVecs, p.anchorId) : []
+    const semantic = qv
+      ? rankByVector(qv, corpusVecs, new Set([p.anchorId, ...(p.excludeIds ?? [])]))
+      : []
     // Mirror production: the semantic leg contributes a bounded top-N, the
     // lexical leg its full result set.
     cases.push({
