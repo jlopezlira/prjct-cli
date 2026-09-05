@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { buildRetrievalReport } from '../../eval/report'
+import { projectMemory } from '../../memory/project-memory'
 import prjctDb from '../../storage/database'
 import { patchPathManager, restorePathManager } from '../_setup/path-manager-mock'
 
@@ -30,6 +31,40 @@ function remember(content: string): string {
 }
 
 describe('retrieval baseline report', () => {
+  it('executes one query for multiple proxy positives and excludes proxies from comparison gates', async () => {
+    const targets = [1, 2, 3].map((i) => remember(`Zebracache callback policy detail ${i}`))
+    for (const target of targets) {
+      prjctDb.run(
+        fixture.projectId,
+        'INSERT INTO retrieval_eval_labels(query_text,positive_id,source,created_at) VALUES (?,?,?,?)',
+        'Zebracache callback policy',
+        target,
+        'ship-surfaced',
+        '2026-01-01T00:00:00.000Z'
+      )
+    }
+    prjctDb.run(
+      fixture.projectId,
+      'INSERT INTO retrieval_eval_labels(query_text,positive_id,source,created_at) VALUES (?,?,?,?)',
+      'Zebracache callback policy',
+      targets[0],
+      'untrusted-import',
+      '2026-01-01T00:00:00.000Z'
+    )
+    const search = spyOn(projectMemory, 'searchFts')
+    try {
+      const report = await buildRetrievalReport(fixture.projectId, 3)
+      expect(report.pairCount).toBe(1)
+      expect(report.served.proxy.queries).toBe(1)
+      expect(report.served.proxy.recallAtK).toBe(1)
+      expect(report.served.explicit.queries).toBe(0)
+      expect(report.all).toBeNull()
+      expect(report.heldOut).toBeNull()
+      expect(search).toHaveBeenCalledTimes(1)
+    } finally {
+      search.mockRestore()
+    }
+  })
   it('BM25 retrieves an author-cited entry for the citing query (committed floor)', async () => {
     // Older entry with distinctive tokens — the relevant target.
     const target = remember(

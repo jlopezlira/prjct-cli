@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   exportLedgerPairs,
+  groupQueryPairs,
   type LabeledPair,
   temporalSplit,
   toQueryText,
@@ -53,6 +54,31 @@ describe('toQueryText', () => {
 })
 
 describe('temporalSplit', () => {
+  it('groups repeated queries with all positives and prevents citing-anchor leakage', () => {
+    const grouped = groupQueryPairs([
+      {
+        ...pair('anchor-new', '2026-01-05'),
+        queryText: 'same query',
+        positives: ['target-a', 'anchor-old'],
+      },
+      { ...pair('anchor-old', '2026-01-01'), queryText: 'same  query', positives: ['target-b'] },
+      {
+        ...pair('proxy', '2026-01-06'),
+        queryText: 'same query',
+        source: 'ship-surfaced',
+        positives: ['target-c'],
+      },
+    ])
+    expect(grouped).toHaveLength(2)
+    expect(grouped[0]).toMatchObject({
+      anchorId: 'anchor-old',
+      anchorDate: '2026-01-01',
+      positives: ['target-a', 'target-b'],
+      excludeIds: ['anchor-new', 'anchor-old'],
+    })
+    expect(grouped[1]?.source).toBe('ship-surfaced')
+    expect(groupQueryPairs([{ ...pair('self', '2026-01-01'), positives: ['self'] }])).toEqual([])
+  })
   it('keeps the newest pairs in eval and older pairs in train', () => {
     const split = temporalSplit(
       [

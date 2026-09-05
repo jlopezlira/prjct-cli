@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.22.0] - 2026-09-04
+
+### Added
+- Deduplicate retrieval evaluation queries and qualify gates with explicit evidence (round 2 of 3)
+
 ## [4.21.0] - 2026-09-04
 
 ### Added

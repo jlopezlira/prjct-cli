@@ -32,11 +32,13 @@ export function toQueryText(content: string): string {
 export interface LabeledPair {
   /** The citing (newer) entry — the query. */
   anchorId: string
+  /** Every citing entry represented by this distinct query; none is a candidate. */
+  excludeIds?: string[]
   /** Anchor content with `mem_N` tokens stripped — what we actually search. */
   queryText: string
   /** Cited (older) entries that exist in the corpus — the relevant set. */
   positives: string[]
-  /** Anchor capture time (ISO) — the axis for a leak-free temporal split. */
+  /** First capture time (ISO) — defines query date cohorts. */
   anchorDate: string
   /** Where the supervision came from. Defaults to explicit author references. */
   source?: 'reference-edge' | 'ship-surfaced'
@@ -81,7 +83,30 @@ export function exportLedgerPairs(projectId: string, poolLimit = 100_000): Ledge
 
   for (const p of exportStoredEvalPairs(projectId, byId)) pairs.push(p)
 
-  return { entries: all, pairs }
+  return { entries: all, pairs: groupQueryPairs(pairs) }
+}
+
+/** A query with several positives is one case, never several independent samples. */
+export function groupQueryPairs(pairs: LabeledPair[]): LabeledPair[] {
+  const groups = new Map<string, LabeledPair[]>()
+  for (const pair of pairs) {
+    const query = toQueryText(pair.queryText)
+    if (!query) continue
+    const key = JSON.stringify([pair.source ?? 'reference-edge', query])
+    const group = groups.get(key) ?? []
+    group.push({ ...pair, queryText: query })
+    groups.set(key, group)
+  }
+  return [...groups.values()].flatMap((group) => {
+    const ordered = [...group].sort(
+      (a, b) => a.anchorDate.localeCompare(b.anchorDate) || a.anchorId.localeCompare(b.anchorId)
+    )
+    const excluded = new Set(ordered.flatMap((pair) => [pair.anchorId, ...(pair.excludeIds ?? [])]))
+    const positives = [...new Set(ordered.flatMap((pair) => pair.positives))]
+      .filter((id) => !excluded.has(id))
+      .sort()
+    return positives.length ? [{ ...ordered[0]!, positives, excludeIds: [...excluded].sort() }] : []
+  })
 }
 
 interface EvalLabelRow {
@@ -112,6 +137,7 @@ function exportStoredEvalPairs(
   const pairs: LabeledPair[] = []
   const seen = new Set<string>()
   for (const row2 of rows) {
+    if (row2.source !== 'reference-edge' && row2.source !== 'ship-surfaced') continue
     const queryText = toQueryText(row2.query_text)
     const target = byId.get(row2.positive_id)
     if (!queryText || !target || TEST_NOISE_RE.test(target.content)) continue
@@ -137,8 +163,8 @@ export interface TemporalSplit {
 
 /**
  * Split pairs by anchor date so eval anchors are strictly NEWER than train —
- * the only honest split when the ledger is both the label source and the thing
- * under test. `evalFraction` is the share of the newest pairs held out.
+ * a date cohort rather than a historical corpus replay. `evalFraction` is the
+ * share of the newest distinct queries held out.
  */
 export function temporalSplit(pairs: LabeledPair[], evalFraction = 0.2): TemporalSplit {
   const sorted = [...pairs].sort((a, b) => a.anchorDate.localeCompare(b.anchorDate))
