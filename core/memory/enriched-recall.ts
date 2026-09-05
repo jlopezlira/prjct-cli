@@ -67,7 +67,11 @@ export async function enrichedRecall(
     ? (() => {
         const keywords = topic.split(/\s+/).filter(Boolean)
         try {
-          const fts = projectMemory.searchFts(projectId, keywords, limit)
+          const fts = projectMemory.searchFts(projectId, keywords, limit, {
+            types,
+            tags,
+            accept: eligible,
+          })
           return fts.filter(eligible)
         } catch {
           return []
@@ -105,7 +109,14 @@ export async function enrichedRecall(
               ? opts.configSnapshot
               : await configManager.readConfig(projectPath)
           if (config && embeddingService.isEnabled(config)) {
-            const semantic = await embeddingService.semanticSearch(projectId, topic, config, 10)
+            const semantic = await embeddingService.semanticSearch(
+              projectId,
+              topic,
+              config,
+              10,
+              undefined,
+              eligible
+            )
             const semanticEligible = semantic.filter(eligible)
             if (semanticEligible.length > 0) {
               const byId = new Map(backfilledEntries.map((entry) => [entry.id, entry]))
@@ -149,7 +160,7 @@ export async function enrichedRecall(
   // context instead of dangling `mem_N` pointers the agent must chase.
   const linked =
     opts.expandLinks !== false && rerankedEntries.length > 0
-      ? projectMemory.expandWithLinks(projectId, rerankedEntries, 5)
+      ? projectMemory.expandWithLinks(projectId, rerankedEntries, 5, eligible)
       : []
   const entries = [
     ...new Map(

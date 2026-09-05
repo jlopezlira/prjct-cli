@@ -538,18 +538,12 @@ export const embeddingService = {
     query: string,
     config: LocalConfig,
     limit = 10,
-    provider?: EmbeddingProvider
+    provider?: EmbeddingProvider,
+    accept?: (entry: MemoryEntry) => boolean
   ): Promise<MemoryEntry[]> {
     const p = provider ?? resolveActiveProvider(config)
-    if (!query.trim()) return []
-    const qv = await (async (): Promise<number[] | undefined> => {
-      try {
-        return (await p.embed([query]))[0]
-      } catch {
-        return undefined
-      }
-    })()
-    if (!qv || qv.length === 0) return []
+    if (!query.trim() || !Number.isFinite(limit) || limit < 1) return []
+    const resultLimit = Math.min(Math.floor(limit), SEMANTIC_SCAN_MAX_ROWS)
 
     const rows = (() => {
       try {
@@ -564,7 +558,15 @@ export const embeddingService = {
         return null
       }
     })()
-    if (!rows) return []
+    if (!rows?.length) return []
+    const qv = await (async (): Promise<number[] | undefined> => {
+      try {
+        return (await p.embed([query]))[0]
+      } catch {
+        return undefined
+      }
+    })()
+    if (!qv || qv.length === 0) return []
 
     // Stored norms (migration 28) turn per-row cosine into a dot product +
     // one multiply; rows lacking a norm (edge: written mid-migration) fall
@@ -578,12 +580,19 @@ export const embeddingService = {
         return { id: r.memory_id, score: denom === 0 ? 0 : dot(qv, v) / denom }
       })
       .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
 
-    // One batched resolve in rank order (was: one getById per winner).
-    return projectMemory.getByIds(
-      projectId,
-      ranked.map((r) => r.id)
-    )
+    // Resolve bounded batches in rank order until eligible results fill the budget.
+    const hits: MemoryEntry[] = []
+    const batchSize = Math.max(10, resultLimit)
+    const cursor = { offset: 0 }
+    while (cursor.offset < ranked.length && hits.length < resultLimit) {
+      const entries = projectMemory.getByIds(
+        projectId,
+        ranked.slice(cursor.offset, cursor.offset + batchSize).map((r) => r.id)
+      )
+      hits.push(...entries.filter(accept ?? (() => true)))
+      cursor.offset += batchSize
+    }
+    return hits.slice(0, resultLimit)
   },
 }

@@ -643,8 +643,18 @@ export const projectMemory = {
    * The hook UserPromptSubmit calls this first for topical recall; if FTS
    * misses (empty index, no matches), the caller falls back to `recall()`.
    */
-  searchFts(projectId: string, keywords: string[], limit: number): MemoryEntry[] {
+  searchFts(
+    projectId: string,
+    keywords: string[],
+    limit: number,
+    filters: {
+      types?: MemoryType[]
+      tags?: Record<string, string>
+      accept?: (entry: MemoryEntry) => boolean
+    } = {}
+  ): MemoryEntry[] {
     if (keywords.length === 0 || limit <= 0) return []
+    if (filters.types?.length === 0) return []
     // Sanitize: deburr first (FTS5 unicode61 indexes with
     // remove_diacritics, so "búsqueda" must query as "busqueda"), then
     // keep only token-friendly chars and drop FTS5-reserved operators so
@@ -655,6 +665,17 @@ export const projectMemory = {
       .filter((kw) => kw.length >= 2)
     if (sanitized.length === 0) return []
     const matchExpr = sanitized.map((kw) => `"${kw}"*`).join(' OR ')
+    const types = filters.types ?? []
+    const tags = Object.entries(filters.tags ?? {})
+    const typeClause = types.length
+      ? `AND COALESCE(m.type, 'fact') IN (${types.map(() => '?').join(',')})`
+      : ''
+    const tagClauses = tags
+      .map(
+        () =>
+          'AND EXISTS (SELECT 1 FROM memory_entry_tags t WHERE t.entry_id = m.id AND t.key = ? AND t.value = ?)'
+      )
+      .join(' ')
 
     type FtsRow = {
       id: string
@@ -676,9 +697,12 @@ export const projectMemory = {
          JOIN memory_entries m ON m.rowid = ft.rowid
          WHERE memory_entries_fts MATCH ?
            AND m.deleted_at IS NULL
+           ${typeClause} ${tagClauses}
          ORDER BY bm25(memory_entries_fts) ASC, m.created_at DESC
          LIMIT ?`,
           matchExpr,
+          ...types,
+          ...tags.flat(),
           limit * 2
         )
       } catch {
@@ -709,7 +733,7 @@ export const projectMemory = {
     // by the LIKE pre-filter) instead of just the result window.
     const dead = collectMirrorSupersededIds(projectId)
     const liveEntries = dead.size > 0 ? entries.filter((entry) => !dead.has(entry.id)) : entries
-    return liveEntries.slice(0, limit)
+    return liveEntries.filter(filters.accept ?? (() => true)).slice(0, limit)
   },
 
   /**
@@ -1118,7 +1142,12 @@ export const projectMemory = {
    * a single recall carries its own context. Bounded by `cap` so a densely
    * linked entry can't balloon the injected context.
    */
-  expandWithLinks(projectId: string, seed: MemoryEntry[], cap = 5): MemoryEntry[] {
+  expandWithLinks(
+    projectId: string,
+    seed: MemoryEntry[],
+    cap = 5,
+    accept?: (entry: MemoryEntry) => boolean
+  ): MemoryEntry[] {
     if (seed.length === 0 || cap <= 0) return []
     const refRe = /\bmem[_-](\d+)\b/g
     // Tag keys whose values name a related entry. Kept explicit (not "any
@@ -1142,7 +1171,10 @@ export const projectMemory = {
         wanted.push(ref)
       }
     }
-    return projectMemory.getByIds(projectId, wanted).slice(0, cap)
+    return projectMemory
+      .getByIds(projectId, wanted)
+      .filter(accept ?? (() => true))
+      .slice(0, cap)
   },
 
   /**

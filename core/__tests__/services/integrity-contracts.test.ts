@@ -344,6 +344,73 @@ describe('outcome evidence contracts', () => {
 })
 
 describe('served retrieval eligibility and evaluation', () => {
+  it('applies type and tag eligibility before the lexical candidate budget', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'recall-budget-'))
+    const id = crypto.randomUUID()
+    try {
+      await configManager.writeConfig(root, { projectId: id, dataPath: path.join(root, '.data') })
+      for (const type of ['gotcha', 'decision', 'decision']) {
+        prjctDb.appendEvent(id, `memory.remember.${type}`, {
+          content: 'callback budget',
+          tags: { domain: 'billing' },
+          provenance: 'declared',
+        })
+      }
+      const target = `mem_${prjctDb.appendEvent(id, 'memory.remember.decision', {
+        content: 'callback retries protect budget accounting',
+        tags: { domain: 'auth' },
+        provenance: 'declared',
+      })}`
+      const entries = await enrichedRecall(root, id, {
+        topic: 'callback budget',
+        types: ['decision'],
+        tags: { domain: 'auth' },
+        limit: 1,
+        recordAttribution: false,
+      })
+      expect(entries.map((entry) => entry.id)).toEqual([target])
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let ineligible links consume the expansion budget', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'recall-links-'))
+    const id = crypto.randomUUID()
+    try {
+      await configManager.writeConfig(root, { projectId: id, dataPath: path.join(root, '.data') })
+      const noise = Array.from(
+        { length: 6 },
+        () =>
+          `mem_${prjctDb.appendEvent(id, 'memory.remember.gotcha', {
+            content: 'Unrelated billing context',
+            tags: { domain: 'billing' },
+            provenance: 'declared',
+          })}`
+      )
+      const target = `mem_${prjctDb.appendEvent(id, 'memory.remember.decision', {
+        content: 'Callback architecture policy',
+        tags: { domain: 'auth' },
+        provenance: 'declared',
+      })}`
+      const seed = `mem_${prjctDb.appendEvent(id, 'memory.remember.decision', {
+        content: 'Zebracache authentication policy',
+        tags: { domain: 'auth', relates: [...noise, target].join(' ') },
+        provenance: 'declared',
+      })}`
+      const entries = await enrichedRecall(root, id, {
+        topic: 'Zebracache',
+        types: ['decision'],
+        tags: { domain: 'auth' },
+        limit: 2,
+        recordAttribution: false,
+      })
+      expect(entries.map((entry) => entry.id)).toEqual([seed, target])
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   for (const scenario of ['wrong-type', 'wrong-tag', 'aged-auto', 'eligible']) {
     it(`filters linked candidates: ${scenario}`, async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), 'recall-integrity-'))

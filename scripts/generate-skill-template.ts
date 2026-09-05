@@ -21,6 +21,7 @@ const RETIRED_TEMPLATE_PATHS = ['.DS_Store', 'global/WINDSURF.md', 'global/docs'
 
 function emit(relParts: string[], content: string): void {
   const out = path.join(ROOT, 'templates', ...relParts)
+  if (fs.existsSync(out) && fs.readFileSync(out, 'utf8') === content) return
   fs.mkdirSync(path.dirname(out), { recursive: true })
   fs.writeFileSync(out, content)
   console.log(`  → templates/${relParts.join('/')} (${Buffer.byteLength(content, 'utf-8')} bytes)`)

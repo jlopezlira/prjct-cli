@@ -365,7 +365,8 @@ function runWithBun(args) {
 // client (no setup, no shim import, no in-process boot) — it talks to the warm
 // daemon and exits with its code. Exit 89 (or any spawn failure / down daemon)
 // = punt → return so main() continues on the normal path. Purely additive.
-const NATIVE_VERBS = new Set(['work', 'search', 'guard', 'status', 'prime'])
+// Mutations need the JS client's operation identity across ambiguous failures.
+const NATIVE_VERBS = new Set(['search', 'guard', 'prime'])
 function tryNativeVerb(args) {
   if (process.platform === 'win32' || process.env.PRJCT_NO_DAEMON === '1') return
   const cmd = args.find((a) => !a.startsWith('-'))

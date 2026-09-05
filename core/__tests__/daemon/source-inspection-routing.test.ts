@@ -46,6 +46,40 @@ async function captureRequest(
 }
 
 describe('source inspection option routing', () => {
+  test('native launcher refuses mutating verbs before opening a daemon connection', async () => {
+    if (process.platform === 'win32') return
+    const cliHome = mkdtempSync(join(tmpdir(), 'prjct-native-mutations-'))
+    cleanup.push(() => rmSync(cliHome, { recursive: true, force: true }))
+    const binaryPath = join(cliHome, 'prjct-native')
+    const compile = Bun.spawnSync(['cc', '-O2', '-o', binaryPath, join(ROOT, 'native/hook-fast.c')])
+    if (compile.exitCode !== 0 || !existsSync(binaryPath)) return
+    mkdirSync(join(cliHome, 'run'))
+    const connections: boolean[] = []
+    const server = createServer((connection) => {
+      connections.push(true)
+      connection.on('error', () => {})
+      connection.destroy()
+    })
+    cleanup.push(() => server.close())
+    await new Promise<void>((resolve) => server.listen(join(cliHome, 'run/daemon.sock'), resolve))
+    for (const [verb, argument] of [
+      ['work', 'intent'],
+      ['status', 'done'],
+    ]) {
+      const child = spawn(binaryPath, ['verb', verb!, argument!], {
+        cwd: ROOT,
+        env: { ...process.env, PRJCT_CLI_HOME: cliHome },
+        stdio: 'ignore',
+      })
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject)
+        child.once('exit', resolve)
+      })
+      expect(code).toBe(89)
+    }
+    expect(connections).toEqual([])
+  })
+
   test('generated daemon shim forwards the token without environment state', async () => {
     const cliHome = mkdtempSync(join(tmpdir(), 'prjct-shim-routing-'))
     cleanup.push(() => rmSync(cliHome, { recursive: true, force: true }))

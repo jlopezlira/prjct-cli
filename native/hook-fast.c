@@ -349,7 +349,7 @@ static int read_stdin_with_timeout(buf_t *out, int timeout_ms) {
 }
 
 static int is_allowed_verb(const char *cmd) {
-    static const char *const ALLOW[] = { "work", "search", "guard", "status", "prime", NULL };
+    static const char *const ALLOW[] = { "search", "guard", "prime", NULL };
     for (int i = 0; ALLOW[i]; i++) {
         if (strcmp(cmd, ALLOW[i]) == 0) return 1;
     }
@@ -358,10 +358,9 @@ static int is_allowed_verb(const char *cmd) {
 
 /* Verb fast path: `hook-fast verb <cmd> [args…]`. Relays a daemon-served hot
  * verb to the warm daemon and prints its captured stdout/stderr, exiting with
- * the daemon's exit code. The allowlist is read surfaces plus `status`, whose
- * value form writes — relayed with the exact semantics the JS shim already
- * gives it (same daemon execution; the retry/fallback re-run is idempotent
- * because setting the same status twice is a no-op). Mirrors the JS shim's
+ * the daemon's exit code. Mutating work/status commands use the JS client's
+ * durable operation identity; a native fallback after a lost response would
+ * otherwise execute them again under a new identity. Mirrors the JS shim's
  * daemon-verb branch
  * (scripts/build.js generateDaemonShim, the `cmd && !skip.has(cmd)` block)
  * EXACTLY: same argv→{args,options} parse, same {id,command,args,options,cwd}
