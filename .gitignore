@@ -88,3 +88,5 @@ evaluacion/
 
 # Local worktree scratch dirs (per-session), never committed.
 .worktrees/
+# Generated A/B evidence (regenerate with `prjct ab import`)
+.prjct/evaluations/

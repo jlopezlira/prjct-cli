@@ -230,6 +230,35 @@ export const COMMANDS: CommandMeta[] = [
     ],
   },
   {
+    name: 'ab',
+    group: 'optional',
+    surface: 'support',
+    routing: { group: 'ab', method: 'ab' },
+    // cold-only: a live sweep spawns `claude` for minutes and must not tie up
+    // the daemon's request lanes.
+    routingMode: 'cold-only',
+    optionSchema: {
+      strings: ['models', 'tasks', 'reps', 'out', 'grader', 'budget-usd'],
+    },
+    description:
+      'Live with/without-harness A/B per model and task class (the harness measures itself)',
+    usage: {
+      claude: 'p. ab report',
+      terminal:
+        'prjct ab <run|report|import> [--models haiku,sonnet] [--tasks T1-lookup,...] [--reps 3] [--out <path>]',
+    },
+    params: '[run|report|import]',
+    implemented: true,
+    hasTemplate: false,
+    requiresProject: true,
+    requiresLlm: false,
+    features: [
+      'run: sweeps evals/ab/tasks through the model in both arms (spawns claude)',
+      'import: folds a results.jsonl into .prjct/evaluations/paired-outcomes.json',
+      'report: provisional Δ per class and per model, with visible grader disagreements',
+    ],
+  },
+  {
     name: 'status',
     group: 'legacy',
     surface: 'legacy',

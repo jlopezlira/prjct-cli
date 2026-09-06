@@ -1,0 +1,16 @@
+{
+  "id": "T1-lookup",
+  "taskClass": "SELF_CONTAINED",
+  "prompt": "Answer three questions about this repository. (Q1) In core/hooks/prompt.ts, what is the value and unit of STATE_BUDGET? (Q2) Can a workflow rule with trustSource='imported' execute shell commands? Name the function and file that decide. (Q3) What are the default weights in DEFAULT_CONFIG of core/domain/file-ranker.ts? Reply in the form: Q1: ... Q2: ... Q3: ...",
+  "gold": "Q1: 700 (characters). Q2: No - denied by evaluateWorkflowRuleExecutable in core/services/trust-boundary.ts (checked by workflow-engine before execAsync/runProc). Q3: bm25Weight 0.45, importWeight 0.2, cochangeWeight 0.15, symbolsWeight 0.2.",
+  "det": {
+    "parts": [
+      { "name": "q1", "clauses": [{ "regex": "\\b700\\b" }] },
+      {
+        "name": "q2",
+        "clauses": [{ "all": ["evaluateworkflowruleexecutable", "trust-boundary"] }]
+      },
+      { "name": "q3", "clauses": [{ "all": ["0.45", "0.2", "0.15"] }] }
+    ]
+  }
+}
