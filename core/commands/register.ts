@@ -91,6 +91,7 @@ export const groupLoaders: Record<CommandRoutingGroup, () => Promise<object>> = 
   code: lazy(async () => new (await import('./code')).CodeCommands()),
   qa: lazy(async () => new (await import('./qa')).QaCommands()),
   ab: lazy(async () => new (await import('./ab')).AbCommands()),
+  verify: lazy(async () => new (await import('./verify')).VerifyCommands()),
 }
 
 function registerCategories(): void {

@@ -364,6 +364,7 @@ export type CommandRoutingGroup =
   | 'code'
   | 'qa'
   | 'ab'
+  | 'verify'
 
 export interface CommandRouting {
   /** Which command-group instance owns the handler. */
