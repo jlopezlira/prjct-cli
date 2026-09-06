@@ -83,6 +83,17 @@ describe('write/consume roundtrip', () => {
     expect(consumeHookStdinSpill(cwd, 'prompt')).toBeNull()
   })
 
+  // The payload is a host event (prompt text, tool arguments) — owner-only,
+  // matching the 0600 the native binary already uses (SEC-04).
+  it('writes the spill owner-only', () => {
+    if (process.platform === 'win32') return
+    const cwd = process.cwd()
+    writeHookStdinSpill(cwd, 'prompt', '{"prompt":"private"}')
+    const spillPath = hookStdinSpillPath(cwd, 'prompt') as string
+    expect(fs.statSync(spillPath).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(path.dirname(spillPath)).mode & 0o077).toBe(0)
+  })
+
   it('keys spills by (cwd, subcommand) — a different subcommand misses', () => {
     const cwd = process.cwd()
     writeHookStdinSpill(cwd, 'prompt', '{"a":1}')

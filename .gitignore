@@ -81,3 +81,10 @@ tmp/
 # so it stops polluting Context7's repo-wide SKILL.md scan.
 output/
 .tmp-spec-dump.mjs
+
+# Evaluation runs (raw A/B logs + reports) — scratch until Phase 1 relocates
+# them into evals/ and moves raw logs out of the repo (harness v2 plan).
+evaluacion/
+
+# Local worktree scratch dirs (per-session), never committed.
+.worktrees/

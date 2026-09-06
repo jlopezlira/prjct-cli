@@ -44,6 +44,33 @@ function jsonPathValue(root: unknown, dotPath: string): unknown {
   }, root)
 }
 
+const LOOPBACK_HOST = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|::1|0\.0\.0\.0)$/i
+
+/**
+ * An explicit probe `url` may only point at the app under test: same origin
+ * as `qa.app.baseUrl`, or loopback when no baseUrl is registered. Probes are
+ * agent-registered data, so an arbitrary host here is an SSRF from the QA
+ * runner — cloud metadata endpoints included.
+ */
+export function httpProbeTargetAllowed(target: string, baseUrl: string | null): boolean {
+  const url = (() => {
+    try {
+      return new URL(target)
+    } catch {
+      return null
+    }
+  })()
+  if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) return false
+  if (baseUrl) {
+    try {
+      if (new URL(baseUrl).origin === url.origin) return true
+    } catch {
+      // unparsable baseUrl: fall through to the loopback rule
+    }
+  }
+  return LOOPBACK_HOST.test(url.hostname)
+}
+
 export async function runHttpProbe(
   probe: QaHttpProbe,
   baseUrl: string | null,
@@ -59,6 +86,16 @@ export async function runHttpProbe(
       return null
     }
   })()
+  if (target && probe.url && !httpProbeTargetAllowed(target, baseUrl)) {
+    return {
+      type: 'http',
+      ok: false,
+      outcome: 'blocked',
+      unavailable: false,
+      durationMs: 0,
+      detail: `probe url ${target} is outside the app under test (${baseUrl ?? 'no baseUrl'}); only qa.app.baseUrl or loopback origins are probed`,
+    }
+  }
   if (!target) {
     return {
       type: 'http',

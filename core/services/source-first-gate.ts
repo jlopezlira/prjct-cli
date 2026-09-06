@@ -7,10 +7,10 @@
  */
 
 import { createHash } from 'node:crypto'
-import { realpathSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { symbolsInFile } from '../domain/symbol-graph'
+import { realpathOrNearest } from '../utils/path-jail'
 import { scanForSecrets } from '../utils/secret-scanner'
 import { rankLikelyFiles } from './file-cue'
 import { formatRelevantProjectPatterns, relevantProjectPatterns } from './project-pattern-context'
@@ -25,33 +25,13 @@ const SOURCE_SHAPE_READ_BYTES = 16 * 1024
 const SOURCE_SHAPE_CHARS = 1200
 
 /**
- * Resolve filesystem aliases for both existing files and not-yet-created edit
- * targets. macOS exposes the same temp tree as `/var/...` and
- * `/private/var/...`; lexical comparison alone treated an in-repo file as
- * external and silently bypassed the gate.
+ * Both sides go through `realpathOrNearest`: macOS exposes the same temp
+ * tree as `/var/...` and `/private/var/...`, and lexical comparison alone
+ * treated an in-repo file as external and silently bypassed the gate.
  */
-function canonicalPath(value: string): string {
-  const resolved = path.resolve(value)
-  const resolveExistingAncestor = (cursor: string, suffix: readonly string[]): string => {
-    try {
-      return path.join(realpathSync.native(cursor), ...suffix)
-    } catch {
-      const parent = path.dirname(cursor)
-      if (parent === cursor) return resolved
-      return resolveExistingAncestor(parent, [path.basename(cursor), ...suffix])
-    }
-  }
-  try {
-    return realpathSync.native(resolved)
-  } catch {
-    // Walk to the nearest existing ancestor, preserving the missing tail.
-    return resolveExistingAncestor(path.dirname(resolved), [path.basename(resolved)])
-  }
-}
-
 export function repoRelativeFile(projectPath: string, filePath: string): string | null {
-  const root = canonicalPath(projectPath)
-  const absolute = canonicalPath(
+  const root = realpathOrNearest(projectPath)
+  const absolute = realpathOrNearest(
     path.isAbsolute(filePath) ? filePath : path.resolve(projectPath, filePath)
   )
   const relative = path.relative(root, absolute)

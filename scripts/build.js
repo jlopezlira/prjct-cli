@@ -404,7 +404,12 @@ function isSafeRetry(e){const c=e&&e.code||"",m=e&&e.message||"";return c==="ECO
 const fnv1a=(s)=>Buffer.from(s,"utf8").reduce((a,b)=>Math.imul(a^b,16777619)>>>0,2166136261).toString(16).padStart(8,"0");
 const spillPath=(sub)=>{const s=(sub||"").toLowerCase().replace(/[^a-z0-9-]/g,"");return s?join(cliHome,"run","hook-stdin-"+fnv1a(process.cwd())+"-"+s+".json"):null};
 const readSpill=(sub)=>{const p=spillPath(sub);if(!p)return null;try{const st=statSync(p);if(Date.now()-st.mtimeMs>3e4){unlinkSync(p);return null}const d=readFileSync(p,"utf8");unlinkSync(p);return d}catch{return null}};
-const writeSpill=(sub,data)=>{const p=spillPath(sub);if(!p)return;try{mkdirSync(dirname(p),{recursive:true});writeFileSync(p,data)}catch{}};
+const writeSpill=(sub,data)=>{const p=spillPath(sub);if(!p)return;try{mkdirSync(dirname(p),{recursive:true,mode:0o700});writeFileSync(p,data,{mode:0o600})}catch{}};
+// Daemon auth token (mirrors core/daemon/auth.ts): read per request from the
+// owner-only run dir. Missing/malformed → send none; the daemon answers
+// retry+unauthenticated and the request runs directly instead.
+const authToken=()=>{try{const t=readFileSync(join(cliHome,"run","daemon.token"),"utf8").trim();return /^[0-9a-f]{64}$/.test(t)?t:""}catch{return""}};
+const withAuth=(o)=>{const a=authToken();return a?{...o,auth:a}:o};
 // Hook fast path: forward the event (stdin, or the spill an earlier chain
 // stage left behind) to the warm daemon and write its response raw. Hooks
 // must never disturb the host session, so ANY failure (connect error,
@@ -415,12 +420,16 @@ const writeSpill=(sub,data)=>{const p=spillPath(sub);if(!p)return;try{mkdirSync(
 const hookCompletion=new AbortController();
 function sendHook(sub,data){
   if(hookCompletion.signal.aborted)return;hookCompletion.abort();
-  const msg=JSON.stringify({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data,...(process.env.PRJCT_HOOK_HOST?{hookHost:process.env.PRJCT_HOOK_HOST}:{})})+"\\n";
+  const msg=JSON.stringify(withAuth({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data,...(process.env.PRJCT_HOOK_HOST?{hookHost:process.env.PRJCT_HOOK_HOST}:{})}))+"\\n";
   const sock=connect(sockPath);const chunks=[],completion=new AbortController();
   const soft=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();writeSpill(sub,data);process.exit(89)}};
+  // Unauthenticated (token unreadable): the daemon will NOT restart to fix
+  // that, so punting would leave every later chain stage punting too. Run
+  // the hook cold from the spill instead — same output, one process later.
+  const cold=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();writeSpill(sub,data);process.env.PRJCT_NO_DAEMON="1";import("./prjct-hooks.mjs").catch(()=>{process.stdout.write("{}\\n");process.exit(0)})}};
   const t=setTimeout(soft,800);
   sock.on("connect",()=>sock.write(msg));
-  sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));if(r.retry){soft();return}completion.abort();clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(r.exitCode!=null?r.exitCode:0)}});
+  sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));if(r.unauthenticated){cold();return}if(r.retry){soft();return}completion.abort();clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(r.exitCode!=null?r.exitCode:0)}});
   sock.on("error",soft);
   sock.on("close",soft);
 }
@@ -452,7 +461,7 @@ if(cmd==="hook"){
   const cArgs=[],cOpts={};
   const consumed=new Set();for(const [i,a] of args.entries()){if(consumed.has(i))continue;if(a.startsWith("--")){const r=a.slice(2);if(r.includes("=")){const e=r.indexOf("=");cOpts[r.slice(0,e)]=r.slice(e+1)}else if(i+1<args.length&&!args[i+1].startsWith("--")){cOpts[r]=args[i+1];consumed.add(i+1)}else{cOpts[r]=true}}else if(a.startsWith("-")&&a.length===2){cOpts[a.slice(1)]=true}else if(i>0){cArgs.push(a)}}
   const operationId=cOpts["operation-id"]||randomUUID();
-  const msg=JSON.stringify({id:operationId,command:cmd,args:cArgs,options:cOpts,cwd:process.cwd()})+"\\n";
+  const msg=JSON.stringify(withAuth({id:operationId,command:cmd,args:cArgs,options:cOpts,cwd:process.cwd()}))+"\\n";
   const sock=connect(sockPath);const chunks=[],completion=new AbortController();
   // Long verbs (ship/sync/…) need 10min; everything else stays at 30s.
   const LONG=new Set(["ship","sync","dream","update","upgrade","analyze","init","cloud","qa","gauntlet"]);

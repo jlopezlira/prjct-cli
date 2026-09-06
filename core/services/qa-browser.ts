@@ -22,6 +22,7 @@ import path from 'node:path'
 import pathManager from '../infrastructure/path-manager'
 import type { QaBrowserStep } from '../schemas/qa'
 import { matchProc, runProc } from '../utils/exec'
+import { httpProbeTargetAllowed } from './qa-probes'
 
 /** Major-pinned: Chromium and the driver must match, npm resolves the pair. */
 const PLAYWRIGHT_CORE_SPEC = 'playwright-core@^1.50.0'
@@ -396,14 +397,26 @@ export async function closeBrowserSession(projectId: string): Promise<BrowserRes
   return sendBrowserCommand(sockPath, { do: 'close' }, 5_000)
 }
 
+/**
+ * Absolute URLs are navigated only when they stay on the app under test
+ * (same origin as `qa.app.baseUrl`, or loopback) — the browser session
+ * carries the app's cookies, and a step is agent-written data.
+ */
 function resolveUrl(url: string, baseUrl: string | null): string | null {
-  if (/^https?:\/\//i.test(url)) return url
+  if (/^https?:\/\//i.test(url)) return httpProbeTargetAllowed(url, baseUrl) ? url : null
   if (!baseUrl) return null
   try {
     return new URL(url, baseUrl).toString()
   } catch {
     return null
   }
+}
+
+function gotoRefusal(url: string, baseUrl: string | null): string {
+  if (/^https?:\/\//i.test(url)) {
+    return `goto ${url}: outside the app under test (${baseUrl ?? 'no baseUrl'}); only qa.app.baseUrl or loopback origins are navigated`
+  }
+  return `goto ${url}: no baseUrl (prjct qa set app.baseUrl <url>)`
 }
 
 type MappedCommand = { ok: true; command: BrowserCommand } | { ok: false; error: string }
@@ -414,7 +427,7 @@ function stepToCommand(step: QaBrowserStep, baseUrl: string | null): MappedComma
       const url = resolveUrl(step.url, baseUrl)
       return url
         ? { ok: true, command: { do: 'goto', url } }
-        : { ok: false, error: `goto ${step.url}: no baseUrl (prjct qa set app.baseUrl <url>)` }
+        : { ok: false, error: gotoRefusal(step.url, baseUrl) }
     }
     case 'fill':
       return { ok: true, command: { do: 'fill', selector: step.selector, text: step.text } }
@@ -522,8 +535,9 @@ export async function runBrowserPrimitive(
           ? { ok: true, command: { do: 'goto', url } }
           : {
               ok: false,
-              error:
-                'usage: prjct qa browser goto <url|/path> (relative paths need qa.app.baseUrl)',
+              error: rest[0]
+                ? gotoRefusal(rest[0], baseUrl)
+                : 'usage: prjct qa browser goto <url|/path> (relative paths need qa.app.baseUrl)',
             }
       }
       case 'fill':

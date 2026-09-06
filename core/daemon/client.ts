@@ -14,6 +14,7 @@ import { connect } from 'node:net'
 import path from 'node:path'
 import type { DaemonRequest, DaemonResponse, DaemonStatus } from '../types/daemon'
 import { isBunAvailable } from '../utils/runtime'
+import { readDaemonToken } from './auth'
 import { commandRequestTimeoutMs, DAEMON_PATHS, encodeMessage, isDaemonNamedPipe } from './protocol'
 import { releaseSpawnLock, tryAcquireSpawnLock } from './startup-lock'
 
@@ -146,7 +147,9 @@ export function sendRequest(
     }, timeoutMs)
 
     socket.on('connect', () => {
-      socket.write(encodeMessage(request))
+      // Read per request, never cached: a restarted daemon rotates it.
+      const auth = request.auth ?? readDaemonToken() ?? undefined
+      socket.write(encodeMessage(auth ? { ...request, auth } : request))
     })
 
     socket.on('data', (chunk) => {

@@ -33,6 +33,8 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'judgment',
   'qa',
   'notify',
+  'enforce',
+  'gauntlet',
   'retention',
   'multiAgent',
   'embeddings',

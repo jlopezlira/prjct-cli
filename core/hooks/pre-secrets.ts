@@ -13,7 +13,10 @@
  *    to execute hooks that require vars it does not set ("required env
  *    var(s) not set: ${PPID}"). Security MUSTS must not depend on that.
  *  - Portable pure regex via `secret-scanner` (no FS / SQLite).
- *  - Fail-soft decide: any throw ⇒ allow (never brick the session on a bug).
+ *  - Fail-soft decide for read-like calls: a throw ⇒ allow (never brick the
+ *    session on a bug). Write-like calls fail CLOSED: a scanner crash on a
+ *    Write/Edit/Bash is a deny naming the failure, because a crashed scan is
+ *    not a clean scan and those are the calls a credential leaves through.
  *  - Only PreToolUse with explicit `decide` may deny (harness contract).
  */
 
@@ -35,6 +38,32 @@ export function decideSecrets(input: SecretHookInput): { deny: string } | null {
   return { deny: verdict.denyMessage }
 }
 
+/** Tools that persist or transmit bytes — the calls a credential could leave through. */
+const WRITE_LIKE_TOOL =
+  /write|edit|patch|replace|create|bash|shell|command|exec|fetch|http|curl|upload|send|post/i
+
+/**
+ * A scanner crash is not evidence the input is clean. For a write-like call
+ * the MUST stays a MUST: deny with the failure named, so the author sees a
+ * scanner bug instead of a silent allow. Read-like calls cannot leak, so
+ * they keep the fail-soft contract (never brick a session on a bug).
+ */
+export function decideOnScannerFailure(
+  input: SecretHookInput,
+  error: unknown
+): { deny: string } | null {
+  const tool = String(input.tool_name ?? '')
+  if (!WRITE_LIKE_TOOL.test(tool)) return null
+  const reason = error instanceof Error ? error.message : String(error)
+  return {
+    deny: [
+      `prjct credential guard: the secret scanner failed on this ${tool} call (${reason}).`,
+      'A scanner failure is not a clean scan, so the write is blocked instead of allowed blind.',
+      'Retry with a smaller payload, or report the failure: `prjct capture "pre-secrets scanner failed"`.',
+    ].join(' '),
+  }
+}
+
 export function runPreSecretsHook(projectPath: string = process.cwd(), io?: HookIo): Promise<void> {
   return runHook<SecretHookInput>(
     {
@@ -44,8 +73,8 @@ export function runPreSecretsHook(projectPath: string = process.cwd(), io?: Hook
       decide: async (input) => {
         try {
           return decideSecrets(input)
-        } catch {
-          return null // fail open on scanner bugs
+        } catch (error) {
+          return decideOnScannerFailure(input, error)
         }
       },
     },
@@ -54,4 +83,4 @@ export function runPreSecretsHook(projectPath: string = process.cwd(), io?: Hook
 }
 
 /** Pure export for unit tests. */
-export const _internal = { decideSecrets }
+export const _internal = { decideSecrets, decideOnScannerFailure }

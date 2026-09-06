@@ -368,6 +368,41 @@ static int is_allowed_verb(const char *cmd) {
  * newline, so this does too (the hook path deliberately does raw fwrite). Verbs
  * read no stdin, so ANY uncertainty is a clean exit 89 (fall_through) and the
  * launcher re-runs the verb on the JS path with an untouched pipe. */
+/* Hex token is 64 chars; room for a trailing newline and NUL. */
+#define AUTH_TOKEN_MAX 80
+
+/* The endpoint must be a socket owned by this user — not a planted file or
+ * symlink (a plain stat() followed the link and could not tell; SEC-12). */
+static int endpoint_is_ours(const char *sock_path) {
+    struct stat st;
+    if (lstat(sock_path, &st) != 0) return 0;
+    if (!S_ISSOCK(st.st_mode)) return 0;
+    if (st.st_uid != getuid()) return 0;
+    return 1;
+}
+
+/* Read the daemon's auth token (64 lowercase hex chars) from the run dir.
+ * `out` is empty on any failure or malformed content; the caller then sends
+ * no token and the daemon's retry+unauthenticated answer routes the request
+ * to the runtime stages, which read the token themselves. */
+static void read_auth_token(const char *run_dir, char *out, size_t out_len) {
+    out[0] = '\0';
+    char token_path[PATH_MAX + 256];
+    snprintf(token_path, sizeof(token_path), "%s/daemon.token", run_dir);
+    int tfd = open(token_path, O_RDONLY | O_CLOEXEC);
+    if (tfd < 0) return;
+    ssize_t n = read(tfd, out, out_len - 1);
+    close(tfd);
+    if (n <= 0) { out[0] = '\0'; return; }
+    out[n] = '\0';
+    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' || out[n - 1] == ' ')) out[--n] = '\0';
+    if (n != 64) { out[0] = '\0'; return; }
+    for (ssize_t i = 0; i < n; i++) {
+        char c = out[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { out[0] = '\0'; return; }
+    }
+}
+
 static int run_verb(int argc, char **argv) {
 #define A(call) do { if ((call) != 0) fall_through(); } while (0)
     if (argc < 3) fall_through();
@@ -397,8 +432,9 @@ static int run_verb(int argc, char **argv) {
         snprintf(run_dir, sizeof(run_dir), "%s/.prjct-cli/run", home);
     }
     snprintf(sock_path, sizeof(sock_path), "%s/daemon.sock", run_dir);
-    struct stat st;
-    if (stat(sock_path, &st) != 0) fall_through(); /* no daemon listening */
+    if (!endpoint_is_ours(sock_path)) fall_through(); /* no daemon listening, or not our socket */
+    char auth_token[AUTH_TOKEN_MAX];
+    read_auth_token(run_dir, auth_token, sizeof(auth_token));
 
     char cwd[PATH_MAX + 256];
     if (!getcwd(cwd, sizeof(cwd))) fall_through();
@@ -465,7 +501,13 @@ static int run_verb(int argc, char **argv) {
     A(buf_append(&req, opts_json.data, opts_json.len));
     A(buf_append_str(&req, "},\"cwd\":\""));
     A(json_escape_append(&req, cwd, strlen(cwd)));
-    A(buf_append_str(&req, "\"}\n"));
+    A(buf_append_str(&req, "\""));
+    if (auth_token[0]) {
+        A(buf_append_str(&req, ",\"auth\":\""));
+        A(json_escape_append(&req, auth_token, strlen(auth_token)));
+        A(buf_append_str(&req, "\""));
+    }
+    A(buf_append_str(&req, "}\n"));
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) fall_through();
@@ -588,8 +630,9 @@ int main(int argc, char **argv) {
     }
     snprintf(sock_path, sizeof(sock_path), "%s/daemon.sock", run_dir);
 
-    struct stat st;
-    if (stat(sock_path, &st) != 0) fall_through(); /* no daemon listening */
+    if (!endpoint_is_ours(sock_path)) fall_through(); /* no daemon listening, or not our socket */
+    char auth_token[AUTH_TOKEN_MAX];
+    read_auth_token(run_dir, auth_token, sizeof(auth_token));
 
     /* ---- Phase 2: stdin consumption starts here. From this point on the
      * pipe is drained for any later chain stage, so failures PUNT: spill the
@@ -627,6 +670,14 @@ int main(int argc, char **argv) {
     if (hook_host && hook_host[0]) {
         if (buf_append_str(&req, ",\"hookHost\":\"") != 0) PUNT();
         if (json_escape_append(&req, hook_host, strlen(hook_host)) != 0) PUNT();
+        if (buf_append_str(&req, "\"") != 0) PUNT();
+    }
+    /* Daemon auth (core/daemon/auth.ts). An unreadable token is sent as no
+     * token: the daemon answers retry+unauthenticated, which the `retry`
+     * branch below turns into a punt, and the shim stage runs the hook cold. */
+    if (auth_token[0]) {
+        if (buf_append_str(&req, ",\"auth\":\"") != 0) PUNT();
+        if (json_escape_append(&req, auth_token, strlen(auth_token)) != 0) PUNT();
         if (buf_append_str(&req, "\"") != 0) PUNT();
     }
     if (buf_append_str(&req, "}\n") != 0) PUNT();

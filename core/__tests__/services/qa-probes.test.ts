@@ -2,7 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { runCliProbe, runFileProbe, runHttpProbe, runProbe } from '../../services/qa-probes'
+import {
+  httpProbeTargetAllowed,
+  runCliProbe,
+  runFileProbe,
+  runHttpProbe,
+  runProbe,
+} from '../../services/qa-probes'
 
 const fixture: { server: ReturnType<typeof Bun.serve> | null; baseUrl: string; dir: string } = {
   server: null,
@@ -35,6 +41,34 @@ const http = (over: Record<string, unknown> = {}) => ({
   method: 'GET',
   expect: { bodyIncludes: [] as string[] },
   ...over,
+})
+
+describe('http probe target allowlist (SEC-16)', () => {
+  it('allows the app origin and loopback, blocks everything else', () => {
+    const base = 'https://staging.example.com:8443'
+    expect(httpProbeTargetAllowed(`${base}/health`, base)).toBe(true)
+    expect(httpProbeTargetAllowed('http://127.0.0.1:3000/x', base)).toBe(true)
+    expect(httpProbeTargetAllowed('http://localhost/x', null)).toBe(true)
+    expect(httpProbeTargetAllowed('http://[::1]:80/x', null)).toBe(true)
+    expect(httpProbeTargetAllowed('https://staging.example.com/x', base)).toBe(false) // port differs
+    expect(httpProbeTargetAllowed('http://169.254.169.254/latest/meta-data', base)).toBe(false)
+    expect(httpProbeTargetAllowed('https://evil.example/x', null)).toBe(false)
+    expect(httpProbeTargetAllowed('file:///etc/passwd', base)).toBe(false)
+    expect(httpProbeTargetAllowed('not a url', base)).toBe(false)
+  })
+
+  it('reports an explicit off-origin url as blocked without fetching it', async () => {
+    const blocked = await runHttpProbe(
+      http({ url: 'http://169.254.169.254/latest/meta-data' }),
+      'https://app.example.com'
+    )
+    expect(blocked.ok).toBe(false)
+    expect(blocked.outcome).toBe('blocked')
+    expect(blocked.detail).toContain('outside the app under test')
+    // Same-origin explicit url still runs.
+    const same = await runHttpProbe(http({ url: `${fixture.baseUrl}/health` }), fixture.baseUrl)
+    expect(same.ok).toBe(true)
+  })
 })
 
 describe('http probe', () => {

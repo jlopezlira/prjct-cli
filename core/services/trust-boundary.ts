@@ -149,26 +149,30 @@ export function evaluatePackageInstallTrust(
 // ── Workflow rules ──────────────────────────────────────────────────────────
 
 /**
- * Imported (cloud/shared-template) rules are never auto-executable.
- * Only local trust_source may run shell/verify/script.
+ * Only a rule whose trust_source is positively `local` may run shell /
+ * verify / script. Imported (cloud/shared-template) rules never do, and
+ * neither does a rule with no trust source at all: an absent value is what
+ * a rule that skipped the storage default looks like, and treating unknown
+ * as trusted was the hole (SEC-07).
  */
 export function evaluateWorkflowRuleExecutable(
   trustSource: string | undefined | null,
   ruleLabel?: string
 ): TrustVerdict {
-  if (trustSource === 'imported') {
-    const label = ruleLabel?.trim() || 'workflow rule'
-    return {
-      allow: false,
-      kind: 'workflow_rule',
-      reason: 'imported trust_source',
-      hits: ['imported'],
-      denyMessage:
-        `Refusing to run imported rule without approval: ${label}. ` +
-        `Re-create the rule locally if you trust it.`,
-    }
+  if (trustSource === 'local') return ALLOW
+  const label = ruleLabel?.trim() || 'workflow rule'
+  const imported = trustSource === 'imported'
+  return {
+    allow: false,
+    kind: 'workflow_rule',
+    reason: imported ? 'imported trust_source' : `unknown trust_source (${String(trustSource)})`,
+    hits: [imported ? 'imported' : 'untrusted'],
+    denyMessage: imported
+      ? `Refusing to run imported rule without approval: ${label}. ` +
+        `Re-create the rule locally if you trust it.`
+      : `Refusing to run rule with no local trust source: ${label}. ` +
+        `Re-create it with \`prjct workflow\` so it is recorded as local.`,
   }
-  return ALLOW
 }
 
 /** True when a pulled workflow rule must stay inert (enabled=0, trust=imported). */

@@ -106,7 +106,9 @@ export function registerMemoryTools(
         content: z.string(),
         tags: z.record(z.string(), z.string()).optional(),
         source: z.string().optional(),
-        force: z.boolean().optional().describe('Allow content rejected as secret-like'),
+        // No `force` here on purpose: the model is the untrusted party the
+        // secret/injection guard protects against, so it cannot waive it.
+        // A human can, from the CLI: `prjct remember … --force`.
       }),
     },
     safeMcpCall(
@@ -117,7 +119,6 @@ export function registerMemoryTools(
         content: string
         tags?: Record<string, string>
         source?: string
-        force?: boolean
       }) => {
         await resolveProjectId(args.projectPath)
 
@@ -133,7 +134,7 @@ export function registerMemoryTools(
           }
         }
 
-        const trust = evaluateMemoryContent(args.content, { force: args.force })
+        const trust = evaluateMemoryContent(args.content)
         if (!trust.allow) {
           return {
             content: [
@@ -141,9 +142,9 @@ export function registerMemoryTools(
                 type: 'text',
                 text:
                   trust.kind === 'secrets'
-                    ? `Refused — content looks like a secret (${trust.hits.join(', ')}). Re-call with force=true if intentional.`
+                    ? `Refused — content looks like a secret (${trust.hits.join(', ')}). Remove it; if a human confirms it is not a secret, they can save it with \`prjct remember … --force\`.`
                     : trust.kind === 'prompt_injection'
-                      ? `Refused — content looks like prompt injection (${trust.hits.join(', ')}). Memory entries are inlined into LLM context. Re-call with force=true if intentional.`
+                      ? `Refused — content looks like prompt injection (${trust.hits.join(', ')}). Memory entries are inlined into LLM context. Rephrase it; only a human can override with \`prjct remember … --force\`.`
                       : `Refused — ${trust.denyMessage}`,
               },
             ],
@@ -156,7 +157,6 @@ export function registerMemoryTools(
           content: args.content,
           tags: args.tags ?? {},
           source: args.source,
-          force: args.force,
         })
         return {
           content: [{ type: 'text', text: `Saved ${typeStr}: ${args.content.slice(0, 80)}` }],
