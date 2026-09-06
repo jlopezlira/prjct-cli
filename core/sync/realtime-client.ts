@@ -2,7 +2,7 @@
  * Realtime client — ONE project's live WebSocket connection to the storage
  * API, for <5s cross-device propagation.
  *
- * Uses `ws` to send the server's existing x-api-key header on Node and Bun.
+ * Uses native Bun WebSockets and `ws` on Node to send the existing x-api-key header.
  * Credentials never enter URLs or require a coordinated server rollout.
  * Redirects are disabled so a handshake cannot forward auth to another host.
  *
@@ -18,10 +18,10 @@ import WebSocket from 'ws'
 export interface WebSocketLike {
   readyState: number
   close(code?: number, reason?: string): void
-  onopen: WebSocket['onopen']
-  onmessage: WebSocket['onmessage']
-  onclose: WebSocket['onclose']
-  onerror: WebSocket['onerror']
+  onopen: WebSocket['onopen'] | globalThis.WebSocket['onopen']
+  onmessage: WebSocket['onmessage'] | globalThis.WebSocket['onmessage']
+  onclose: WebSocket['onclose'] | globalThis.WebSocket['onclose']
+  onerror: WebSocket['onerror'] | globalThis.WebSocket['onerror']
 }
 
 export type WebSocketFactory = (url: string, headers?: Record<string, string>) => WebSocketLike
@@ -81,7 +81,11 @@ export class RealtimeClient {
       wsFactory:
         options.wsFactory ??
         ((url, headers) =>
-          new WebSocket(url, { headers, followRedirects: false, handshakeTimeout: 10000 })),
+          // Bun 1.3's node:http upgrade shim is incomplete; use its native
+          // header-capable client instead of routing ws through that shim.
+          typeof Bun !== 'undefined'
+            ? new globalThis.WebSocket(url, { headers })
+            : new WebSocket(url, { headers, followRedirects: false, handshakeTimeout: 10000 })),
       baseDelayMs: options.baseDelayMs ?? 1000,
       maxDelayMs: options.maxDelayMs ?? 30_000,
     }
@@ -130,7 +134,7 @@ export class RealtimeClient {
       this._state = 'open'
       this.attempt = 0
     }
-    ws.onmessage = (ev) => {
+    ws.onmessage = (ev: { data: unknown }) => {
       void this.handleMessage(ev?.data)
     }
     ws.onerror = () => {

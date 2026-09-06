@@ -6,7 +6,6 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import { WebSocketServer } from 'ws'
 import {
   backoffDelay,
   buildRealtimeUrl,
@@ -114,20 +113,28 @@ describe('realtimeAuthHeaders', () => {
   })
 
   it('authenticates a real WebSocket and applies a server event without a URL credential', async () => {
-    const server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
-    await new Promise<void>((resolve) => server.once('listening', resolve))
-    const address = server.address() as { port: number }
-    const requests: Array<{ url?: string; key?: string | string[] }> = []
-    server.on('connection', (socket, request) => {
-      requests.push({ url: request.url, key: request.headers['x-api-key'] })
-      socket.send(JSON.stringify({ type: 'event', event: { id: 'actual-event' } }))
+    const requests: Array<{ url: string; key: string | null }> = []
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request, server) {
+        requests.push({ url: request.url, key: request.headers.get('x-api-key') })
+        if (server.upgrade(request)) return
+        return new Response('Upgrade required', { status: 426 })
+      },
+      websocket: {
+        open(socket) {
+          socket.send(JSON.stringify({ type: 'event', event: { id: 'actual-event' } }))
+        },
+        message() {},
+      },
     })
     const applied: string[] = []
     const client = new RealtimeClient({
       projectId: 'p',
       deviceId: 'd',
       apiKey: 'test-key',
-      apiUrl: `http://127.0.0.1:${address.port}`,
+      apiUrl: `http://127.0.0.1:${server.port}`,
       apply: async (_id, event) => {
         applied.push(String(event.id))
         return true
@@ -145,8 +152,49 @@ describe('realtimeAuthHeaders', () => {
       expect(new URL(requests[0].url!, 'http://local').searchParams.has('key')).toBe(false)
     } finally {
       client.stop()
-      for (const socket of server.clients) socket.terminate()
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+      server.stop(true)
+    }
+  })
+
+  it('does not forward credentials through a handshake redirect', async () => {
+    const received: string[] = []
+    const target = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request) {
+        received.push(request.url)
+        return new Response('unexpected')
+      },
+    })
+    const redirected: boolean[] = []
+    const source = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch() {
+        redirected.push(true)
+        return new Response(null, {
+          status: 302,
+          headers: { location: `http://127.0.0.1:${target.port}/ws` },
+        })
+      },
+    })
+    const client = new RealtimeClient({
+      projectId: 'p',
+      deviceId: 'd',
+      apiKey: 'test-key',
+      apiUrl: `http://127.0.0.1:${source.port}`,
+      apply: async () => true,
+    })
+    try {
+      client.start()
+      await tick(100)
+      expect(redirected.length).toBeGreaterThan(0)
+      expect(received).toEqual([])
+      expect(client.state).not.toBe('open')
+    } finally {
+      client.stop()
+      source.stop(true)
+      target.stop(true)
     }
   })
 })
