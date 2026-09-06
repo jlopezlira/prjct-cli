@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { PRJCT_HOOKS } from '../services/settings-installer'
+import { VERSION } from '../utils/version'
 
 type Environment = { worktree: string; home: string; arm: 'with' | 'without' }
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
@@ -47,6 +48,25 @@ export async function prepareAbEnvironment(
   if (ctx.arm === 'without') {
     await fs.rm(path.join(ctx.worktree, '.prjct'), { recursive: true, force: true })
   } else {
+    // Register this explicit installation so seed CLI commands do not require
+    // setup in the interactive user's home. Model auth remains with Claude.
+    const configDir = path.join(ctx.home, 'config')
+    const providerDir = path.join(ctx.home, 'claude')
+    await fs.mkdir(configDir, { recursive: true })
+    await fs.mkdir(providerDir, { recursive: true })
+    await fs.writeFile(
+      path.join(providerDir, 'CLAUDE.md'),
+      '<!-- prjct:start -->\nIsolated A/B harness; hooks are supplied through explicit settings.\n<!-- prjct:end -->\n'
+    )
+    await fs.writeFile(
+      path.join(configDir, 'installed-editors.json'),
+      JSON.stringify({
+        version: VERSION,
+        provider: 'claude',
+        path: providerDir,
+        lastInstall: new Date().toISOString(),
+      })
+    )
     const locator = path.join(ctx.worktree, '.prjct', 'prjct.config.json')
     const previous = await fs
       .readFile(locator, 'utf8')

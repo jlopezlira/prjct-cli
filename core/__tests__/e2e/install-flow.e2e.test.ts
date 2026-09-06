@@ -13,13 +13,47 @@
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
+import fs from 'node:fs/promises'
 import path from 'node:path'
-import { makeSandbox, REPO_ROOT, type Sandbox } from './_harness'
+import { assertAbHarnessObserved, prepareAbEnvironment } from '../../eval/ab-environment'
+import { BIN, makeSandbox, REPO_ROOT, type Sandbox } from './_harness'
 
 setDefaultTimeout(120_000)
 
 const REPO_VERSION = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf-8'))
   .version as string
+
+test('isolated A/B installation can seed memory and execute its real prompt hook', async () => {
+  const sb = await makeSandbox({ splitCliHome: true })
+  try {
+    const env = await prepareAbEnvironment({ worktree: sb.dir, home: sb.home, arm: 'with' }, [
+      process.execPath,
+      BIN,
+    ])
+    const seeded = await sb.cli(
+      ['remember', 'decision', 'Mutable project settings belong in global storage.', '--md'],
+      { env: { ...env, HOME: sb.osHome } }
+    )
+    expect(seeded.code).toBe(0)
+    expect(seeded.stderr).not.toContain('not configured')
+    const hook = await sb.cli(['hook', 'prompt'], {
+      env: { ...env, HOME: sb.osHome },
+      stdin: JSON.stringify({
+        cwd: sb.dir,
+        session_id: 'ab-e2e',
+        prompt: 'Where do mutable project settings belong?',
+      }),
+    })
+    expect(hook.code).toBe(0)
+    expect(() => JSON.parse(hook.stdout)).not.toThrow()
+    expect(await fs.stat(path.join(sb.osHome, '.claude')).catch(() => null)).toBeNull()
+    // The observation gate deliberately rejects direct calls that did not go
+    // through the settings wrapper used by the evaluated agent.
+    await expect(assertAbHarnessObserved(sb.home)).rejects.toThrow('did not execute')
+  } finally {
+    await sb.cleanup()
+  }
+})
 
 describe('e2e: PRJCT_CLI_HOME is honored when it differs from HOME (regression)', () => {
   // Regression for the os.homedir() footgun: the "not configured" guard

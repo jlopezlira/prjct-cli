@@ -558,7 +558,16 @@ async function main(): Promise<void> {
     // requiring EVERY detected provider to be configured wrongly reports a
     // configured rig as "not configured" (e.g. claude set up, gemini not).
     const configured: boolean[] = []
-    if (detection.claude.installed) configured.push(await hasPrjctSection('.claude', 'CLAUDE.md'))
+    const installation = await editorsConfig.loadConfig()
+    if (detection.claude.installed) {
+      const registered =
+        installation?.provider === 'claude' && installation.path
+          ? (
+              await readFile(path.join(installation.path, 'CLAUDE.md'), 'utf8').catch(() => '')
+            ).includes('prjct:start')
+          : false
+      configured.push(registered || (await hasPrjctSection('.claude', 'CLAUDE.md')))
+    }
     if (detection.gemini.installed) configured.push(await hasPrjctSection('.gemini', 'GEMINI.md'))
 
     // No supported provider on PATH → nothing to configure, treat as ready.
