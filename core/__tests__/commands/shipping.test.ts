@@ -7,15 +7,7 @@
  * `clarification` when the state is ambiguous.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  setDefaultTimeout,
-  type spyOn,
-  test,
-} from 'bun:test'
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -520,6 +512,32 @@ describe('ship() — contradictory review gate', () => {
     expect(String(result.error ?? '')).toMatch(/Contradictory review/i)
     expect(judgmentLedgerStorage.get(fixture.projectId)?.intensity).toBe('full')
     expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(0)
+  })
+
+  test.each([
+    'review-standard',
+    'review-full',
+  ] as const)('%s prints the independent reviewer guidance before returning the blocked ship', async (intent) => {
+    const output = spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const result = await fixture.cmd.ship('a feature', fixture.projectPath, {
+        md: true,
+        intent,
+      })
+      const printed = output.mock.calls.map((args) => args.join(' ')).join('\n')
+
+      expect(result.success).toBe(false)
+      expect(printed).toContain('dispatch_reviewers')
+      expect(printed).toContain('Review methodology')
+      expect(printed).toContain('prjct_agent')
+      expect(printed).toContain('workflow:code-review=')
+      expect(printed).toContain('Context ceiling:')
+      expect(printed).toContain('Output ceiling:')
+      expect(printed).toContain('Do not run tests, builds, gauntlet')
+      expect(await shippedStorage.getAll(fixture.projectId)).toHaveLength(0)
+    } finally {
+      output.mockRestore()
+    }
   })
 
   test('review-skip clears the question and records the decline', async () => {

@@ -1118,7 +1118,9 @@ async function openContradictoryReview(
   projectPath: string,
   verdict: Extract<ContradictoryGateVerdict, { kind: 'open-review' }>
 ): Promise<CommandResult> {
-  const { ensureJudgmentLedger } = await import('../services/judgment-orchestrator')
+  const { ensureJudgmentLedger, reviewDispatchGuidance } = await import(
+    '../services/judgment-orchestrator'
+  )
   const result = await ensureJudgmentLedger({
     projectId,
     projectPath,
@@ -1137,7 +1139,8 @@ async function openContradictoryReview(
             'Charters',
             `RED: ${card.judgeCharters.red}\n\nBLUE: ${card.judgeCharters.blue}`
           )
-        : null
+        : null,
+      reviewDispatchGuidance(card).join('\n')
     )
   )
   const ledgerBit = result.ledger ? ` \`${result.ledger.id.slice(0, 8)}\`` : ''
