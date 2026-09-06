@@ -311,7 +311,7 @@ export const AGENT_RUNTIME_REGISTRY: readonly AgentRuntimeDefinition[] = [
       projectRules: false,
     },
     notes:
-      'Kimi Code CLI (~/.kimi-code; legacy ~/.kimi is fallback-only): native MCP + hooks ([[hooks]] in config.toml) + compact skill at ~/.agents/skills/prjct via prjct install. See harness-surfaces.',
+      'Kimi Code CLI (~/.kimi-code; legacy ~/.kimi is fallback-only): native MCP + hooks ([[hooks]] in config.toml) + compact skill at ~/.kimi-code/skills/prjct via prjct install (not ~/.agents/skills — pi scans that root and same-named skills collide). See harness-surfaces.',
   },
   {
     id: 'grok',

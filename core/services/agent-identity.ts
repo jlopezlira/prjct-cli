@@ -41,6 +41,12 @@ export function detectRuntimeAgent(): string {
   if (explicit && KNOWN_AGENTS.has(explicit)) return explicit
   if (explicit) return explicit.slice(0, 32)
 
+  // Pi sets these on its child processes. They identify the active host,
+  // unlike credentials or markers inherited from the terminal that launched it.
+  if (process.env.AI_AGENT === 'pi' || process.env.PI_CODING_AGENT === 'true') {
+    return 'pi'
+  }
+
   if (process.env.CLAUDE_AGENT || process.env.ANTHROPIC_CLAUDE || process.env.CLAUDECODE) {
     return 'claude'
   }
@@ -87,10 +93,12 @@ export function resolveCallerIdentity(seed = 'session'): AgentIdentity {
   }
   const agent = detectRuntimeAgent()
   const sessionId =
-    process.env.CLAUDE_SESSION_ID ||
-    process.env.CODEX_SESSION_ID ||
-    process.env.PRJCT_SESSION_ID ||
-    undefined
+    agent === 'pi'
+      ? process.env.PI_SESSION_ID || process.env.PRJCT_SESSION_ID || undefined
+      : process.env.CLAUDE_SESSION_ID ||
+        process.env.CODEX_SESSION_ID ||
+        process.env.PRJCT_SESSION_ID ||
+        undefined
 
   const fromEnv = process.env.PRJCT_AGENT?.trim()
   const identity =

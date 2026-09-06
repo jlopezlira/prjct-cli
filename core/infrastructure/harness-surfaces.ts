@@ -359,7 +359,7 @@ export const BENCHMARK_HARNESS_SURFACES: readonly HarnessSurfaceEntry[] = [
         'ensureKimiMcpServer prefers ~/.kimi-code, writes legacy only when it is the sole Kimi home; uninstall strips prjct-managed servers from both',
     },
     skills: {
-      paths: ['~/.agents/skills/prjct/SKILL.md', '$KIMI_CODE_HOME/skills/ (~/.kimi-code/skills/)'],
+      paths: ['~/.kimi-code/skills/prjct/SKILL.md ($KIMI_CODE_HOME/skills/)'],
       prjct: 'native',
       notes:
         'Compact skill via skill-generator fan-out into the shared user tier ~/.agents/skills (canonical Kimi scan dir, verified live)',
@@ -385,7 +385,7 @@ export const BENCHMARK_HARNESS_SURFACES: readonly HarnessSurfaceEntry[] = [
         'PRJCT_HOOK_HOST=kimi adapts output to raw stdout text; forwarded to the daemon as hookHost. kimi-hooks.ts patches config.toml textually — user entries and orca-managed blocks stay byte-identical.',
     },
     legibility:
-      'Full native wire: TOML hooks + claude-json MCP + shared-tier skill + AGENTS.md. First-class since the ~/.kimi-code path fix.',
+      'Full native wire: TOML hooks + claude-json MCP + Kimi-home skill + AGENTS.md. First-class since the ~/.kimi-code path fix. Skill deliberately NOT in shared ~/.agents/skills — pi scans that root and same-named skills collide.',
   },
   {
     runtimeId: 'cursor',

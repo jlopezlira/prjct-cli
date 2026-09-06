@@ -14,10 +14,11 @@
 import { getActiveProvider } from '../infrastructure/ai-provider'
 import type { AgentRole } from '../schemas/model'
 import type { AIProviderName } from '../types/provider'
+import { resolveCallerIdentity } from './agent-identity'
 import { FLOOR_LENS, reviewLensMenu } from './review-lenses'
 
 export interface DispatchMechanism {
-  provider: AIProviderName
+  provider: AIProviderName | 'pi'
   /** True when the rig has a native subagent tool (Claude). */
   native: boolean
   /** How to run `count` reviewers/workers concurrently (or emulated). */
@@ -73,8 +74,16 @@ function emulatedMechanism(provider: AIProviderName): Omit<DispatchMechanism, 'p
  * fan-out. The per-role model always flows from the policy.
  */
 export async function resolveDispatchMechanism(
-  projectProvider?: AIProviderName
+  projectProvider?: AIProviderName | 'pi'
 ): Promise<DispatchMechanism> {
+  if (projectProvider === 'pi' || (!projectProvider && resolveCallerIdentity().agent === 'pi')) {
+    return {
+      provider: 'pi',
+      native: true,
+      runLine: (count) =>
+        `Run ${count} independent reviewer task(s) with the pi prjct_agent tool, inheriting the active model. Set readOnly=false when the reviewer needs to execute the spec-read CLI command below; otherwise keep read-only tools. Parent records actual results with prjct CLI. Do not emulate independent review in the parent context or bypass the review gate.`,
+    }
+  }
   const provider = (await getActiveProvider(projectProvider)).name
   const base = provider === 'claude' ? claudeMechanism() : emulatedMechanism(provider)
   return { provider, ...base }
