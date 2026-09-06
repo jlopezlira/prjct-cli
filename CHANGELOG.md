@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.24.0] - 2026-09-05
+
+### Added
+- harness v2 phase0
+
 ## [4.23.0] - 2026-09-04
 
 ### Added
