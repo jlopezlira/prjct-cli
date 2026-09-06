@@ -49,16 +49,37 @@ const EXPLORATION_RE =
 /** Candidate path-shaped tokens; `isPathLike` decides which ones count. */
 const PATH_TOKEN_RE = /[\w.@-]+(?:\/[\w.@-]+)+|\b[\w-]+\.[a-z]{1,5}\b/g
 const CODE_EXT_RE = /\.(ts|tsx|js|mjs|cjs|json|md|c|h|py|go|rs|yml|yaml|sh|sql|css|html|toml)$/i
-// Unanchored on the left so `./core/x` and `/home/u/proj/core/x` count too.
-const SOURCE_DIR_RE =
-  /(?:^|\/)(?:core|src|lib|app|scripts|native|bin|evals|docs|test|tests|__tests__|\.github|assets|templates|packages|apps)\/[\w.@-]/
+const SOURCE_DIRS = new Set([
+  'core',
+  'src',
+  'lib',
+  'app',
+  'scripts',
+  'native',
+  'bin',
+  'evals',
+  'docs',
+  'test',
+  'tests',
+  '__tests__',
+  '.github',
+  'assets',
+  'templates',
+  'packages',
+  'apps',
+])
 /**
- * A real path names a source dir (at any depth) or ends in a code extension.
- * Bare `a/b` prose ("and/or", "A/B", "with/without") has neither and must NOT
- * read as "the prompt names the file" — that would silence the harness.
+ * A real path ends in a code extension, or is ROOTED (starts at a source dir,
+ * `./`, `../`, or `/`) and names a source dir somewhere. Prose slashes fail
+ * both: "and/or", "A/B", "with/without" have no source dir; "dev/test/prod"
+ * has one but is not rooted. A wrong "yes" here silences the harness.
  */
 function isPathLike(token: string): boolean {
-  return CODE_EXT_RE.test(token) || SOURCE_DIR_RE.test(token)
+  if (CODE_EXT_RE.test(token)) return true
+  const segs = token.split('/')
+  const first = segs[0] ?? ''
+  const rooted = first === '' || first === '.' || first === '..' || SOURCE_DIRS.has(first)
+  return rooted && segs.length > 1 && segs.some((s) => SOURCE_DIRS.has(s))
 }
 /** A token that looks like a code identifier worth checking against the index. */
 const SYMBOL_TOKEN_RE = /\b([A-Z][a-zA-Z0-9]{3,}|[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\b/g

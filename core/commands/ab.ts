@@ -146,25 +146,40 @@ function defaultDeps(
       // PROJECT_KNOWLEDGE task measures recall of knowledge that IS recorded,
       // not the accident of what a template happened to hold.
       if (ctx.arm === 'with' && ctx.task.seed?.length) {
-        for (const seed of ctx.task.seed) {
-          const tagArg = seed.tags
-            ? Object.entries(seed.tags)
-                .map(([k, v]) => `${k}:${v}`)
-                .join(',')
-            : ''
-          const args = ['remember', seed.type, seed.content, ...(tagArg ? ['--tags', tagArg] : [])]
-          const res = await spawnCollect('prjct', args, {
-            cwd: worktree,
-            env: { ...process.env, PRJCT_CLI_HOME: home, PRJCT_NO_DAEMON: '1' },
-            timeoutMs: 60_000,
-          })
-          // A cell whose seed did not land is NOT a "harness with memory"
-          // sample; fail the setup so the sweep stops instead of scoring it.
-          if (res.code !== 0) {
-            throw new Error(
-              `ab: seed failed for ${ctx.task.id} (${seed.type}): exit ${res.code} — the with-arm would be measured without its recorded knowledge`
-            )
+        try {
+          for (const seed of ctx.task.seed) {
+            const tagArg = seed.tags
+              ? Object.entries(seed.tags)
+                  .map(([k, v]) => `${k}:${v}`)
+                  .join(',')
+              : ''
+            const args = [
+              'remember',
+              seed.type,
+              seed.content,
+              ...(tagArg ? ['--tags', tagArg] : []),
+            ]
+            const res = await spawnCollect('prjct', args, {
+              cwd: worktree,
+              env: { ...process.env, PRJCT_CLI_HOME: home, PRJCT_NO_DAEMON: '1' },
+              timeoutMs: 60_000,
+            })
+            // A cell whose seed did not land is NOT a "harness with memory"
+            // sample; fail the setup so the sweep stops instead of scoring it.
+            if (res.code !== 0) {
+              throw new Error(
+                `ab: seed failed for ${ctx.task.id} (${seed.type}): exit ${res.code} — the with-arm would be measured without its recorded knowledge`
+              )
+            }
           }
+        } catch (error) {
+          // setup runs before runCell's try/finally, so it owns its own cleanup:
+          // never leave a registered worktree behind in the user's repo.
+          await run('git', ['worktree', 'remove', '--force', worktree], { cwd: repo }).catch(
+            () => undefined
+          )
+          await fsp.rm(home, { recursive: true, force: true }).catch(() => undefined)
+          throw error
         }
       }
       return { worktree, home }

@@ -65,6 +65,7 @@ const CASES: Array<{ prompt: string; expect: Label }> = [
   { prompt: 'Thanks, that looks good', expect: 'UNKNOWN' },
   { prompt: 'add tests and/or docs for the parser', expect: 'UNKNOWN' },
   { prompt: 'compare the A/B numbers with/without the harness', expect: 'UNKNOWN' },
+  { prompt: 'promote the build through dev/test/prod', expect: 'UNKNOWN' },
   { prompt: 'Let us continue with the plan', expect: 'UNKNOWN' },
   { prompt: 'Summarize what we did today', expect: 'UNKNOWN' },
   { prompt: 'Good morning', expect: 'UNKNOWN' },
