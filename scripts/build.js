@@ -264,26 +264,34 @@ const SHIM_EXTRA_SKIP = [
  */
 function deriveShimSkipSet() {
   const esbuild = require('esbuild')
-  const result = esbuild.buildSync({
-    entryPoints: [path.join(ROOT, 'core/commands/command-data.ts')],
-    bundle: true,
-    format: 'cjs',
-    platform: 'node',
-    write: false,
-  })
-  const mod = { exports: {} }
-  new Function('module', 'exports', 'require', result.outputFiles[0].text)(
-    mod,
-    mod.exports,
-    require
+  const os = require('node:os')
+  // Bundle the pure-data manifest to a temp CJS file and `require` it, rather
+  // than executing bundled text through `new Function` (SEC-15). The input is
+  // first-party source, but require-of-a-file keeps the build free of any
+  // dynamic code-evaluation construct.
+  const tmpFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-manifest-')),
+    'command-data.cjs'
   )
-  const derived = [
-    ...mod.exports.BIN_ONLY_COMMANDS,
-    ...mod.exports.COMMANDS.filter((command) => command.routingMode === 'cold-only').map(
-      (command) => command.name
-    ),
-  ]
-  return [...new Set([...derived, ...SHIM_EXTRA_SKIP])]
+  try {
+    esbuild.buildSync({
+      entryPoints: [path.join(ROOT, 'core/commands/command-data.ts')],
+      bundle: true,
+      format: 'cjs',
+      platform: 'node',
+      outfile: tmpFile,
+    })
+    const mod = require(tmpFile)
+    const derived = [
+      ...mod.BIN_ONLY_COMMANDS,
+      ...mod.COMMANDS.filter((command) => command.routingMode === 'cold-only').map(
+        (command) => command.name
+      ),
+    ]
+    return [...new Set([...derived, ...SHIM_EXTRA_SKIP])]
+  } finally {
+    fs.rmSync(path.dirname(tmpFile), { recursive: true, force: true })
+  }
 }
 
 /**

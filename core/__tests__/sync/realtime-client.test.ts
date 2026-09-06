@@ -9,7 +9,9 @@ import { describe, expect, it } from 'bun:test'
 import {
   backoffDelay,
   buildRealtimeUrl,
+  REALTIME_AUTH_SCHEME,
   RealtimeClient,
+  realtimeAuthProtocols,
   type WebSocketLike,
 } from '../../sync/realtime-client'
 
@@ -50,6 +52,7 @@ function clientWith(opts: {
   maxDelayMs?: number
 }) {
   const sockets: FakeWebSocket[] = []
+  const dials: Array<{ url: string; protocols?: string[] }> = []
   const applied: Array<{ pid: string; ev: Record<string, unknown> }> = []
   const client = new RealtimeClient({
     projectId: 'proj-1',
@@ -62,7 +65,8 @@ function clientWith(opts: {
         applied.push({ pid, ev })
         return true
       }),
-    wsFactory: () => {
+    wsFactory: (url, protocols) => {
+      dials.push({ url, protocols })
       const ws = new FakeWebSocket()
       sockets.push(ws)
       return ws
@@ -70,25 +74,43 @@ function clientWith(opts: {
     baseDelayMs: opts.baseDelayMs ?? 1,
     maxDelayMs: opts.maxDelayMs ?? 2,
   })
-  return { client, sockets, applied }
+  return { client, sockets, applied, dials }
 }
 
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms))
 
 describe('buildRealtimeUrl', () => {
-  it('swaps https→wss and appends auth query params', () => {
-    const url = buildRealtimeUrl('https://api.prjct.app', 'p1', 'pk_live_x', 'd1')
+  it('swaps https→wss, carries only non-secret routing, never the key (SEC-10)', () => {
+    const url = buildRealtimeUrl('https://api.prjct.app', 'p1', 'd1')
     expect(url.startsWith('wss://api.prjct.app/ws?')).toBe(true)
     const q = new URL(url).searchParams
-    expect(q.get('key')).toBe('pk_live_x')
+    expect(q.get('key')).toBeNull()
+    expect(url).not.toContain('pk_live')
     expect(q.get('device')).toBe('d1')
     expect(q.get('project')).toBe('p1')
+    expect(q.get('auth')).toBe('subprotocol')
   })
 
   it('swaps http→ws and tolerates a trailing slash', () => {
-    expect(buildRealtimeUrl('http://localhost:3000/', 'p', 'k', 'd')).toContain(
+    expect(buildRealtimeUrl('http://localhost:3000/', 'p', 'd')).toContain(
       'ws://localhost:3000/ws?'
     )
+  })
+})
+
+describe('realtimeAuthProtocols', () => {
+  it('carries the key in the Sec-WebSocket-Protocol values, scheme first', () => {
+    expect(realtimeAuthProtocols('pk_live_x')).toEqual([REALTIME_AUTH_SCHEME, 'pk_live_x'])
+    expect(realtimeAuthProtocols('')).toEqual([])
+  })
+
+  it('the client dials with the key in protocols, not the URL', () => {
+    const { client, dials } = makeClient({})
+    client.start()
+    expect(dials).toHaveLength(1)
+    expect(dials[0].url).not.toContain('pk_live')
+    expect(dials[0].protocols).toEqual([REALTIME_AUTH_SCHEME, 'pk_live_abc'])
+    client.stop()
   })
 })
 
