@@ -13,6 +13,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getGrokSkillInstallPath } from '../infrastructure/grok-skill'
+import { getKimiSkillPath } from '../infrastructure/kimi-skill-path'
 import { getPiSkillInstallPath } from '../infrastructure/pi-skill'
 import { resolveUserHome } from '../infrastructure/user-home'
 import { getCodexHooksJsonPath } from '../utils/codex-hooks'
@@ -155,7 +156,7 @@ export async function probeHarnessCoverage(
   const kimiHome = path.join(home, '.kimi-code')
   const kimiToml = path.join(kimiHome, 'config.toml')
   const kimiMcp = path.join(kimiHome, 'mcp.json')
-  const kimiSkill = path.join(home, '.agents', 'skills', 'prjct', 'SKILL.md')
+  const kimiSkill = getKimiSkillPath()
 
   const [
     claudeCmd,
@@ -385,7 +386,7 @@ export async function probeHarnessCoverage(
       organic: organicOf(kimiDetected, kimiHooksLive, kimiMcpLive),
       evidence:
         kimiHooksLive && kimiMcpLive
-          ? `~/.kimi-code/config.toml [[hooks]] + mcp.json${kimiSkillLive ? ' + ~/.agents/skills' : ''}`
+          ? `~/.kimi-code/config.toml [[hooks]] + mcp.json${kimiSkillLive ? ' + skills' : ''}`
           : kimiHooksLive || kimiMcpLive
             ? 'partial wire — run prjct install'
             : kimiDetected

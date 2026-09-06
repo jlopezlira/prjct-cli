@@ -17,6 +17,7 @@ import {
   SkillGenerator,
   skillBodyHasProjectStamp,
 } from '../../services/skill-generator'
+import { buildCompactSkill } from '../../services/skill-generator/editor-surfaces'
 import { countTokens } from '../../tools/context/token-counter'
 
 describe('GLOBAL_CLAUDE_MD_CONTENT (command-installer)', () => {
@@ -251,10 +252,10 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(sample).not.toContain('my-app')
     })
 
-    it('fans out the compact skill to the shared ~/.agents/skills tier (Kimi Code CLI)', async () => {
+    it('fans out the compact skill to the Kimi Code CLI user tier', async () => {
       const result = await fixture.generator.generateAndInstall()
       const kimiPath = result.generated.find(
-        (g) => g.name === 'prjct-compact' && g.path.includes('.agents/skills/prjct/SKILL.md')
+        (g) => g.name === 'prjct-compact' && g.path.includes('.kimi-code/skills/prjct/SKILL.md')
       )
       expect(kimiPath).toBeDefined()
       const content = await fs.readFile(kimiPath!.path, 'utf-8')
@@ -262,6 +263,86 @@ describe('SkillGenerator (alpha.11 single skill)', () => {
       expect(content).toContain('name: prjct')
       expect(content).toContain('description:')
       expect(content).toContain('RAG-backed')
+    })
+
+    it('does NOT fan out to the shared ~/.agents/skills tier (pi collision)', async () => {
+      const result = await fixture.generator.generateAndInstall()
+      const shared = result.generated.find((g) => g.path.includes('.agents/skills'))
+      expect(shared).toBeUndefined()
+      // pi scans ~/.agents/skills natively; a same-named prjct skill there
+      // collides with the dedicated ~/.pi/agent/skills/prjct install.
+    })
+
+    it('sweeps prjct-managed legacy copies under ~/.agents/skills (any dir name)', async () => {
+      for (const dirName of ['prjct', 'prjct.bak-20260905']) {
+        const legacyDir = path.join(fixture.tmpHome, '.agents', 'skills', dirName)
+        await fs.mkdir(legacyDir, { recursive: true })
+        await fs.writeFile(path.join(legacyDir, 'SKILL.md'), buildCompactSkill())
+      }
+      const result = await fixture.generator.generateAndInstall()
+      expect(result.skipped.filter((s) => s.name === 'prjct-legacy-shared')).toHaveLength(2)
+      await expect(
+        fs.access(path.join(fixture.tmpHome, '.agents', 'skills', 'prjct', 'SKILL.md'))
+      ).rejects.toThrow()
+      await expect(
+        fs.access(path.join(fixture.tmpHome, '.agents', 'skills', 'prjct.bak-20260905', 'SKILL.md'))
+      ).rejects.toThrow()
+    })
+
+    it('backs up outside discovery roots, preserves companions, and is repeatable', async () => {
+      const dir = path.join(fixture.tmpHome, '.agents', 'skills', 'prjct')
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(path.join(dir, 'SKILL.md'), buildCompactSkill())
+      await fs.writeFile(path.join(dir, 'notes.txt'), 'user notes')
+      await fixture.generator.generateAndInstall()
+      await fixture.generator.generateAndInstall()
+      expect(await fs.readFile(path.join(dir, 'notes.txt'), 'utf-8')).toBe('user notes')
+      const backups = path.join(fixture.tmpHome, '.prjct', 'backups', 'skills')
+      const entries = await fs.readdir(backups)
+      expect(entries).toHaveLength(1)
+      expect(await fs.readFile(path.join(backups, entries[0], 'SKILL.md'), 'utf-8')).toBe(
+        buildCompactSkill()
+      )
+    })
+
+    it('does not migrate when replacement installation fails', async () => {
+      const dir = path.join(fixture.tmpHome, '.agents', 'skills', 'prjct')
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(path.join(dir, 'SKILL.md'), buildCompactSkill())
+      await fs.writeFile(path.join(fixture.tmpHome, '.kimi-code'), 'blocked')
+      await fixture.generator.generateAndInstall()
+      expect(await fs.readFile(path.join(dir, 'SKILL.md'), 'utf-8')).toBe(buildCompactSkill())
+    })
+
+    it('preserves customized content even when it contains prjct signatures', async () => {
+      const dir = path.join(fixture.tmpHome, '.agents', 'skills', 'prjct')
+      await fs.mkdir(dir, { recursive: true })
+      const customized = `${buildCompactSkill()}\nUser-specific instructions\n`
+      await fs.writeFile(path.join(dir, 'SKILL.md'), customized)
+      const result = await fixture.generator.generateAndInstall()
+      expect(await fs.readFile(path.join(dir, 'SKILL.md'), 'utf-8')).toBe(customized)
+      expect(result.skipped.some((s) => s.reason.includes('Preserved customized'))).toBe(true)
+    })
+
+    it('preserves symlinked skills and their targets', async () => {
+      const dir = path.join(fixture.tmpHome, '.agents', 'skills', 'prjct')
+      await fs.mkdir(dir, { recursive: true })
+      const target = path.join(fixture.tmpHome, 'custom-skill.md')
+      await fs.writeFile(target, buildCompactSkill())
+      await fs.symlink(target, path.join(dir, 'SKILL.md'))
+      await fixture.generator.generateAndInstall()
+      expect((await fs.lstat(path.join(dir, 'SKILL.md'))).isSymbolicLink()).toBe(true)
+      expect(await fs.readFile(target, 'utf-8')).toBe(buildCompactSkill())
+    })
+
+    it('preserves foreign content in ~/.agents/skills/prjct', async () => {
+      const legacyDir = path.join(fixture.tmpHome, '.agents', 'skills', 'prjct')
+      await fs.mkdir(legacyDir, { recursive: true })
+      const foreign = '---\nname: prjct\ndescription: someone elses skill\n---\nunrelated body\n'
+      await fs.writeFile(path.join(legacyDir, 'SKILL.md'), foreign)
+      await fixture.generator.generateAndInstall()
+      const after = await fs.readFile(path.join(legacyDir, 'SKILL.md'), 'utf-8')
+      expect(after).toBe(foreign)
     })
   })
 

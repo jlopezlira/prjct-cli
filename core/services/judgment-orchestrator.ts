@@ -213,6 +213,7 @@ export function reviewDispatchGuidance(card: NextActionCard): string[] {
   return [
     '',
     '### Review methodology (auto; read on demand)',
+    '- Pi: use the installed prjct_agent tool for each independent reviewer/challenger/re-judge. It inherits the active model. Parent records actual results through prjct CLI; do not substitute self-review or skip the gate.',
     workflow ? `workflow:code-review=\`${workflow}\`` : '',
     '- Keep Standards findings and Spec/acceptance findings independent; do not let one substitute for the other.',
     '- Standards includes comment discipline: keep comments for intent, invariants, constraints, and non-obvious tradeoffs—not narration of visible code.',

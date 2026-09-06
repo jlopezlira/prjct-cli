@@ -15,6 +15,7 @@ import { fileExists } from '../utils/file-helper'
 import { sha256 } from '../utils/hash'
 import log from '../utils/logger'
 import { VERSION } from '../utils/version'
+import { installPiBridge } from './pi-bridge'
 import { writeSkillIfChanged } from './skill-install-helper'
 import { resolveUserPath } from './user-home'
 
@@ -24,7 +25,9 @@ function getPiSkillPath(): string {
   if (process.env.PRJCT_TEST_MODE === '1') {
     return path.join(resolveUserPath('.prjct-tests'), 'pi', 'agent', 'skills', 'prjct', 'SKILL.md')
   }
-  return resolveUserPath('.pi', 'agent', 'skills', 'prjct', 'SKILL.md')
+  return process.env.PI_CODING_AGENT_DIR
+    ? path.join(process.env.PI_CODING_AGENT_DIR, 'skills', 'prjct', 'SKILL.md')
+    : resolveUserPath('.pi', 'agent', 'skills', 'prjct', 'SKILL.md')
 }
 
 export function getPiSkillInstallPath(): string {
@@ -56,7 +59,7 @@ export function buildPiSkillContent(templateContent: string): {
   const templateHash = hashContent(normalized)
   const metadata = getPiSkillMetadata(templateHash)
   return {
-    content: `${normalized}\n\n${metadata}\n`,
+    content: `${normalized}\n\n## Pi integration\n\n- All CLI verbs are available through the prjct tool (exact argv) or bash.\n- When a workflow requests Agent/subagents, use prjct_agent; it inherits this session model and returns independent results. Parent records results through the existing CLI; never invent approval.\n- /prjct is the native entry point. After installation use /reload to load the bridge.\n\n${metadata}\n`,
     templateHash,
   }
 }
@@ -81,6 +84,7 @@ export async function installPiSkill(): Promise<{
       return { success: false, action: null }
     }
 
+    await installPiBridge(path.resolve(path.dirname(skillMdPath), '..', '..'))
     return await writeSkillIfChanged({
       skillMdPath,
       skillExists,
