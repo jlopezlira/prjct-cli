@@ -1,5 +1,7 @@
 import { describe, expect, it, spyOn } from 'bun:test'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
+import { createServer, type Socket } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { hasPiBridge, installPiBridge, uninstallPiBridge } from '../../infrastructure/pi-bridge'
@@ -8,6 +10,9 @@ import { sha256 } from '../../utils/hash'
 
 const bridgePath = path.resolve(__dirname, '../../../templates/pi/bridge.mjs')
 const bridge = import(bridgePath)
+const { generateDaemonShim } = require('../../../scripts/build.js') as {
+  generateDaemonShim: () => string
+}
 const ctx = {
   cwd: '/project',
   model: { provider: 'test-provider', id: 'test-model' },
@@ -27,6 +32,101 @@ const completed = [
 ]
   .map((event) => JSON.stringify(event))
   .join('\n')
+
+describe('pi hook transport through the published shim', () => {
+  for (const failure of [
+    'timeout',
+    'retry',
+    'disconnect',
+    'malformed',
+    'empty-object',
+    'failed-response',
+    'invalid-stdout',
+  ]) {
+    it(`preserves the payload and hook decision after daemon ${failure}`, async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-hook-shim-'))
+      const sockets: Socket[] = []
+      const server = createServer((socket) => {
+        sockets.push(socket)
+        socket.on('error', () => {})
+        socket.on('data', () => {
+          if (failure === 'retry') socket.end(`${JSON.stringify({ retry: true })}\n`)
+          if (failure === 'disconnect') socket.destroy()
+          if (failure === 'malformed') socket.end('not-json\n')
+          if (failure === 'empty-object') socket.end('{}\n')
+          if (failure === 'failed-response') socket.end('{"success":false}\n')
+          if (failure === 'invalid-stdout')
+            socket.end('{"success":true,"exitCode":0,"stdout":{}}\n')
+        })
+      })
+      try {
+        await fs.mkdir(path.join(dir, 'run'))
+        await fs.writeFile(path.join(dir, 'prjct.mjs'), generateDaemonShim())
+        // Only hook policy is stubbed; Pi, wire IO and stdin recovery are real.
+        await fs.writeFile(
+          path.join(dir, 'prjct-hooks.mjs'),
+          `
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const run = path.join(process.env.PRJCT_CLI_HOME, 'run');
+          const spill = fs.readdirSync(run).find(name => name.startsWith('hook-stdin-'));
+          const payload = JSON.parse(fs.readFileSync(path.join(run, spill), 'utf8'));
+          fs.unlinkSync(path.join(run, spill));
+          process.stdout.write(JSON.stringify({ hookSpecificOutput: {
+            additionalContext: JSON.stringify(payload), permissionDecision: 'deny'
+          }}));
+        `
+        )
+        await new Promise<void>((resolve) =>
+          server.listen(path.join(dir, 'run/daemon.sock'), resolve)
+        )
+        const { runHook } = await bridge
+        const payload = { prompt: 'sync "quoted"\nsecond line', cwd: dir, session_id: 'pi-session' }
+        const result = await runHook(
+          'prompt',
+          payload,
+          { ...ctx, cwd: dir },
+          undefined,
+          async (
+            _bin: string,
+            args: string[],
+            options: { env: NodeJS.ProcessEnv; input: string }
+          ) => {
+            const child = spawn('node', [path.join(dir, 'prjct.mjs'), ...args], {
+              cwd: dir,
+              env: { ...options.env, PRJCT_CLI_HOME: dir, PRJCT_NO_DAEMON: '0' },
+              stdio: ['pipe', 'pipe', 'pipe'],
+              timeout: 3000,
+            })
+            const stdout: Buffer[] = []
+            const stderr: Buffer[] = []
+            child.stdout.on('data', (chunk) => stdout.push(chunk))
+            child.stderr.on('data', (chunk) => stderr.push(chunk))
+            child.stdin.end(options.input)
+            return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+              child.on('error', reject)
+              child.on('close', (code) => {
+                if (code !== 0)
+                  reject(new Error(`published hook exited ${code}: ${Buffer.concat(stderr)}`))
+                else
+                  resolve({
+                    stdout: Buffer.concat(stdout).toString(),
+                    stderr: Buffer.concat(stderr).toString(),
+                  })
+              })
+            })
+          }
+        )
+        expect(JSON.parse(result.hookSpecificOutput.additionalContext)).toEqual(payload)
+        expect(result.hookSpecificOutput.permissionDecision).toBe('deny')
+      } finally {
+        for (const socket of sockets) socket.destroy()
+        server.close()
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    })
+  }
+})
 
 describe('pi native lifecycle', () => {
   it('routes native calls to canonical hooks, blocks denied edits, and stamps only successful reads', async () => {

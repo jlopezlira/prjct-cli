@@ -85,13 +85,16 @@ export async function getDaemonStatus(): Promise<DaemonStatus> {
   }
 
   try {
-    const response = await sendRequest({
-      id: crypto.randomUUID(),
-      command: 'daemon',
-      args: ['status'],
-      options: {},
-      cwd: process.cwd(),
-    })
+    const response = await sendRequest(
+      {
+        id: crypto.randomUUID(),
+        command: 'daemon',
+        args: ['status'],
+        options: {},
+        cwd: process.cwd(),
+      },
+      { timeoutMs: 1_000 }
+    )
 
     if (response.success && response.result) {
       return response.result as DaemonStatus
