@@ -206,6 +206,23 @@ export interface LocalConfig {
     commands?: Array<{ kind: 'typecheck' | 'lint' | 'test'; command: string }>
   }
   /**
+   * Harness tuning. `mcpTier` documents the intended MCP tool tier (the live
+   * default is set in code — see DEFAULT_MCP_TOOL_TIER); `policy` overrides the
+   * per-task-class prompt/pre-search behaviour (see core/services/harness-policy).
+   */
+  harness?: {
+    mcpTier?: 'micro' | 'lean' | 'core' | 'standard' | 'all'
+    policy?: Record<
+      string,
+      {
+        promptLane?: 'silent' | 'inject' | 'ranked'
+        maxInjectChars?: number
+        preSearch?: 'inject' | 'allow' | 'deny'
+        verifyContract?: boolean
+      }
+    >
+  }
+  /**
    * QA phase — per-cycle acceptance criteria + flows, verified without any
    * test framework in this repo. Unset mode is pack-gated (code → advisory,
    * code-strict → strict, else off), like `judgment.conflictMode`:

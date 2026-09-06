@@ -35,6 +35,7 @@ export const KNOWN_CONFIG_KEYS: readonly string[] = [
   'notify',
   'enforce',
   'gauntlet',
+  'harness',
   'retention',
   'multiAgent',
   'embeddings',

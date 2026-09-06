@@ -30,6 +30,7 @@ import { projectMemory } from '../memory/project-memory'
 import { buildAlignmentCard } from '../services/alignment-card'
 import { contextPressureVerdict } from '../services/context-pressure'
 import { buildRepositoryAlignmentCard } from '../services/file-cue'
+import { resolvePolicy } from '../services/harness-policy'
 import {
   buildDeliveryGuidance,
   classifyDeliveryIntent,
@@ -51,6 +52,7 @@ import {
   normalizeStateForMaterialChange,
 } from '../services/session-context-cache'
 import { sessionRolloverLimit, sessionRolloverVerdict } from '../services/session-rollover'
+import { classifyTurn } from '../services/task-class'
 import { buildTaskHarness } from '../services/task-harness'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
@@ -909,7 +911,12 @@ function computePromptGuidance(
   hasMergeConflicts = false,
   repositoryAlignmentOverride?: string | null
 ): PromptGuidanceComputation {
-  const cueResult = buildTopicalCueResult(projectId, prompt)
+  // Turn router: on a SELF_CONTAINED turn (the prompt names the file/symbol to
+  // touch) the agent alone is fastest, so the OPTIONAL lane stays silent — the
+  // Δ evidence's "silence where the agent wins". The required repository
+  // alignment below is deliberately task-class-independent and still fires.
+  const silentOptional = resolvePolicy('', classifyTurn(prompt).cls).promptLane === 'silent'
+  const cueResult = silentOptional ? null : buildTopicalCueResult(projectId, prompt)
   const harness = buildTaskHarness(prompt)
   // Provider- and task-classification-independent. An unknown/terse prompt is
   // not permission to ignore the repository; the same source-first contract
@@ -921,8 +928,8 @@ function computePromptGuidance(
     repositoryAlignmentOverride === undefined
       ? buildRepositoryAlignmentCard(projectId, prompt, `${prompt}\n${state}`)?.content
       : repositoryAlignmentOverride
-  const delivery = buildDeliveryGuidance(prompt)
-  const guidance = buildSelectiveGuidance(projectId, prompt)
+  const delivery = silentOptional ? null : buildDeliveryGuidance(prompt)
+  const guidance = silentOptional ? null : buildSelectiveGuidance(projectId, prompt)
   const deliveryIntent = classifyDeliveryIntent(prompt)
   const routingInput = {
     intent: prompt,
