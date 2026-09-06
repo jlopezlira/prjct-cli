@@ -33,7 +33,8 @@ describe('harness surfaces matrix', () => {
     expect(kimi!.hooks.events).toContain('PreToolUse')
     expect(kimi!.hooks.events).not.toContain('CwdChanged')
     expect(kimi!.mcp.configPaths[0]).toContain('.kimi-code/mcp.json')
-    expect(kimi!.skills.paths.some((p) => p.includes('.agents/skills'))).toBe(true)
+    expect(kimi!.skills.paths.some((p) => p.includes('.kimi-code/skills'))).toBe(true)
+    expect(kimi!.skills.paths.some((p) => p.includes('.agents/skills'))).toBe(false)
   })
 
   it('documents OpenCode MCP as native and Pi skill as native (no MCP)', () => {

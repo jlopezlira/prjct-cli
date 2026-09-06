@@ -90,8 +90,16 @@ export function writeHookStdinSpill(cwd: string, subcommand: string, payload: st
   const spillPath = hookStdinSpillPath(cwd, subcommand)
   if (!spillPath) return
   try {
-    fs.mkdirSync(path.dirname(spillPath), { recursive: true })
-    fs.writeFileSync(spillPath, payload, 'utf-8')
+    // The payload is a host event: prompt text, tool arguments, transcript
+    // path. Owner-only, same as the native spill (hook-fast.c uses 0600).
+    const dir = path.dirname(spillPath)
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    try {
+      fs.chmodSync(dir, 0o700) // a pre-existing run dir from an older install
+    } catch {
+      // filesystem without POSIX modes — the file mode below still applies
+    }
+    fs.writeFileSync(spillPath, payload, { encoding: 'utf-8', mode: 0o600 })
   } catch {
     // fail-soft — a missed spill just means the old behavior (no recovery)
   }

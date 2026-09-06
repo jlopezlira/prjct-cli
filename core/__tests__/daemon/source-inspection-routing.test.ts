@@ -68,7 +68,7 @@ describe('source inspection option routing', () => {
     ]) {
       const child = spawn(binaryPath, ['verb', verb!, argument!], {
         cwd: ROOT,
-        env: { ...process.env, PRJCT_CLI_HOME: cliHome },
+        env: { ...process.env, PRJCT_CLI_HOME: cliHome, PRJCT_NO_DAEMON: '0' },
         stdio: 'ignore',
       })
       const code = await new Promise<number | null>((resolve, reject) => {
@@ -92,7 +92,7 @@ describe('source inspection option routing', () => {
         [shimPath, 'guard', 'core/state.ts', `--source-inspection-token=${TOKEN}`, '--md'],
         {
           cwd: ROOT,
-          env: { ...process.env, PRJCT_CLI_HOME: cliHome },
+          env: { ...process.env, PRJCT_CLI_HOME: cliHome, PRJCT_NO_DAEMON: '0' },
           stdio: 'ignore',
         }
       )
@@ -117,7 +117,7 @@ describe('source inspection option routing', () => {
         ['verb', 'guard', 'core/state.ts', `--source-inspection-token=${TOKEN}`, '--md'],
         {
           cwd: ROOT,
-          env: { ...process.env, PRJCT_CLI_HOME: cliHome },
+          env: { ...process.env, PRJCT_CLI_HOME: cliHome, PRJCT_NO_DAEMON: '0' },
           stdio: 'ignore',
         }
       )

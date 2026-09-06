@@ -20,6 +20,9 @@ const REQUIRED_PHYSICAL_TEMPLATES = [
   'templates/crew/roles/implementer.md',
   'templates/crew/roles/leader.md',
   'templates/crew/roles/reviewer.md',
+  // Pi bridge (transport only), installed by core/infrastructure/pi-bridge.ts.
+  'templates/pi/bridge.mjs',
+  'templates/pi/index.ts',
   'templates/skills/prjct/SKILL.md',
 ] as const
 

@@ -2,10 +2,9 @@
  * Realtime client — ONE project's live WebSocket connection to the storage
  * API, for <5s cross-device propagation.
  *
- * Uses the PLATFORM global `WebSocket` (RFC 6455 — stable in Node ≥22.5 and
- * Bun), NOT a backend SDK and NOT the `ws` package. The WHATWG WebSocket API
- * can't set request headers, so the token + device + project are passed as
- * query params over `wss://` (TLS-encrypted), matching the spec's auth model.
+ * Uses native Bun WebSockets and `ws` on Node to send the existing x-api-key header.
+ * Credentials never enter URLs or require a coordinated server rollout.
+ * Redirects are disabled so a handshake cannot forward auth to another host.
  *
  * Responsibilities: connect, parse inbound `{type:'event', event}` frames and
  * hand them to `apply`, and reconnect with exponential backoff + jitter on
@@ -13,17 +12,19 @@
  * echo logic is unit-testable without a real socket.
  */
 
+import WebSocket from 'ws'
+
 /** Minimal subset of the WHATWG WebSocket we depend on (keeps it injectable). */
 export interface WebSocketLike {
   readyState: number
   close(code?: number, reason?: string): void
-  onopen: ((ev: unknown) => void) | null
-  onmessage: ((ev: { data: unknown }) => void) | null
-  onclose: ((ev: unknown) => void) | null
-  onerror: ((ev: unknown) => void) | null
+  onopen: WebSocket['onopen'] | globalThis.WebSocket['onopen']
+  onmessage: WebSocket['onmessage'] | globalThis.WebSocket['onmessage']
+  onclose: WebSocket['onclose'] | globalThis.WebSocket['onclose']
+  onerror: WebSocket['onerror'] | globalThis.WebSocket['onerror']
 }
 
-export type WebSocketFactory = (url: string) => WebSocketLike
+export type WebSocketFactory = (url: string, headers?: Record<string, string>) => WebSocketLike
 
 export type RealtimeState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
@@ -35,27 +36,27 @@ export interface RealtimeClientOptions {
   deviceId: string
   /** Applies a received event locally (echo-guarded). Returns applied?. */
   apply: (projectId: string, event: Record<string, unknown>) => Promise<boolean>
-  /** Injected for tests; defaults to the platform global WebSocket. */
+  /** Injected for tests; defaults to the header-capable ws transport. */
   wsFactory?: WebSocketFactory
   baseDelayMs?: number
   maxDelayMs?: number
 }
 
-/** Whether this runtime exposes a usable global WebSocket client. */
-export function hasGlobalWebSocket(): boolean {
-  return typeof (globalThis as { WebSocket?: unknown }).WebSocket === 'function'
+/**
+ * REST base → ws endpoint with NON-SECRET routing params only. `https`→`wss`,
+ * `http`→`ws`. The credential never appears here — see `realtimeAuthHeaders`.
+ */
+export function buildRealtimeUrl(apiUrl: string, projectId: string, deviceId: string): string {
+  const base = apiUrl.replace(/\/$/, '').replace(/^http/, 'ws')
+  const q = new URLSearchParams({ device: deviceId, project: projectId })
+  return `${base}/ws?${q.toString()}`
 }
 
-/** REST base → ws endpoint with auth query params. `https`→`wss`, `http`→`ws`. */
-export function buildRealtimeUrl(
-  apiUrl: string,
-  projectId: string,
-  apiKey: string,
-  deviceId: string
-): string {
-  const base = apiUrl.replace(/\/$/, '').replace(/^http/, 'ws')
-  const q = new URLSearchParams({ key: apiKey, device: deviceId, project: projectId })
-  return `${base}/ws?${q.toString()}`
+/**
+ * Header contract already supported by the storage API's /ws endpoint.
+ */
+export function realtimeAuthHeaders(apiKey: string): Record<string, string> {
+  return apiKey ? { 'x-api-key': apiKey } : {}
 }
 
 /** Exponential backoff with full jitter, capped. Pure — unit tested. */
@@ -79,8 +80,12 @@ export class RealtimeClient {
       ...options,
       wsFactory:
         options.wsFactory ??
-        ((url: string) =>
-          new (globalThis as { WebSocket: new (u: string) => WebSocketLike }).WebSocket(url)),
+        ((url, headers) =>
+          // Bun 1.3's node:http upgrade shim is incomplete; use its native
+          // header-capable client instead of routing ws through that shim.
+          typeof Bun !== 'undefined'
+            ? new globalThis.WebSocket(url, { headers })
+            : new WebSocket(url, { headers, followRedirects: false, handshakeTimeout: 10000 })),
       baseDelayMs: options.baseDelayMs ?? 1000,
       maxDelayMs: options.maxDelayMs ?? 30_000,
     }
@@ -110,15 +115,11 @@ export class RealtimeClient {
 
   private connect(): void {
     this._state = this.attempt === 0 ? 'connecting' : 'reconnecting'
-    const url = buildRealtimeUrl(
-      this.opts.apiUrl,
-      this.opts.projectId,
-      this.opts.apiKey,
-      this.opts.deviceId
-    )
+    const url = buildRealtimeUrl(this.opts.apiUrl, this.opts.projectId, this.opts.deviceId)
+    const headers = realtimeAuthHeaders(this.opts.apiKey)
     const ws = (() => {
       try {
-        return this.opts.wsFactory(url)
+        return this.opts.wsFactory(url, headers)
       } catch {
         return null
       }
@@ -133,7 +134,7 @@ export class RealtimeClient {
       this._state = 'open'
       this.attempt = 0
     }
-    ws.onmessage = (ev) => {
+    ws.onmessage = (ev: { data: unknown }) => {
       void this.handleMessage(ev?.data)
     }
     ws.onerror = () => {

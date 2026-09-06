@@ -60,4 +60,17 @@ describe('installPiSkill', () => {
     expect(built.templateHash).toHaveLength(12)
     expect(built.content).toContain('prjct-pi-skill')
   })
+
+  it('preserves a customized skill and leaves the installed bridge unchanged', async () => {
+    await installPiSkill()
+    const skillPath = getPiSkillInstallPath()
+    const bridge = path.resolve(path.dirname(skillPath), '../../extensions/prjct/index.ts')
+    const original = await fs.readFile(bridge, 'utf8')
+    const customized = `${await fs.readFile(skillPath, 'utf8')}\nMy custom workflow\n`
+    await fs.writeFile(skillPath, customized)
+    const result = await installPiSkill()
+    expect(result.success).toBe(false)
+    expect(await fs.readFile(skillPath, 'utf8')).toBe(customized)
+    expect(await fs.readFile(bridge, 'utf8')).toBe(original)
+  })
 })

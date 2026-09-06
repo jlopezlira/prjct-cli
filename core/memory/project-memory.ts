@@ -233,9 +233,10 @@ function loadV2Entries(
     content: string
     provenance: string | null
     created_at: number
+    stale_at: number | null
   }>(
     projectId,
-    `SELECT id, type, content, provenance, created_at
+    `SELECT id, type, content, provenance, created_at, stale_at
      FROM memory_entries
      WHERE deleted_at IS NULL ${whereTail}`,
     ...params
@@ -252,6 +253,7 @@ function loadV2Entries(
     tags: tagsById.get(r.id) ?? {},
     rememberedAt: new Date(r.created_at).toISOString(),
     provenance: (r.provenance ?? 'declared') as MemoryProvenance,
+    ...(r.stale_at ? { staleAt: new Date(r.stale_at).toISOString() } : {}),
   }))
 }
 
@@ -461,6 +463,19 @@ export const projectMemory = {
         }
       } catch {
         /* inference is best-effort */
+      }
+    }
+
+    // Write-time anchors: bind the capture to HEAD (`commit`) and, when the
+    // content names an indexed symbol, to that symbol — so the anchor sweep
+    // (memory/anchors.ts) can later tell whether it still resolves instead of
+    // recall serving a rotted fact as truth. Explicit tags win; best-effort.
+    if (tags.file && !tags.commit) {
+      try {
+        const { resolveAnchors } = await import('./anchors')
+        Object.assign(tags, await resolveAnchors(projectPath, projectId, args.content))
+      } catch {
+        /* anchors are best-effort */
       }
     }
 

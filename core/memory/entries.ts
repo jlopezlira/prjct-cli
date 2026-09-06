@@ -91,6 +91,12 @@ export interface MemoryEntry {
   /** Task id that captured this, if any */
   source?: string
   provenance: MemoryProvenance
+  /**
+   * ISO8601 set by the anchor sweep (memory/anchors.ts) when the entry's
+   * file/symbol anchor no longer resolves at HEAD. Recall serves such entries
+   * last and renders a `[stale@sha]` cue; they are never silently dropped.
+   */
+  staleAt?: string
 }
 
 /**

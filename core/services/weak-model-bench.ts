@@ -96,7 +96,7 @@ export function runWeakModelBench(): WeakBenchReport {
 
   push(
     'MCP default',
-    resolveTier(undefined) === 'core' && DEFAULT_MCP_TOOL_TIER === 'core',
+    resolveTier(undefined) === 'micro' && DEFAULT_MCP_TOOL_TIER === 'micro',
     `tier=${resolveTier(undefined)}`
   )
 

@@ -13,6 +13,7 @@
  * mirroring the retrieval gate's minimum-sample rule.
  */
 
+import { staleAnchorCount } from '../memory/anchors'
 import { isModelMemory } from '../memory/entries'
 import { projectMemory } from '../memory/project-memory'
 import { computeSubstrateHealth } from '../memory/substrate-health'
@@ -41,6 +42,8 @@ export interface MemoryAudit {
   neverReadPct: number
   stale: number
   stalePct: number
+  /** Entries whose file/symbol anchor no longer resolves at HEAD (memory/anchors.ts). */
+  staleAnchors: number
   /** What the automatic retention cleanup would remove on the next apply. */
   wouldArchive: number
   wouldDelete: number
@@ -177,6 +180,7 @@ export function buildMemoryAudit(
     neverReadPct,
     stale,
     stalePct: pct(stale),
+    staleAnchors: staleAnchorCount(projectId),
     wouldArchive: retention.archive,
     wouldDelete: retention.delete,
     avgConfidence,
@@ -205,6 +209,7 @@ export function renderMemoryAuditMd(audit: MemoryAudit): string {
     `- **read / used:** ${audit.engaged} engaged (${audit.cited} cited — the uninflatable signal · ${audit.engaged - audit.cited} fetch-only) · ${audit.neverRead} never read (${pctStr(audit.neverReadPct)})`,
     `- **signal:** ${Math.round(audit.signalRatio * 100)}% (slop ${pctStr(audit.slopPct)})`,
     `- **stale (>${STALE_DAYS}d):** ${audit.stale} (${pctStr(audit.stalePct)})`,
+    `- **stale anchors (file/symbol gone at HEAD):** ${audit.staleAnchors} — served last, rendered [stale@sha]`,
     `- **confidence:** avg ${audit.avgConfidence} (persisted per-entry; drives archive → ${DEFAULT_ARCHIVE_PRUNE_DAYS}d TTL → delete)`,
     `- **auto-cleanup would remove next:** ${audit.wouldDelete} delete · ${audit.wouldArchive} archive`,
     '',

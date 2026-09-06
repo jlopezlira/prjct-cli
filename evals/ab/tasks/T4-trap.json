@@ -1,0 +1,13 @@
+{
+  "id": "T4-trap",
+  "taskClass": "EXPLORATION",
+  "prompt": "Two tests in core/__tests__/hooks/prompt-delta-emission.test.ts ('packs an auto-route as one exact-path section and dedupes it by session' and 'keeps repository alignment beside an auto-routed private workflow') pass on one developer machine and fail on another with identical code and dependencies. Diagnose the most likely root cause and propose the minimal fix. Reply in the form: CAUSE: ... EVIDENCE: ... FIX: ...",
+  "gold": "CAUSE: the tests are sensitive to the LENGTH of the checkout/install path, not to code. The prompt hook packs the auto-routed private-skill paths (absolute paths under PRIVATE_SKILL_ASSET_ROOT) into a fixed character budget (STATE_BUDGET = 700 chars; the test asserts length <= 700) and the packer skips any section that does not fit; on a machine with a longer absolute path the auto-route section overflows the budget and is dropped, so the expected paths are missing. EVIDENCE: identical code passes at a 40-char checkout path and fails at a 114-char path. FIX: make the packed route path-length independent (relative/shortened paths or budget computed from actual path length) or make the fixture/assertion independent of the absolute path length.",
+  "det": {
+    "parts": [
+      { "name": "length", "clauses": [{ "regex": "\\b(length|long|longer)\\b" }] },
+      { "name": "path", "clauses": [{ "all": ["path"] }] },
+      { "name": "budget", "clauses": [{ "regex": "\\b700\\b|budget" }] }
+    ]
+  }
+}

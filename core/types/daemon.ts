@@ -31,6 +31,10 @@ export interface DaemonRequest {
    *  session-scoped delivery trimming; optional = drift-safe both ways
    *  (absent → sessionless policies, i.e. no suppression). */
   callerSession?: { sessionId?: string; agent?: string; identity?: string }
+  /** Per-daemon secret read from the owner-only run dir (`daemon.token`).
+   *  Proves the peer can read the same user's files — the portable stand-in
+   *  for SO_PEERCRED, and the only auth Windows named pipes get. */
+  auth?: string
 }
 
 /** Response sent from daemon to CLI client */
@@ -54,6 +58,13 @@ export interface DaemonResponse {
    * direct in-process execution on the fresh code, NOT print this as an error.
    */
   retry?: boolean
+  /**
+   * Set (together with `retry`) when the request carried no valid daemon
+   * token. Nothing executed; clients run the command directly. Hook clients
+   * must take the COLD path rather than punt, because the daemon will not
+   * restart to fix a missing token the way it does for stale code.
+   */
+  unauthenticated?: boolean
 }
 
 /** Daemon status info returned by `daemon status` */

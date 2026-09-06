@@ -28,6 +28,7 @@ import { execSync } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import chalk from 'chalk'
+import { isSecretLikePath } from '../agent/paths'
 import { STATUS_CHANGE_ACTION, TAG_EVENT_TYPE } from '../memory/events'
 import { ChangelogService } from '../services/changelog-service'
 import { memoryService } from '../services/memory-service'
@@ -40,8 +41,9 @@ import type { LocalConfig, ProjectPersona } from '../types/config'
 import { getErrorMessage } from '../types/fs'
 import type { WorkflowRule } from '../types/storage/extended'
 import type { WorkflowExecutionResult, WorkflowRunContext } from '../types/workflow.js'
-import { execAsync, execFileAsync, matchProc, runProc } from '../utils/exec'
+import { execAsync, execFileAsync } from '../utils/exec'
 import { detectProjectCommands } from '../utils/project-commands'
+import { scanForSecrets } from '../utils/secret-scanner'
 import {
   finishWorkflowRun,
   recordGateEvaluation,
@@ -129,29 +131,13 @@ async function runVerifyAction(rule: WorkflowRule, projectPath: string): Promise
           return detected
         })
       : configuredCommand
-  // runProc (not exec): stdin ignored so bun test does not hang in watch/pipe
-  // mode; tree-kill on timeout; overflow is infra not a silent 1MB crash.
-  const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'
-  const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
-  const result = await runProc(shell, shellArgs, {
-    timeoutMs: rule.timeoutMs,
-    cwd: projectPath,
-    env: { ...process.env },
-    maxBuffer: 32 * 1024 * 1024,
-  })
-  if (result.ok) return
-  const detail = matchProc(result, {
-    ok: () => '',
-    exit: (r) => {
-      const out = `${r.stderr}\n${r.stdout}`.trim()
-      return out ? out.slice(-4000) : `exit ${r.code}`
-    },
-    timeout: (r) => `timed out after ${r.budgetMs}ms`,
-    spawn: (r) => r.cause.message,
-    overflow: (r) => `output exceeded ${r.maxBuffer} bytes`,
-  })
+  // Shared runner (verify-runner.ts): stdin closed so bun test can't hang,
+  // tree-kill on timeout, overflow surfaced as infra.
+  const { runVerifyCommand } = await import('../services/verify-runner')
+  const run = await runVerifyCommand(projectPath, command, { timeoutMs: rule.timeoutMs })
+  if (run.ok) return
   throw new Error(
-    `Verification failed: \`${command}\`\n${detail}\n` +
+    `Verification failed: \`${command}\`\n${run.detail}\n` +
       'Stop-the-line: do not proceed. Fix the failure and re-run this check — ' +
       'unverified output must not advance.'
   )
@@ -332,9 +318,102 @@ async function runGitCommit(
       )
     }
   } else {
-    await execFileAsync('git', ['add', '.'], { cwd: projectPath })
+    const { added, skipped } = await stageWorkingTree(projectPath)
+    for (const line of skipped) console.warn(`git:commit skipped ${line}`)
+    if (added.length === 0 && skipped.length > 0) {
+      throw new Error(
+        `git:commit staged nothing: every changed path looked like a secret (${skipped.length}). Stage what you mean deliberately with git add.`
+      )
+    }
   }
   await execFileAsync('git', ['commit', '-m', msg], { cwd: projectPath })
+}
+
+/** Largest blob the secret scan reads in full; anything bigger is scanned by its head. */
+const STAGE_SCAN_BYTES = 512 * 1024
+
+/**
+ * `git add` of the whole working tree, minus credential material. The old
+ * `git add .` swept `.env`, key files and any file that happened to contain
+ * a token straight into a release commit (SEC-09); the pre-secrets hook
+ * scans tool input, never blobs, so this is the only place that looks at
+ * the bytes about to be committed.
+ */
+export async function stageWorkingTree(
+  projectPath: string
+): Promise<{ added: string[]; skipped: string[] }> {
+  const status = await execFileAsync(
+    'git',
+    ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    { cwd: projectPath, maxBuffer: 32 * 1024 * 1024 }
+  ).then((r) => String(r.stdout ?? ''))
+  // -z output: `XY path\0`, and a rename/copy is `XY new\0old\0` — the old
+  // path is its own chunk with no status prefix, so it is consumed with the
+  // entry that announced it (`git add -A -- new` records the rename).
+  const chunks = status.split('\0')
+  const entries: Array<{ code: string; file: string }> = []
+  for (const [index, chunk] of chunks.entries()) {
+    if (chunk.length < 4) continue
+    if (index > 0) {
+      const previous = entries[entries.length - 1]
+      const previousChunk = chunks[index - 1] ?? ''
+      if (previous && previousChunk.slice(3) === previous.file && /^[RC]/.test(previous.code)) {
+        continue // the old name of the rename announced by the previous chunk
+      }
+    }
+    entries.push({ code: chunk.slice(0, 2), file: chunk.slice(3) })
+  }
+  const added: string[] = []
+  const skipped: string[] = []
+  for (const { code, file } of entries) {
+    if (isSecretLikePath(file)) {
+      skipped.push(`${file} (secret-like path)`)
+      continue
+    }
+    if (code !== ' D' && code !== 'D ') {
+      const hit = await blobSecretHit(path.join(projectPath, file))
+      if (hit) {
+        skipped.push(`${file} (${hit})`)
+        continue
+      }
+    }
+    added.push(file)
+  }
+  if (added.length > 0) {
+    // Batched so a huge tree does not exceed the argv limit.
+    const BATCH = 500
+    for (const start of Array.from(
+      { length: Math.ceil(added.length / BATCH) },
+      (_, i) => i * BATCH
+    )) {
+      await execFileAsync('git', ['add', '-A', '--', ...added.slice(start, start + BATCH)], {
+        cwd: projectPath,
+      })
+    }
+  }
+  return { added, skipped }
+}
+
+/** First secret pattern found in the file's bytes, or null. Missing/unreadable → null. */
+async function blobSecretHit(absolutePath: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(absolutePath)
+    if (!stat.isFile()) return null
+    const handle = await fs.open(absolutePath, 'r')
+    try {
+      const size = Math.min(stat.size, STAGE_SCAN_BYTES)
+      const buffer = Buffer.alloc(size)
+      await handle.read(buffer, 0, size, 0)
+      // Binary blobs (NUL in the head) are not text the scanner understands.
+      if (buffer.subarray(0, 8192).includes(0)) return null
+      const hits = scanForSecrets(buffer.toString('utf-8'))
+      return hits.length > 0 ? hits[0] : null
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return null
+  }
 }
 
 /** Files an earlier ship step writes, which must reach the commit either way. */
@@ -533,6 +612,7 @@ async function runRuleAction(
 
 // Test-only surface for the deterministic verification gate.
 export const _verify = { runVerifyAction, VERIFY_ACTION_PREFIX }
+export const _gitCommit = { runGitCommit }
 
 async function buildWhenContext(projectId: string, projectPath: string): Promise<WhenContext> {
   // All three sub-queries are best-effort — a missing branch or empty

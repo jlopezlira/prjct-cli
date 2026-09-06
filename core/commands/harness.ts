@@ -151,6 +151,32 @@ export class HarnessCommands extends PrjctCommandsBase {
         ? JSON.parse(readFileSync(evidencePath, 'utf8'))
         : undefined
       const report = computeHarnessScore({ pairedRuns })
+      // Live A/B (measurement is the product): a provisional Δ from the same
+      // paired-outcomes file, model- and class-aware. Never gates release —
+      // surfaced so a small live sample is visible, not hidden.
+      const { evaluateLiveOutcome } = await import('../services/outcome-evidence')
+      const live = evaluateLiveOutcome(pairedRuns)
+      const liveMd =
+        live.status === 'missing'
+          ? ''
+          : [
+              `## Live A/B (${live.status})`,
+              '',
+              live.summary,
+              '',
+              ...(live.byClass.length
+                ? [
+                    '| class | pairs | baseline acc | harness acc | Δ acc |',
+                    '|---|---:|---:|---:|---:|',
+                    ...live.byClass.map(
+                      (s) =>
+                        `| ${s.key} | ${s.pairs} | ${s.baselineAccuracy.toFixed(2)} | ${s.harnessAccuracy.toFixed(2)} | ${s.deltaAccuracy >= 0 ? '+' : ''}${s.deltaAccuracy.toFixed(2)} |`
+                    ),
+                    '',
+                  ]
+                : []),
+              `_Grader disagreements: ${live.disagreements}._`,
+            ].join('\n')
       const delta = computeHarnessDelta()
       const { outcomesMd, outcomesLine, weakLine } = await (async () => {
         try {
@@ -179,7 +205,7 @@ export class HarnessCommands extends PrjctCommandsBase {
           deltaMd: renderHarnessDeltaMd(delta),
           outcomesMd: outcomesMd ?? undefined,
         })
-        const extras = [weakLine ? `## Weak-model mode\n\n${weakLine}` : '']
+        const extras = [liveMd, weakLine ? `## Weak-model mode\n\n${weakLine}` : '']
           .filter(Boolean)
           .join('\n\n')
         console.log(extras ? `${md}\n\n${extras}\n` : md)

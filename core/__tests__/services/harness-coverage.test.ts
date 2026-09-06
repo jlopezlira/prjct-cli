@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { installPiBridge } from '../../infrastructure/pi-bridge'
 import { probeHarnessCoverage, renderHarnessCoverageMd } from '../../services/harness-coverage'
 
 describe('harness coverage (organic multi-runtime board)', () => {
@@ -71,7 +72,7 @@ timeout = 10
     expect(kimi?.organic).toBe('full')
   })
 
-  it('marks OpenCode full when mcp.prjct is present and Pi full when skill is present', async () => {
+  it('marks OpenCode MCP full but requires an intact native bridge for full Pi coverage', async () => {
     const ocDir = path.join(fixture.home, '.prjct-tests', 'opencode')
     await fs.mkdir(ocDir, { recursive: true })
     await fs.writeFile(
@@ -118,7 +119,17 @@ timeout = 10
 
     const pi = report.runtimes.find((r) => r.id === 'pi')
     expect(pi?.detected).toBe(true)
-    expect(pi?.organic).toBe('full')
+    expect(pi?.organic).toBe('partial')
+    expect(pi?.hooksLive).toBe(false)
+    const agentDir = path.resolve(piSkillDir, '../..')
+    await installPiBridge(agentDir)
+    const complete = (await probeHarnessCoverage(fixture.home)).runtimes.find((r) => r.id === 'pi')
+    expect(complete?.organic).toBe('full')
+    expect(complete?.hooksLive).toBe(true)
+    await fs.writeFile(path.join(agentDir, 'extensions', 'prjct', 'hooks.json'), '[]')
+    expect(
+      (await probeHarnessCoverage(fixture.home)).runtimes.find((r) => r.id === 'pi')?.organic
+    ).toBe('partial')
   })
 
   it('marks Claude full when settings + mcp.json have prjct wire', async () => {

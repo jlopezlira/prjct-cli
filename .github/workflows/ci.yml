@@ -106,6 +106,7 @@ jobs:
           case "${{ matrix.shard }}" in
             core-a)
               bun test --dots --timeout 20000 \
+                core/__tests__/agent \
                 core/__tests__/domain \
                 core/__tests__/schemas \
                 core/__tests__/utils \

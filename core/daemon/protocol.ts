@@ -44,6 +44,8 @@ export const DAEMON_PATHS = {
   pid: () => path.join(DAEMON_PATHS.runDir(), 'daemon.pid'),
   /** Log file */
   log: () => path.join(DAEMON_PATHS.runDir(), 'daemon.log'),
+  /** Per-daemon auth token (owner-only; see core/daemon/auth.ts) */
+  token: () => path.join(DAEMON_PATHS.runDir(), 'daemon.token'),
 }
 
 /**

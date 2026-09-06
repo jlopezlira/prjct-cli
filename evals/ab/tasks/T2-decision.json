@@ -1,0 +1,17 @@
+{
+  "id": "T2-decision",
+  "taskClass": "PROJECT_KNOWLEDGE",
+  "prompt": "A new mutable per-project setting `review.maxRounds` must be added to prjct. Where must it be persisted, where must it NOT be persisted, and why? Name the module that enforces this split. Reply in the form: PERSIST: ... NOT: ... WHY: ... MODULE: ...",
+  "gold": "PERSIST: in prjct global project settings under ~/.prjct-cli/projects/<projectId>/ (the project settings file written by configManager.writeConfig). NOT: in the client repository file .prjct/prjct.config.json, which is only a locator holding projectId and dataPath. WHY: mutable policy and agent-facing configuration must stay out of client repos (byte-stable locator, cache/prompt stability, no policy churn in git). MODULE: core/infrastructure/config-manager.ts.",
+  "det": {
+    "parts": [
+      { "name": "module", "clauses": [{ "all": ["config-manager"] }] },
+      {
+        "name": "locator",
+        "clauses": [{ "all": ["locator"] }, { "all": ["projectid", "datapath"] }]
+      },
+      { "name": "repo_file", "clauses": [{ "all": ["prjct.config.json"] }] },
+      { "name": "global", "clauses": [{ "all": [".prjct-cli"] }, { "all": ["global"] }] }
+    ]
+  }
+}

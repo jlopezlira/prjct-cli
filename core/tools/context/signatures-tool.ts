@@ -18,6 +18,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { CodeSignature, SignaturesToolOutput, SignatureType } from '../../types/context-tools'
 import { isNotFoundError } from '../../types/fs'
+import { resolveInsideProject } from '../../utils/path-jail'
 import { measureCompression, noCompression } from './token-counter'
 
 // Language Support
@@ -314,13 +315,10 @@ export async function extractSignatures(
   filePath: string,
   projectPath: string = process.cwd()
 ): Promise<SignaturesToolOutput> {
-  // Resolve to absolute path
-  const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(projectPath, filePath)
-
-  // Prevent path traversal — resolved path must stay within projectPath
-  const resolvedProject = path.resolve(projectPath)
-  const resolvedFile = path.resolve(absolutePath)
-  if (!resolvedFile.startsWith(resolvedProject + path.sep) && resolvedFile !== resolvedProject) {
+  // Jail on the canonical path: an in-tree symlink to /etc or ~/.ssh reads
+  // as inside the project lexically but its bytes live outside it.
+  const absolutePath = resolveInsideProject(projectPath, filePath)
+  if (absolutePath === null) {
     return {
       file: filePath,
       language: 'unknown',

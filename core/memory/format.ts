@@ -129,7 +129,15 @@ export const MACHINE_TAG_KEYS: ReadonlySet<string> = new Set([
   'context_schema',
   'synthesis',
   'commit',
+  'symbol',
 ])
+
+/** `[stale@abc1234]` cue for an entry whose anchor no longer resolves. */
+export function staleAnchorCue(e: Pick<MemoryEntry, 'staleAt' | 'tags'>): string {
+  if (!e.staleAt) return ''
+  const sha = (e.tags?.commit ?? '').slice(0, 7)
+  return sha ? `[stale@${sha}] ` : '[stale] '
+}
 
 const TITLE_MAX = 72
 
@@ -218,7 +226,7 @@ export function formatMemoryDigestLine(
   e: MemoryEntry,
   opts: { minTeaser: number; maxTeaser: number }
 ): string {
-  const title = deriveTitle(e)
+  const title = `${staleAnchorCue(e)}${deriveTitle(e)}`
   const body = (e.content ?? '').replace(/\s+/g, ' ').trim()
   // If body is essentially the title, skip teaser.
   if (body.length <= title.length + 8) return `${title}  \`${e.id}\``
@@ -337,6 +345,9 @@ export function formatMemoryMd(entries: MemoryEntry[], opts?: FormatMemoryMdOpti
   // the cheap alternative to silently trusting rotted facts.
   const STALE_MS = 180 * 24 * 60 * 60 * 1000
   const staleCue = (e: MemoryEntry): string => {
+    // Anchor staleness beats age: the file/symbol this entry was bound to is
+    // gone at HEAD, which is a stronger "verify first" signal than a date.
+    if (e.staleAt) return ` ⚠${staleAnchorCue(e).trim()} anchor gone — verify`
     const t = Date.parse(e.rememberedAt)
     return Number.isFinite(t) && Date.now() - t > STALE_MS ? ' ⚠stale>6mo — verify' : ''
   }

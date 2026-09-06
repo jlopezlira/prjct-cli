@@ -1,0 +1,73 @@
+# Live with/without-harness A/B — the harness measuring itself.
+#
+# NEVER blocks release: it is scheduled + manual only, uploads its report as an
+# artifact, and is gated on the ANTHROPIC_API_KEY secret being present (it spawns
+# `claude` for every run, so it costs real budget). Until the key is configured
+# the job no-ops. The provisional Δ it produces is a directional signal, not the
+# release gate — `qualified` outcome evidence remains the strict bar.
+name: ab-nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Comma-separated models
+        default: haiku,sonnet
+      reps:
+        description: Repetitions per task
+        default: "3"
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC daily
+
+concurrency:
+  group: ab-nightly
+  cancel-in-progress: false
+
+jobs:
+  ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - name: Guard — require the API key
+        id: guard
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY not set — skipping the live A/B (no cost incurred)."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install deps
+        if: steps.guard.outputs.run == 'true'
+        run: bun install --frozen-lockfile
+      - name: Install Claude Code CLI
+        if: steps.guard.outputs.run == 'true'
+        run: bun install -g @anthropic-ai/claude-code
+      - name: Build the pinned harness used by both evaluation arms
+        if: steps.guard.outputs.run == 'true'
+        run: bun run build
+      - name: Run A/B sweep
+        if: steps.guard.outputs.run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PRJCT_NO_DAEMON: "1"
+        run: |
+          bun bin/prjct.ts ab run \
+            --models "${{ github.event.inputs.models || 'haiku,sonnet' }}" \
+            --reps "${{ github.event.inputs.reps || '3' }}" \
+            --budget-usd 5 \
+            --out evals/ab/out --md | tee ab-report.md
+      - name: Upload report
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-report
+          path: |
+            ab-report.md
+            evals/ab/out/results.jsonl

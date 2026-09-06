@@ -203,6 +203,27 @@ describe('decideSecrets', () => {
   })
 })
 
+// A scanner crash is not a clean scan (SEC-05). Write-like calls are the
+// ones a credential leaves through, so they fail closed; a Read cannot leak
+// and keeps the never-brick-the-session contract.
+describe('decideOnScannerFailure', () => {
+  const boom = new Error('regex blew up')
+
+  it('denies write-like tool calls and names the failure', () => {
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'apply_patch', 'write_file', 'Bash']) {
+      const d = _internal.decideOnScannerFailure({ tool_name: tool, tool_input: {} }, boom)
+      expect(d?.deny).toMatch(/scanner failed/i)
+      expect(d?.deny).toContain('regex blew up')
+    }
+  })
+
+  it('stays fail-soft for read-like calls', () => {
+    for (const tool of ['Read', 'Grep', 'Glob', 'read_file', undefined]) {
+      expect(_internal.decideOnScannerFailure({ tool_name: tool, tool_input: {} }, boom)).toBeNull()
+    }
+  })
+})
+
 describe('runPreSecretsHook deny path', () => {
   it('emits permissionDecision deny on secret hit', async () => {
     const writes: string[] = []

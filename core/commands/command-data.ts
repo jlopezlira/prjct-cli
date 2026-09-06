@@ -230,6 +230,58 @@ export const COMMANDS: CommandMeta[] = [
     ],
   },
   {
+    name: 'ab',
+    group: 'optional',
+    surface: 'support',
+    routing: { group: 'ab', method: 'ab' },
+    // cold-only: a live sweep spawns `claude` for minutes and must not tie up
+    // the daemon's request lanes.
+    routingMode: 'cold-only',
+    optionSchema: {
+      strings: ['models', 'tasks', 'reps', 'out', 'grader', 'budget-usd'],
+    },
+    description:
+      'Live with/without-harness A/B per model and task class (the harness measures itself)',
+    usage: {
+      claude: 'p. ab report',
+      terminal:
+        'prjct ab <run|report|import> [--models haiku,sonnet] [--tasks T1-lookup,...] [--reps 3] [--out <path>]',
+    },
+    params: '[run|report|import]',
+    implemented: true,
+    hasTemplate: false,
+    requiresProject: true,
+    requiresLlm: false,
+    features: [
+      'run: sweeps evals/ab/tasks through the model in both arms (spawns claude)',
+      'import: folds a results.jsonl into .prjct/evaluations/paired-outcomes.json',
+      'report: provisional Δ per class and per model, with visible grader disagreements',
+    ],
+  },
+  {
+    name: 'verify',
+    group: 'optional',
+    surface: 'support',
+    routing: { group: 'verify', method: 'verify' },
+    routingMode: 'cold-only',
+    optionSchema: { strings: ['timeoutMs'] },
+    description: 'Proof-carrying verification: one-shot check, or the repro→fix red→green contract',
+    usage: {
+      claude: 'p. verify "<cmd>"',
+      terminal: 'prjct verify "<cmd>" | auto | repro "<cmd>" | fix "<cmd>"',
+    },
+    params: '["<cmd>" | auto | repro <cmd> | fix <cmd>]',
+    implemented: true,
+    hasTemplate: false,
+    requiresProject: true,
+    requiresLlm: false,
+    features: [
+      'One-shot Stop-Slop check (pass/fail with tail)',
+      'repro: records a reproduction bound to the git tree (must fail)',
+      'fix: requires the same command to pass across a real tree change (must differ)',
+    ],
+  },
+  {
     name: 'status',
     group: 'legacy',
     surface: 'legacy',

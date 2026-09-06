@@ -30,6 +30,7 @@ import { projectMemory } from '../memory/project-memory'
 import { buildAlignmentCard } from '../services/alignment-card'
 import { contextPressureVerdict } from '../services/context-pressure'
 import { buildRepositoryAlignmentCard } from '../services/file-cue'
+import { type PolicyConfig, resolvePolicy } from '../services/harness-policy'
 import {
   buildDeliveryGuidance,
   classifyDeliveryIntent,
@@ -51,6 +52,7 @@ import {
   normalizeStateForMaterialChange,
 } from '../services/session-context-cache'
 import { sessionRolloverLimit, sessionRolloverVerdict } from '../services/session-rollover'
+import { classifyTurn } from '../services/task-class'
 import { buildTaskHarness } from '../services/task-harness'
 import { renderDelegationTrigger } from '../services/task-orchestration'
 import { collectActiveTasks } from '../services/task-overview'
@@ -907,9 +909,23 @@ function computePromptGuidance(
   budget = STATE_BUDGET,
   tddMode?: 'off' | 'assist' | 'strict',
   hasMergeConflicts = false,
-  repositoryAlignmentOverride?: string | null
+  repositoryAlignmentOverride?: string | null,
+  policyConfig?: PolicyConfig
 ): PromptGuidanceComputation {
-  const cueResult = buildTopicalCueResult(projectId, prompt)
+  // Turn router: on a SELF_CONTAINED turn (the prompt names the file/symbol to
+  // touch) the agent alone is fastest, so the OPTIONAL lane stays silent — the
+  // Δ evidence's "silence where the agent wins". The required repository
+  // alignment below is deliberately task-class-independent and still fires.
+  // `harness.policy` (project config) overrides the class defaults last.
+  const turn = classifyTurn(prompt)
+  const policy = resolvePolicy('', turn.cls, policyConfig)
+  const silentOptional = policy.promptLane === 'silent'
+  const capOptional = (text: string | null): string | null =>
+    text && policy.maxInjectChars > 0 && text.length > policy.maxInjectChars
+      ? safeTruncate(text, policy.maxInjectChars, undefined, Math.floor(policy.maxInjectChars / 4))
+      : text
+  const rawCue = silentOptional ? null : buildTopicalCueResult(projectId, prompt)
+  const cueResult = rawCue ? { ...rawCue, cue: capOptional(rawCue.cue) ?? rawCue.cue } : null
   const harness = buildTaskHarness(prompt)
   // Provider- and task-classification-independent. An unknown/terse prompt is
   // not permission to ignore the repository; the same source-first contract
@@ -921,8 +937,23 @@ function computePromptGuidance(
     repositoryAlignmentOverride === undefined
       ? buildRepositoryAlignmentCard(projectId, prompt, `${prompt}\n${state}`)?.content
       : repositoryAlignmentOverride
-  const delivery = buildDeliveryGuidance(prompt)
-  const guidance = buildSelectiveGuidance(projectId, prompt)
+  const delivery = silentOptional ? null : capOptional(buildDeliveryGuidance(prompt))
+  // VERIFY class: the proof-carrying contract rides the optional lane when no
+  // authored guidance claimed it — a fix is a measurement, not a claim.
+  const verifyCue =
+    turn.cls === 'VERIFY' && policy.verifyContract
+      ? 'Verify contract: record the failure first (`prjct verify repro "<cmd>"`), edit, then prove the flip (`prjct verify fix "<cmd>"`) — the same command must pass on a changed tree.'
+      : null
+  // The verify cue is a property of VERIFY turns, not a fallback: it rides
+  // alongside any authored guidance, and the whole text is capped together.
+  const selective = silentOptional ? null : buildSelectiveGuidance(projectId, prompt)
+  const guidanceText = [selective?.text, verifyCue]
+    .filter((t): t is string => Boolean(t))
+    .join('\n')
+  const guidance: SelectiveGuidanceResult | null =
+    silentOptional || !guidanceText
+      ? null
+      : { memoryIds: selective?.memoryIds ?? [], text: capOptional(guidanceText) ?? guidanceText }
   const deliveryIntent = classifyDeliveryIntent(prompt)
   const routingInput = {
     intent: prompt,
@@ -1198,7 +1229,8 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
             budget,
             config.tdd?.mode,
             hasMergeConflicts,
-            repositoryFresh ? repositoryAlignment?.content : null
+            repositoryFresh ? repositoryAlignment?.content : null,
+            config
           )
           const privateGuidanceGate =
             preview.privateGuidance && preview.privateGuidanceKey
@@ -1382,7 +1414,8 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           budget,
           config.tdd?.mode,
           hasMergeConflicts,
-          repositoryFresh ? repositoryAlignment?.content : null
+          repositoryFresh ? repositoryAlignment?.content : null,
+          config
         )
         const privateGuidanceGate =
           preview.privateGuidance && preview.privateGuidanceKey
@@ -1545,7 +1578,9 @@ async function rebuildPromptAfterEmit(
     state ?? '',
     STATE_BUDGET,
     config.tdd?.mode,
-    detectRepositoryWorkflowState(projectPath).hasMergeConflicts
+    detectRepositoryWorkflowState(projectPath).hasMergeConflicts,
+    undefined,
+    config
   )
   return {
     projectId: config.projectId,

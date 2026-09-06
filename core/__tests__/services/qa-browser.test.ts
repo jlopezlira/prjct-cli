@@ -167,6 +167,40 @@ describe('qa-browser — session protocol', () => {
     expect(noBase.detail).toContain('app.baseUrl')
   })
 
+  // SEC-11: an absolute goto URL is navigated only on the app under test.
+  // A metadata/off-origin URL is refused before it reaches the session, so
+  // the app's cookies never ride to an attacker-chosen host.
+  it('refuses an off-origin absolute goto without navigating', async () => {
+    for (const target of [
+      '//external.invalid/x',
+      'javascript:alert(1)',
+      ' https://external.invalid/x',
+    ]) {
+      const result = await runBrowserPrimitive('proj', ['goto', target], 'http://localhost:3000')
+      expect(result.ok).toBe(false)
+      expect(result.text).toMatch(/outside the app under test/)
+    }
+    const steps = await runBrowserSteps(
+      'proj',
+      [{ do: 'goto', url: 'http://169.254.169.254/latest/meta-data' }],
+      'http://localhost:3000'
+    )
+    expect(steps.ok).toBe(false)
+    expect(steps.detail).toMatch(/outside the app under test/)
+
+    const primitive = await runBrowserPrimitive(
+      'proj',
+      ['goto', 'http://evil.example/steal'],
+      'http://localhost:3000'
+    )
+    expect(primitive.ok).toBe(false)
+    expect(primitive.text).toMatch(/outside the app under test/)
+
+    // Same-origin absolute and relative gotos still work.
+    const ok = await runBrowserPrimitive('proj', ['goto', 'http://localhost:3000/ok'], null)
+    expect(ok.ok).toBe(true)
+  })
+
   it('a browser probe rides the same session through runProbe', async () => {
     const result = await runProbe(
       {

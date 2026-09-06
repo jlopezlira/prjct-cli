@@ -27,6 +27,12 @@ import { refreshUpdateStatus } from '../services/update-checker'
 import prjctDb, { withBusyTimeout } from '../storage/database'
 import { realtimeManager } from '../sync/realtime-manager'
 import type { DaemonRequest, DaemonResponse, DaemonState } from '../types/daemon'
+import {
+  issueDaemonToken,
+  removeDaemonToken,
+  requestAuthorized,
+  unauthenticatedResponse,
+} from './auth'
 import { executeCommand } from './dispatch'
 import {
   DAEMON_PATHS,
@@ -84,6 +90,9 @@ interface DaemonRuntime {
   updateTimer: ReturnType<typeof setInterval> | null
   walCheckpointTimer: ReturnType<typeof setInterval> | null
   shuttingDown: boolean
+  /** Token issued at listen time; requests without it are refused (auth.ts). */
+  authToken: string | null
+  unauthenticatedRequests: number
 }
 
 const runtime: DaemonRuntime = {
@@ -95,6 +104,37 @@ const runtime: DaemonRuntime = {
   updateTimer: null,
   walCheckpointTimer: null,
   shuttingDown: false,
+  authToken: null,
+  unauthenticatedRequests: 0,
+}
+
+/**
+ * Force the listening socket to owner-only and report the mode that stuck.
+ * Returns null when the socket is 0600 (or the check cannot apply because
+ * the peer already unlinked it), otherwise the offending mode bits so the
+ * caller can refuse to serve — a same-host user must never reach the CLI
+ * surface through a world-connectable socket.
+ */
+export function ensureOwnerOnlySocket(socketPath: string): number | null {
+  const entry = (() => {
+    try {
+      return fs.lstatSync(socketPath)
+    } catch {
+      return null // already unlinked by a dying peer — nothing to serve on
+    }
+  })()
+  if (entry === null) return null
+  // A symlink at the endpoint was planted, not created by `listen`.
+  if (entry.isSymbolicLink()) return 0o777
+  try {
+    fs.chmodSync(socketPath, 0o600)
+    const mode = fs.statSync(socketPath).mode & 0o777
+    return mode === 0o600 ? null : mode
+  } catch {
+    // chmod/stat failed: we cannot prove the socket is private. Treat as
+    // the worst mode so startup refuses instead of serving blind.
+    return 0o777
+  }
 }
 
 export async function startDaemon(options: { foreground?: boolean }): Promise<void> {
@@ -108,7 +148,18 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
   const runDir = DAEMON_PATHS.runDir()
   const namedPipe = isDaemonNamedPipe(socketPath)
 
-  fs.mkdirSync(runDir, { recursive: true })
+  // Owner-only run dir: the socket, pid file and hook spills live here, and
+  // every same-host user must be locked out before the socket exists —
+  // `chmod` after `listen` leaves a window a peer can connect through.
+  fs.mkdirSync(runDir, { recursive: true, mode: 0o700 })
+  if (!namedPipe) {
+    try {
+      fs.chmodSync(runDir, 0o700)
+    } catch {
+      // A pre-existing dir on a filesystem without POSIX modes — the socket
+      // mode check below is the authoritative gate.
+    }
+  }
 
   // Cross-process single-flight lives in spawnDaemon() (client-side lock).
   // Here we only refuse if a live PID already owns the endpoint; lost listen
@@ -213,13 +264,34 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
 
   runtime.ipcServer = createNetServer((socket) => handleConnection(socket))
 
+  // The socket is created inside `listen` with the process umask applied.
+  // Tightening the umask around it means the file is born 0600 instead of
+  // being chmod'ed 0600 a few ticks later — no window in between.
+  const previousUmask = namedPipe ? null : process.umask(0o077)
+
   runtime.ipcServer.listen(socketPath, () => {
-    if (!namedPipe) {
+    if (previousUmask !== null) process.umask(previousUmask)
+    const refuse = (why: string): never => {
+      console.error(`prjct daemon: ${why} — refusing to serve.`)
       try {
-        if (fs.existsSync(socketPath)) fs.chmodSync(socketPath, 0o600)
+        if (!namedPipe) fs.unlinkSync(socketPath)
       } catch {
-        // Race with a dying peer unlinking the socket — non-fatal if we still listen.
+        // nothing to clean
       }
+      process.exit(1)
+    }
+    if (!namedPipe) {
+      const mode = ensureOwnerOnlySocket(socketPath)
+      if (mode !== null) {
+        refuse(`socket ${socketPath} is mode ${mode.toString(8)}, expected 0600`)
+      }
+    }
+    // Issued only once the endpoint is provably ours: a peer that lost the
+    // listen race exits through the error handler and never overwrites it.
+    try {
+      runtime.authToken = issueDaemonToken()
+    } catch (err) {
+      refuse(`cannot issue the auth token (${(err as Error).message})`)
     }
     try {
       fs.writeFileSync(pidPath, String(process.pid))
@@ -239,6 +311,7 @@ export async function startDaemon(options: { foreground?: boolean }): Promise<vo
   })
 
   runtime.ipcServer.on('error', (err) => {
+    if (previousUmask !== null) process.umask(previousUmask)
     const code = (err as NodeJS.ErrnoException).code
     void (async () => {
       const peerHealthy = await peerDaemonHealthy(socketPath, pidPath)
@@ -468,6 +541,17 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
       exitCode: 1,
       stderr: 'Daemon not initialized',
     }
+  }
+
+  if (!requestAuthorized(request, runtime.authToken)) {
+    runtime.unauthenticatedRequests += 1
+    // One line per refusal is enough forensics; a flood is the same story.
+    if (runtime.unauthenticatedRequests <= 20 || runtime.unauthenticatedRequests % 100 === 0) {
+      console.error(
+        `Refused unauthenticated daemon request #${runtime.unauthenticatedRequests}: ${request.command}`
+      )
+    }
+    return unauthenticatedResponse(request.id ?? 'unknown')
   }
 
   if (runtime.shuttingDown && request.command !== 'daemon' && request.command !== '__ping') {
@@ -845,6 +929,12 @@ async function shutdown(exitCode: number, opts: { respawn?: boolean } = {}): Pro
 
   const socketPath = DAEMON_PATHS.socket()
   const pidPath = DAEMON_PATHS.pid()
+
+  // Revoke the token with the endpoint: a successor mints its own.
+  if (runtime.authToken) {
+    runtime.authToken = null
+    removeDaemonToken()
+  }
 
   if (!isDaemonNamedPipe(socketPath)) {
     try {

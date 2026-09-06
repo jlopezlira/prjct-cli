@@ -332,6 +332,16 @@ export function runStopHook(projectPath: string = process.cwd(), io?: HookIo): P
             // Git failure / non-repo → swallow; nothing to do here.
           }
 
+          // Anchor staleness sweep (memory/anchors.ts): re-check the file /
+          // symbol anchors of recent captures against HEAD and mark the ones
+          // that no longer resolve, so recall demotes them and renders a cue.
+          try {
+            const { markStaleMemoryAnchors } = await import('../memory/anchors')
+            await markStaleMemoryAnchors(config.projectId, p)
+          } catch {
+            // best-effort — a git/index failure must not affect session close
+          }
+
           // Lean-debt growth (opt-in via config.lean.mode): flag when `lean:`
           // simplification markers accumulate. No-op when lean mode is off.
           try {

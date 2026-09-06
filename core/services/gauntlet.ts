@@ -558,6 +558,9 @@ async function waitForBackgroundGauntlet(
     backgroundWaitMs?: number
     pollIntervalMs?: number
     onProgress: (line: string) => void
+    /** Tree binding the receipt must match; without it age + HEAD alone
+     *  would accept a receipt from a different working tree. */
+    verification?: VerificationBinding | null
   }
 ): Promise<GauntletReceipt | null> {
   const marker = readRunningMarker(projectId)
@@ -586,7 +589,7 @@ async function waitForBackgroundGauntlet(
   while (Date.now() < deadline) {
     await wait(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())))
     const stamped = readGauntletReceipt(projectId)
-    if (isReceiptFresh(stamped?.data ?? null, Date.now(), headSha)) {
+    if (isReceiptFresh(stamped?.data ?? null, Date.now(), headSha, options.verification)) {
       options.onProgress('✓ Background gauntlet finished; reusing its receipt.')
       return stamped?.data ?? null
     }
@@ -647,6 +650,7 @@ export async function ensureShipGauntlet(
     backgroundWaitMs: opts.backgroundWaitMs,
     pollIntervalMs: opts.pollIntervalMs,
     onProgress,
+    verification: base.verification,
   })
   const current = await currentGauntletVerification(projectPath)
   if (backgroundReceipt && sameVerification(backgroundReceipt.verification, current)) {

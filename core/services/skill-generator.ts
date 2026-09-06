@@ -9,6 +9,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getErrorMessage } from '../errors'
+import { getKimiSkillPath } from '../infrastructure/kimi-skill-path'
 import { resolveUserHome } from '../infrastructure/user-home'
 import type { SkillGenerationResult } from '../types/services.js'
 import log from '../utils/logger'
@@ -60,11 +61,14 @@ function compactSkillRoots(): string[] {
     path.join(home, '.codex', 'skills'),
     path.join(home, '.gemini', 'skills'),
     path.join(home, '.gemini', 'antigravity', 'global_skills'),
-    // Kimi Code CLI user tier (docs: kimi.com/code/docs …/customization/skills.html
-    // lists BOTH $KIMI_CODE_HOME/skills and ~/.agents/skills as canonical). The
-    // shared ~/.agents/skills root is verified live and is tool-agnostic — the
-    // prjct skill is host-neutral content, so it belongs in the shared tier.
-    path.join(home, '.agents', 'skills'),
+    // Kimi Code CLI user tier. Docs (kimi.com/code/docs …/customization/skills.html)
+    // list $KIMI_CODE_HOME/skills as canonical; we deliberately do NOT use the
+    // shared ~/.agents/skills root: pi (and other Agent Skills-standard hosts)
+    // scan it too, and a same-named `prjct` skill there collides with the
+    // dedicated ~/.pi/agent/skills/prjct install (pi warns every session and
+    // keeps only the first). The Kimi-specific root keeps coverage without the
+    // cross-harness name collision.
+    path.dirname(path.dirname(getKimiSkillPath())),
   ]
 }
 
@@ -115,6 +119,18 @@ class SkillGenerator {
       try {
         const skillDir = path.join(root, 'prjct')
         const skillPath = path.join(skillDir, 'SKILL.md')
+        if (skillPath === getKimiSkillPath()) {
+          const directory = await fs.lstat(skillDir).catch(() => null)
+          const stat = await fs.lstat(skillPath).catch(() => null)
+          const existing = stat?.isFile() ? await fs.readFile(skillPath, 'utf8') : null
+          if (directory?.isSymbolicLink() || (stat && (!stat.isFile() || existing !== compact))) {
+            result.skipped.push({
+              name: 'prjct-compact',
+              reason: `Preserved customized Kimi skill: ${skillPath}`,
+            })
+            continue
+          }
+        }
         await fs.mkdir(skillDir, { recursive: true })
         await fs.writeFile(skillPath, compact, 'utf-8')
         result.generated.push({ name: 'prjct-compact', path: skillPath })
@@ -141,6 +157,15 @@ class SkillGenerator {
       /* non-critical */
     }
 
+    // Legacy sweep: older versions fanned the compact skill out to the shared
+    // ~/.agents/skills tier. pi scans that root natively, so the leftover copy
+    // collides with the dedicated ~/.pi/agent/skills/prjct skill (pi warns and
+    // keeps the first). Remove only copies that are provably prjct-managed.
+    const kimiSkill = getKimiSkillPath()
+    if (result.generated.some((skill) => skill.path === kimiSkill)) {
+      await this.sweepLegacySharedSkill(result)
+    }
+
     if (result.generated.length > 0) {
       log.info('Generated portable multi-host skills', {
         count: result.generated.length,
@@ -149,6 +174,50 @@ class SkillGenerator {
     }
 
     return result
+  }
+
+  /**
+   * Remove prjct-managed skills left under the shared `~/.agents/skills` root
+   * by pre-pi-compat fan-out (or manual backups). pi discovers skills
+   * recursively and reads the name from frontmatter, so ANY directory whose
+   * SKILL.md declares `name: prjct` collides with the dedicated
+   * ~/.pi/agent/skills/prjct install — not just a `prjct/` dir. Conservative:
+   * only migrates exact generated content; foreign content is left untouched.
+   * Auxiliary files and symlinks are never removed.
+   */
+  private async sweepLegacySharedSkill(result: SkillGenerationResult): Promise<void> {
+    const sharedRoot = path.join(homeDir(), '.agents', 'skills')
+    try {
+      const entries = await fs.readdir(sharedRoot, { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const skillFile = path.join(sharedRoot, entry.name, 'SKILL.md')
+        const stat = await fs.lstat(skillFile).catch(() => null)
+        if (!stat?.isFile()) continue // Never follow user-managed symlinks.
+        const content = await fs.readFile(skillFile, 'utf-8').catch(() => '')
+        if (!content || !/^name:\s*prjct\s*$/m.test(content)) continue
+        if (content.trimEnd() !== buildCompactSkill().trimEnd()) {
+          result.skipped.push({
+            name: 'prjct-legacy-shared',
+            reason: `Preserved customized or unknown skill at ${skillFile}; pi may report a collision`,
+          })
+          continue
+        }
+        // Backups must be OUTSIDE skill discovery roots; renaming the skill
+        // directory in place still leaves name: prjct discoverable by pi.
+        const backupRoot = path.join(homeDir(), '.prjct', 'backups', 'skills')
+        await fs.mkdir(backupRoot, { recursive: true })
+        const backupDir = await fs.mkdtemp(path.join(backupRoot, 'pi-migration-'))
+        await fs.rename(skillFile, path.join(backupDir, 'SKILL.md'))
+        // Do not remove the directory: it may hold user scripts or references.
+        result.skipped.push({
+          name: 'prjct-legacy-shared',
+          reason: `Backed up ${skillFile} to ${backupDir}`,
+        })
+      }
+    } catch {
+      /* non-critical */
+    }
   }
 
   getDefinitions(): SkillDefinition[] {

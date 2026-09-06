@@ -114,9 +114,39 @@ export const editTool: AgentTool = {
   },
 }
 
-/** Deny obviously destructive / networky shell patterns (defense in depth). */
-const BASH_DENY =
-  /\b(?:rm\s+-rf\s+\/|mkfs|dd\s+if=|curl\s+|wget\s+|nc\s+|ncat\s+|ssh\s+|scp\s+|sudo\s+|chmod\s+777)\b/i
+/**
+ * Deny destructive / networky / privilege-changing shell shapes (defense in
+ * depth — the tool's contract is "no network, no sudo").
+ *
+ * Recognizes command position, including ordinary assignments and transparent
+ * wrappers. This is defense in depth, not a shell sandbox: interpreter code
+ * still requires the host's process/network isolation.
+ */
+const BASH_DENY_VERB =
+  /(?:^|[\n;&|(`])\s*(?:(?:[A-Z_][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)|(?:\/[\w.-]+)*\/?(?:env|command|exec|nohup|nice|timeout|stdbuf)|(?:-u|-C|--unset|--chdir|--argv0|-a)\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)|--?[\w=-]+|\d+[smhd]?)\s+)*(?:\/[\w.-]+)*\/?(?:sudo|doas|pkexec|su|curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|mkfs|shutdown|reboot|halt|chown|chgrp|crontab)\b/i
+const BASH_DENY_ALWAYS =
+  /(?:\benv\b[^\n;&|]*\s(?:-S|--split-string)\b|\bopenssl\s+s_client\b|\/dev\/(?:tcp|udp)\/|\bpython[23]?\s+-m\s+http\.server\b|\bgit\s+push\b|\bnpm\s+publish\b|\bdd\s+if=|\brm\s+-[a-z]*r[a-z]*f?[a-z]*\s+(?:\/|~|\$HOME)(?:\s|$)|\bchmod\s+(?:-R\s+)?[0-7]*777\b|\bkill\s+-9\s+-1\b)/i
+
+/** Env vars a shelled-out child must never inherit from the host agent. */
+const ENV_SECRET_KEY = /(?:token|secret|passw(?:or)?d|api[_-]?key|private[_-]?key|credential)/i
+const ENV_SECRET_PREFIX =
+  /^(?:AWS_|GITHUB_|GH_|OPENAI_|ANTHROPIC_|GOOGLE_|AZURE_|NPM_|SUPABASE_|STRIPE_)/
+
+/** Copy of the host env with credential-shaped entries removed. */
+export function scrubbedChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue
+    if (ENV_SECRET_KEY.test(key) || ENV_SECRET_PREFIX.test(key)) continue
+    out[key] = value
+  }
+  return out
+}
+
+/** Pure export for unit tests. */
+export function bashCommandDenied(command: string): boolean {
+  return BASH_DENY_VERB.test(command) || BASH_DENY_ALWAYS.test(command)
+}
 
 export const bashTool: AgentTool = {
   name: 'bash',
@@ -132,20 +162,18 @@ export const bashTool: AgentTool = {
   async execute(args, ctx) {
     try {
       const command = asString(args.command, 'command')
-      if (BASH_DENY.test(command)) {
+      if (bashCommandDenied(command)) {
         return fail('Command blocked by safety policy')
       }
       const timeout = ctx.maxBashMs ?? DEFAULT_BASH_MS
       const maxOut = ctx.maxBashOutputBytes ?? DEFAULT_BASH_OUT
-      const { stdout, stderr } = await execFileAsync('bash', ['-lc', command], {
+      // `-c`, not `-lc`: a login shell sources the user's profile, which can
+      // alias or re-PATH anything the deny list checked by name.
+      const { stdout, stderr } = await execFileAsync('bash', ['-c', command], {
         cwd: ctx.root,
         timeout,
         maxBuffer: maxOut,
-        env: {
-          ...process.env,
-          // Avoid leaking host agent config into child accidentally beyond PATH
-          CI: process.env.CI,
-        },
+        env: scrubbedChildEnv(),
       })
       const out = [stdout, stderr].filter(Boolean).join('\n').slice(0, maxOut)
       return ok(out || '(no output)')

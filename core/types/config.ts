@@ -185,10 +185,16 @@ export interface LocalConfig {
    */
   enforce?: {
     /**
-     * Deny a Grep/Glob whose token prjct already holds recorded judgment about
-     * (once per token per session), pointing at `prjct search` instead.
+     * How to handle a Grep/Glob whose token prjct already holds recorded
+     * judgment (decisions/gotchas) about — knowledge no grep can recover:
+     *   - `'inject'` (default): allow the search AND attach the recorded
+     *     judgment inline as additionalContext (once per token/session). No
+     *     dependence on the model choosing to run a lookup.
+     *   - `'deny'` / `true`: block the call once, pointing at `prjct search`
+     *     (the pre-inject enforcement behaviour).
+     *   - `false`: off.
      */
-    knowledgeFirst?: boolean
+    knowledgeFirst?: boolean | 'inject' | 'deny'
   }
   /**
    * Machine gauntlet. Detection covers the common ecosystems; declaring
@@ -198,6 +204,25 @@ export interface LocalConfig {
    */
   gauntlet?: {
     commands?: Array<{ kind: 'typecheck' | 'lint' | 'test'; command: string }>
+  }
+  /**
+   * Harness tuning. `mcpTier` documents the intended MCP tool tier (the live
+   * default is set in code — see DEFAULT_MCP_TOOL_TIER); `policy` overrides the
+   * per-task-class prompt-hook behaviour by class name (SELF_CONTAINED,
+   * PROJECT_KNOWLEDGE, EXPLORATION, VERIFY, UNKNOWN — see
+   * core/services/harness-policy). Pre-search judgment injection is governed by
+   * `enforce.knowledgeFirst`, not here.
+   */
+  harness?: {
+    mcpTier?: 'micro' | 'lean' | 'core' | 'standard' | 'all'
+    policy?: Record<
+      string,
+      {
+        promptLane?: 'silent' | 'inject' | 'ranked'
+        maxInjectChars?: number
+        verifyContract?: boolean
+      }
+    >
   }
   /**
    * QA phase — per-cycle acceptance criteria + flows, verified without any

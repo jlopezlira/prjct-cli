@@ -22,6 +22,7 @@ const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
     'core-a',
     [
       'core/__tests__/domain',
+      'core/__tests__/agent',
       'core/__tests__/schemas',
       'core/__tests__/utils',
       'core/__tests__/hooks',

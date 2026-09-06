@@ -104,9 +104,18 @@ describe('evaluateWorkflowRuleExecutable', () => {
     }
   })
 
-  it('allows local rules', () => {
+  it('allows only positively-local rules', () => {
     expect(evaluateWorkflowRuleExecutable('local').allow).toBe(true)
-    expect(evaluateWorkflowRuleExecutable(undefined).allow).toBe(true)
+  })
+
+  // SEC-07: an absent/unknown trust source is what a rule that skipped the
+  // storage default looks like — it must NOT be treated as trusted.
+  it('refuses rules with no local trust source', () => {
+    for (const trust of [undefined, null, '', 'unknown', 'remote']) {
+      const v = evaluateWorkflowRuleExecutable(trust, 'verify:rm -rf /')
+      expect(v.allow).toBe(false)
+      if (!v.allow) expect(v.denyMessage).toMatch(/no local trust source|imported/i)
+    }
   })
 
   it('isImportedWorkflowTrust helper', () => {

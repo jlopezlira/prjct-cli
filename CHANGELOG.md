@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [4.25.0] - 2026-09-06
+
+### Added
+- Harness v2 improvements and complete native Pi compatibility
+
+## [4.24.0] - 2026-09-05
+
+### Added
+- harness v2 phase0
+
 ## [4.23.0] - 2026-09-04
 
 ### Added

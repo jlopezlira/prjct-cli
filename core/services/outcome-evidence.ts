@@ -19,6 +19,14 @@ const RunSchema = z.object({
   contextTokens: z.number().int().nonnegative(),
   latencyMs: z.number().finite().nonnegative(),
   resumed: z.boolean(),
+  // Live A/B extensions (optional so the strict single-model callers and their
+  // fixtures parse unchanged). Populated by core/eval/ab-report.
+  taskClass: z.string().optional(),
+  detVerdict: z.boolean().nullable().optional(),
+  llmVerdict: z.boolean().nullable().optional(),
+  graderDisagreement: z.boolean().optional().default(false),
+  wallMs: z.number().finite().nonnegative().optional(),
+  toolCalls: z.number().int().nonnegative().optional(),
 })
 export const OutcomeRunsSchema = z.array(RunSchema).max(100_000)
 export type OutcomeRun = z.infer<typeof RunSchema>
@@ -34,6 +42,147 @@ export interface OutcomeEvidenceReport {
   harnessTokens: number | null
   baselineLatencyMs: number | null
   harnessLatencyMs: number | null
+}
+
+/** One Δ slice (a task class or a model): accuracy + cost, harness vs baseline. */
+export interface OutcomeSlice {
+  key: string
+  pairs: number
+  baselineAccuracy: number
+  harnessAccuracy: number
+  deltaAccuracy: number
+  deltaTokens: number
+  deltaLatencyMs: number
+}
+
+export interface LiveOutcomeReport {
+  /** `provisional` once there is a small but real paired sample; else `insufficient`/`missing`. */
+  status: 'missing' | 'provisional' | 'insufficient'
+  pairs: number
+  models: string[]
+  classes: string[]
+  disagreements: number
+  byClass: OutcomeSlice[]
+  byModel: OutcomeSlice[]
+  summary: string
+}
+
+/** Provisional thresholds — below `qualified`, so a small live sample is
+ *  reported, never hidden, and never mistaken for the release gate. */
+const PROVISIONAL_MIN_PAIRS = 6
+const PROVISIONAL_MIN_MODELS = 2
+const PROVISIONAL_MIN_CLASSES = 2
+
+interface Pair {
+  model: string
+  taskClass: string
+  baseline: OutcomeRun
+  harness: OutcomeRun
+}
+
+function pairRuns(runs: OutcomeRun[]): Pair[] {
+  const groups = new Map<string, OutcomeRun[]>()
+  for (const run of runs) {
+    const key = JSON.stringify([run.model, run.taskId, run.repetition])
+    const group = groups.get(key) ?? []
+    group.push(run)
+    groups.set(key, group)
+  }
+  const pairs: Pair[] = []
+  for (const group of groups.values()) {
+    const baseline = group.find((r) => r.arm === 'baseline')
+    const harness = group.find((r) => r.arm === 'harness')
+    if (baseline && harness) {
+      pairs.push({
+        model: baseline.model,
+        taskClass: baseline.taskClass ?? baseline.category,
+        baseline,
+        harness,
+      })
+    }
+  }
+  return pairs
+}
+
+/** Deterministic accuracy of a run: prefer the det verdict, fall back to completed. */
+function runCorrect(run: OutcomeRun): boolean {
+  return typeof run.detVerdict === 'boolean' ? run.detVerdict : run.completed
+}
+
+function sliceOf(key: string, pairs: Pair[]): OutcomeSlice {
+  const n = pairs.length
+  const acc = (side: 'baseline' | 'harness') => pairs.filter((p) => runCorrect(p[side])).length / n
+  const tok = (side: 'baseline' | 'harness') =>
+    pairs.reduce((s, p) => s + p[side].inputTokens + p[side].outputTokens, 0) / n
+  const lat = (side: 'baseline' | 'harness') => pairs.reduce((s, p) => s + p[side].latencyMs, 0) / n
+  const baselineAccuracy = acc('baseline')
+  const harnessAccuracy = acc('harness')
+  return {
+    key,
+    pairs: n,
+    baselineAccuracy,
+    harnessAccuracy,
+    deltaAccuracy: harnessAccuracy - baselineAccuracy,
+    deltaTokens: tok('harness') - tok('baseline'),
+    deltaLatencyMs: lat('harness') - lat('baseline'),
+  }
+}
+
+function groupSlices(pairs: Pair[], keyOf: (p: Pair) => string): OutcomeSlice[] {
+  const by = new Map<string, Pair[]>()
+  for (const p of pairs) {
+    const k = keyOf(p)
+    by.set(k, [...(by.get(k) ?? []), p])
+  }
+  return [...by.keys()].sort().map((k) => sliceOf(k, by.get(k)!))
+}
+
+/**
+ * Model-aware live A/B evaluation — the "measurement is the product" report.
+ * Unlike `evaluateOutcomeEvidence` (the strict, single-model `qualified` gate),
+ * this pairs by (model, task, repetition), tolerates incomplete groups, and
+ * reports Δ per class and per model at a `provisional` bar so a small live
+ * sample is surfaced rather than dropped.
+ */
+export function evaluateLiveOutcome(input?: unknown): LiveOutcomeReport {
+  const empty: LiveOutcomeReport = {
+    status: 'missing',
+    pairs: 0,
+    models: [],
+    classes: [],
+    disagreements: 0,
+    byClass: [],
+    byModel: [],
+    summary: 'No live A/B runs supplied.',
+  }
+  if (input === undefined) return empty
+  const parsed = OutcomeRunsSchema.safeParse(input)
+  if (!parsed.success)
+    return { ...empty, status: 'insufficient', summary: 'Invalid live A/B runs.' }
+  const runs = parsed.data
+  if (!runs.length) return empty
+  const pairs = pairRuns(runs)
+  const models = [...new Set(pairs.map((p) => p.model))].sort()
+  const classes = [...new Set(pairs.map((p) => p.taskClass))].sort()
+  const disagreements = runs.filter((r) => r.graderDisagreement === true).length
+  const provisional =
+    pairs.length >= PROVISIONAL_MIN_PAIRS &&
+    models.length >= PROVISIONAL_MIN_MODELS &&
+    classes.length >= PROVISIONAL_MIN_CLASSES
+  const byClass = groupSlices(pairs, (p) => p.taskClass)
+  const byModel = groupSlices(pairs, (p) => p.model)
+  return {
+    status: pairs.length === 0 ? 'missing' : provisional ? 'provisional' : 'insufficient',
+    pairs: pairs.length,
+    models,
+    classes,
+    disagreements,
+    byClass,
+    byModel,
+    summary: provisional
+      ? `Provisional: ${pairs.length} paired runs across ${models.length} models and ${classes.length} classes. Not the release gate; a directional signal.`
+      : `Insufficient live sample (${pairs.length} pairs, ${models.length} models, ${classes.length} classes). Need ≥${PROVISIONAL_MIN_PAIRS} pairs, ≥${PROVISIONAL_MIN_MODELS} models, ≥${PROVISIONAL_MIN_CLASSES} classes.`,
+  }
 }
 
 /** Imported evidence is attributed to its grader; fixtures cannot unlock quality. */

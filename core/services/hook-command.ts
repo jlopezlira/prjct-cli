@@ -113,8 +113,17 @@ export function nativeHookFastBinary(): string | null {
  * it spills the payload to a run-dir scratch file the next stage re-reads
  * via core/hooks/stdin-spill.ts).
  */
+/**
+ * Single-quote a value for the POSIX shell unless it is already a plain
+ * word. `PRJCT_BIN` is user-controlled and is interpolated into the host's
+ * hook command, so `prjct; rm -rf ~` must arrive as one argument, not two.
+ */
+export function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./=:@%+,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
+}
+
 export function hookCommandChain(subcommand: string, hostEnv?: string): string {
-  const bin = process.env.PRJCT_BIN ?? 'prjct'
+  const bin = shellWord(process.env.PRJCT_BIN ?? 'prjct')
   const env = hostEnv ? `${hostEnv} ` : ''
   const portable = `command -v ${bin} >/dev/null 2>&1 && ${env}${bin} hook ${subcommand} || exit 0`
   if (process.env.PRJCT_BIN) return portable
