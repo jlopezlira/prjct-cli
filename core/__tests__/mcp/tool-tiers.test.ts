@@ -64,11 +64,12 @@ describe('tiered MCP tool loading (PRJCT_MCP_TOOLS)', () => {
     expect(totals).toBeLessThanOrEqual(3100)
   })
 
-  it('unset and garbage default to core; all remains opt-in', async () => {
-    const core = await toolCount('core')
-    expect(await toolCount(undefined)).toBe(core)
-    expect(await toolCount('garbage')).toBe(core)
-    expect(await toolCount('all')).toBeGreaterThan(core)
+  it('unset and garbage default to micro; richer tiers remain opt-in', async () => {
+    const micro = await toolCount('micro')
+    expect(await toolCount(undefined)).toBe(micro)
+    expect(await toolCount('garbage')).toBe(micro)
+    expect(await toolCount('core')).toBeGreaterThan(micro)
+    expect(await toolCount('all')).toBeGreaterThan(micro)
   })
 
   it('core ListTools stays under the char budget (descriptions + JSON schemas)', async () => {

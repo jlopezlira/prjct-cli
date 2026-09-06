@@ -51,7 +51,7 @@ export const WORLD_CLASS = {
   skillTokensAmber: 1200,
   routingBodyBytesMax: L0_ROUTING_BYTES_MAX,
   routingBodyBytesAmber: 600,
-  mcpDefaultTier: 'core' as const,
+  mcpDefaultTier: 'micro' as const,
   /** Core ListTools budget after MCP schema slim (was 20). */
   mcpToolsCoreMax: MCP_TOOLS_CORE_MAX,
   providerMapsMin: 6,
@@ -203,8 +203,11 @@ export function computeHarnessScore(
     criterion(
       'enforced-defaults',
       'Code-enforced lean defaults',
-      DEFAULT_MCP_TOOL_TIER === 'core' && WORLD_CLASS.skillTokensMax <= 1000 ? 5 : 2,
-      'MCP core default + skill budget in code',
+      (DEFAULT_MCP_TOOL_TIER === 'micro' || DEFAULT_MCP_TOOL_TIER === 'core') &&
+        WORLD_CLASS.skillTokensMax <= 1000
+        ? 5
+        : 2,
+      'MCP lean default + skill budget in code',
       `tier=${DEFAULT_MCP_TOOL_TIER}; skillMax=${WORLD_CLASS.skillTokensMax}`
     ),
     (() => {

@@ -1,24 +1,24 @@
 /**
- * PreToolUse hook (matcher: Grep|Glob) — graph augment + knowledge-first gate.
+ * PreToolUse hook (matcher: Grep|Glob) — graph augment + knowledge injection.
  *
- * Two jobs. The augment is advisory: grep a token that matches indexed symbols
- * and the structural hits ride along as additionalContext.
+ * The augment: grep a token that matches indexed symbols and the structural
+ * hits ride along as additionalContext.
  *
- * The gate is not advisory, and it exists because advisory failed. Measured on
- * this harness: an agent TOLD it could use prjct still reached for grep, and
- * only consulted prjct when required to — so an instruction the model may
- * ignore is not enforcement. When prjct holds judgment-typed knowledge about
- * the very token being grepped (decisions, gotchas, learnings — things no
- * amount of grep can recover, because they were never written to a file), the
- * tool call is DENIED once with the lookup command. The agent then knows what
- * the repo already decided instead of re-deriving it, and its next grep of the
- * same token passes.
+ * Knowledge-first: when prjct holds judgment-typed knowledge about the very
+ * token being grepped (decisions, gotchas, learnings — things no amount of grep
+ * can recover, because they were never written to a file), that judgment is
+ * placed in front of the model. The DEFAULT is `inject`: the decision/gotcha
+ * text rides the Grep as additionalContext (once per token/session) and the
+ * search still runs. This replaced a hard DENY — advisory text was measured not
+ * to make the agent consult prjct, but the deny then taxed the obedient model
+ * (the Grok 2.7× lookup-first tax). Inject needs neither: the model sees the
+ * recorded judgment without being told to fetch it, and pays no round trip.
  *
- * Deliberately narrow, because a gate that cries wolf gets disabled: it fires
- * only on real stored judgment, at most once per token per session, never on
- * Read (read-before-edit invariant), and never on a project that has no such
- * knowledge. Off switch: `enforce.knowledgeFirst: false`.
+ * `enforce.knowledgeFirst: 'deny'` (or `true`) restores the blocking gate;
+ * `false` turns it off. Rollover-stop still denies regardless of mode.
  *
+ * Deliberately narrow: fires only on real stored judgment, at most once per
+ * token per session, never on Read, never on a project with no such knowledge.
  * Fail-open everywhere: any error → no deny, no context, host proceeds.
  */
 
@@ -150,6 +150,28 @@ const KNOWLEDGE_TYPES = ['decision', 'gotcha', 'anti-pattern', 'learning', 'fact
 const MIN_KNOWLEDGE_HITS = 2
 const KNOWLEDGE_LOOKUP_LIMIT = 6
 
+type KnowledgeMode = 'off' | 'inject' | 'deny'
+
+/**
+ * Default is `inject`: advisory text the model may ignore was measured to fail,
+ * and a hard deny taxes the obedient model (the Grok 2.7× lookup-first tax).
+ * Injecting the recorded judgment inline needs neither — the model sees the
+ * decision without being told to fetch it, and the grep still runs.
+ */
+function resolveKnowledgeMode(value: boolean | 'inject' | 'deny' | undefined): KnowledgeMode {
+  if (value === false) return 'off'
+  if (value === true || value === 'deny') return 'deny'
+  return 'inject'
+}
+
+/** Judgment hits for a token, or [] — the content grep can never recover. */
+async function knowledgeHits(projectId: string, token: string) {
+  const { projectMemory } = await import('../memory/project-memory')
+  return projectMemory
+    .searchFts(projectId, [token], KNOWLEDGE_LOOKUP_LIMIT)
+    .filter((entry) => KNOWLEDGE_TYPES.includes(entry.type))
+}
+
 async function decideKnowledgeFirst(
   projectPath: string,
   input: HookInput
@@ -166,23 +188,21 @@ async function decideKnowledgeFirst(
       projectPath,
       sessionId,
     })
+    // Rollover stop is a deterministic MUST, independent of knowledge mode.
     const rollover = sessionRolloverVerdict(config, sessionTurns)
     if (rollover.stopped && rollover.cue) return { deny: rollover.cue }
 
+    // Only the legacy `deny` mode blocks; `inject` (default) and `off` never do
+    // — the judgment rides `build` as additionalContext instead.
+    if (resolveKnowledgeMode(config.enforce?.knowledgeFirst) !== 'deny') return null
+
     const token = extractToken(input)
     if (!token || token.length < 4) return null
-
-    // The wall-clock budget belongs only to optional knowledge recall. The
-    // deterministic rollover gate above must neither consume nor inherit it.
+    // Budget bail returns null — the 'nothing to say' contract (mem_91).
     const started = Date.now()
-    if (config.enforce?.knowledgeFirst === false) return null
-    if (Date.now() - started > HARD_CAP_MS) return null
-
-    const { projectMemory } = await import('../memory/project-memory')
-    const hits = projectMemory
-      .searchFts(config.projectId, [token], KNOWLEDGE_LOOKUP_LIMIT)
-      .filter((entry) => KNOWLEDGE_TYPES.includes(entry.type))
+    const hits = await knowledgeHits(config.projectId, token)
     if (hits.length < MIN_KNOWLEDGE_HITS) return null
+    if (Date.now() - started > HARD_CAP_MS) return null
 
     const reason = [
       `prjct holds ${hits.length} recorded ${hits.length === 1 ? 'judgment' : 'judgments'} about \`${token}\` — decisions and gotchas that live in project memory, not in any file, so no grep will find them.`,
@@ -192,7 +212,6 @@ async function decideKnowledgeFirst(
       'Then repeat this Grep/Glob if you still need the code — the same token will not be blocked again this session.',
     ].join('\n')
 
-    // Deny ONCE per token per session; the retry after the lookup must pass.
     const gate = await gateDelivery({
       projectId: config.projectId,
       projectPath,
@@ -208,16 +227,88 @@ async function decideKnowledgeFirst(
   }
 }
 
+/**
+ * Inject recorded judgment about the grepped token as non-blocking context —
+ * the model-independent replacement for the deny. The decision/gotcha text is
+ * placed in front of the model inline, once per token/session, and the Grep
+ * proceeds. Returns null outside `inject` mode. Budget bail → null (mem_91).
+ */
+async function buildKnowledgeInject(projectPath: string, input: HookInput): Promise<string | null> {
+  try {
+    const tool = (input.tool_name ?? '').toLowerCase()
+    if (tool && !/grep|glob|search/i.test(tool)) return null
+    const config = await configManager.readConfig(projectPath)
+    if (!config?.projectId) return null
+    if (resolveKnowledgeMode(config.enforce?.knowledgeFirst) !== 'inject') return null
+    const token = extractToken(input)
+    if (!token || token.length < 4) return null
+    const started = Date.now()
+    const hits = await knowledgeHits(config.projectId, token)
+    if (hits.length < MIN_KNOWLEDGE_HITS) return null
+    if (Date.now() - started > HARD_CAP_MS) return null
+
+    const { formatMemoryDigestLine } = await import('../memory/format')
+    const lines = [
+      `# prjct: recorded judgment about \`${token}\` (grep won't find this)`,
+      '',
+      ...hits.slice(0, MAX_HITS).map((h) => {
+        const digest = formatMemoryDigestLine(h, { minTeaser: 24, maxTeaser: 160 })
+        const file = h.tags?.file
+        const where = file ? ` · \`${file}\`` : ''
+        return `- **[${h.type}]** ${digest}${where}`
+      }),
+      '',
+      '> Injected once this session; your Grep/Glob is running. Supersede stale calls with `prjct remember`.',
+    ]
+    const content = safeTruncate(lines.join('\n'), MAX_CHARS, undefined, TAIL_CHARS)
+    const gate = await gateDelivery({
+      projectId: config.projectId,
+      projectPath,
+      sessionId: input.session_id ?? input.conversation_id,
+      surface: 'pre-search-knowledge-inject',
+      key: token,
+      content,
+      noSession: { mode: 'static', ttlMs: NO_SESSION_TTL_MS },
+    })
+    return gate.suppressed ? null : content
+  } catch {
+    return null
+  }
+}
+
 export async function runPreSearchHook(projectPath?: string, io?: HookIo): Promise<void> {
   await runHook<HookInput>(
     {
       event: 'PreToolUse',
       projectPath,
       decide: (input, p) => decideKnowledgeFirst(p, input),
-      build: (input, p) => buildSearchAugment(p, input),
+      build: (input, p) => buildPreSearchContext(p, input),
     },
     io
   )
 }
 
-export const _internal = { extractToken, buildSearchAugment }
+/**
+ * Non-blocking additionalContext for a Grep/Glob: recorded judgment about the
+ * token (inject mode) first, then the symbol-graph hits. Either may be null.
+ */
+async function buildPreSearchContext(
+  projectPath: string,
+  input: HookInput
+): Promise<string | null> {
+  const [knowledge, augment] = await Promise.all([
+    buildKnowledgeInject(projectPath, input),
+    buildSearchAugment(projectPath, input),
+  ])
+  const blocks = [knowledge, augment].filter((b): b is string => Boolean(b))
+  return blocks.length ? blocks.join('\n\n') : null
+}
+
+export const _internal = {
+  extractToken,
+  buildSearchAugment,
+  buildKnowledgeInject,
+  buildPreSearchContext,
+  resolveKnowledgeMode,
+  decideKnowledgeFirst,
+}

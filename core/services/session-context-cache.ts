@@ -169,6 +169,8 @@ export type DeliverySurface =
   | 'pre-search'
   /** Knowledge-first deny: one block per grepped token per session. */
   | 'pre-search-knowledge-gate'
+  /** Knowledge-first inject: judgment inlined per grepped token per session. */
+  | 'pre-search-knowledge-inject'
   | 'pre-edit'
   | 'source-inspection'
   | 'post-edit'

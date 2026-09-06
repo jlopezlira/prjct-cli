@@ -11,8 +11,8 @@ import { buildPrjctSkill } from '../../services/skill-generator/prjct-skill-body
 import { countTokens } from '../../tools/context/token-counter'
 
 describe('harness score', () => {
-  it('defaults MCP tier to core', () => {
-    expect(DEFAULT_MCP_TOOL_TIER).toBe('core')
+  it('defaults MCP tier to micro', () => {
+    expect(DEFAULT_MCP_TOOL_TIER).toBe('micro')
   })
 
   it('keeps always-on skill under the token SLO', () => {

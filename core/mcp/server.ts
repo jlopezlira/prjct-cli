@@ -61,7 +61,12 @@ export const PRJCT_INSTRUCTIONS_MICRO = `prjct: project memory + work cycles via
  */
 export type ToolTier = 'micro' | 'lean' | 'core' | 'standard' | 'all'
 
-export const DEFAULT_MCP_TOOL_TIER: ToolTier = 'core'
+// Default is `micro` (one dispatch tool): the catalog tax is re-paid on every
+// API call by non-caching hosts and is dead weight on caching ones. The verbs
+// that matter (mem, guard, task, analysis) dispatch through it, and the harness
+// injects context via hooks rather than a fat tool surface. Raise per host with
+// PRJCT_MCP_TOOLS=core|standard|all when a session wants the direct tools.
+export const DEFAULT_MCP_TOOL_TIER: ToolTier = 'micro'
 export const MCP_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1_000
 
 const CATALOG_CACHE_HINT = {

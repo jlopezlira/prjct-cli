@@ -185,10 +185,16 @@ export interface LocalConfig {
    */
   enforce?: {
     /**
-     * Deny a Grep/Glob whose token prjct already holds recorded judgment about
-     * (once per token per session), pointing at `prjct search` instead.
+     * How to handle a Grep/Glob whose token prjct already holds recorded
+     * judgment (decisions/gotchas) about — knowledge no grep can recover:
+     *   - `'inject'` (default): allow the search AND attach the recorded
+     *     judgment inline as additionalContext (once per token/session). No
+     *     dependence on the model choosing to run a lookup.
+     *   - `'deny'` / `true`: block the call once, pointing at `prjct search`
+     *     (the pre-inject enforcement behaviour).
+     *   - `false`: off.
      */
-    knowledgeFirst?: boolean
+    knowledgeFirst?: boolean | 'inject' | 'deny'
   }
   /**
    * Machine gauntlet. Detection covers the common ecosystems; declaring

@@ -107,8 +107,8 @@ export function computeHarnessDelta(): HarnessDeltaReport {
   const skillOk = skillTokens <= WORLD_CLASS.skillTokensMax
   const routingOk = routingBytes <= WORLD_CLASS.routingBodyBytesMax
   const mcpOk =
-    resolveTier(undefined) === 'core' &&
-    DEFAULT_MCP_TOOL_TIER === 'core' &&
+    resolveTier(undefined) === WORLD_CLASS.mcpDefaultTier &&
+    DEFAULT_MCP_TOOL_TIER === WORLD_CLASS.mcpDefaultTier &&
     mcpTools <= WORLD_CLASS.mcpToolsCoreMax
 
   const rows: HarnessDeltaReport['rows'] = [
@@ -139,7 +139,7 @@ export function computeHarnessDelta(): HarnessDeltaReport {
     {
       metric: 'MCP default tools',
       bare: 'All tools loaded',
-      harness: `${mcpTools} tools @ core (≤${WORLD_CLASS.mcpToolsCoreMax})`,
+      harness: `${mcpTools} tools @ ${resolveTier(undefined)} (≤${WORLD_CLASS.mcpToolsCoreMax})`,
       ok: mcpOk,
     },
   ]
@@ -197,7 +197,9 @@ export function buildDemoRows(): DemoRow[] {
   const harnessHits = delta.harnessHits
   const bareHits = delta.bareHits
 
-  const mcpDefault = resolveTier(undefined) === 'core' && DEFAULT_MCP_TOOL_TIER === 'core'
+  const mcpDefault =
+    resolveTier(undefined) === WORLD_CLASS.mcpDefaultTier &&
+    DEFAULT_MCP_TOOL_TIER === WORLD_CLASS.mcpDefaultTier
   const mcpCount = score.defaults.mcpToolCountDefault
 
   return [
@@ -216,7 +218,7 @@ export function buildDemoRows(): DemoRow[] {
     {
       capability: 'MCP default surface',
       frontierNoHarness: 'Not measured',
-      weakWithPrjct: `tier=${resolveTier(undefined)} · ${mcpCount} tools (core)`,
+      weakWithPrjct: `tier=${resolveTier(undefined)} · ${mcpCount} tools`,
       weakOk: mcpDefault && mcpCount <= WORLD_CLASS.mcpToolsCoreMax,
     },
     {
