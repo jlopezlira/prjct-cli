@@ -160,7 +160,7 @@ export function buildPrjctSkillReference(): string {
     '',
     'Living context synthesis: the same model that just executed the task writes durable project context while fresh. Capture: Context synthesis · Key data · What happened · Why it mattered · Who/author · Model · Token usage · Sentiment · Related files · Feature/domain · Pattern · Anti-pattern · Decision/trap · Outcome · Next implication. Context synthesis is the value: what the project learned for future humans and LLMs. Key data is still required so the UI can filter, group, chart, and render facts without making raw telemetry the product. For Model and Token usage, write exact values or `unknown`. Raw detector output is input, not the final context.',
     '',
-    'Store via `prjct remember context "<...>"`. Example field list above. prjct anchors commit, author, and files.',
+    'Store via `prjct remember context "<...>"`. Example field list above. prjct anchors commit, file, and symbol (staleness-checked at HEAD).',
     '',
     '## Loop discipline — stop, delegate, or audit',
     '',

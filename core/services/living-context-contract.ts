@@ -82,7 +82,7 @@ export function buildLivingContextPrompt(): string {
     `  ${LIVING_CONTEXT_REMEMBER_EXAMPLE}`,
     '',
     'Ground it in the actual task, changed files, user intent/sentiment, and outcome. Do not store a raw quote, transcript snippet, hot-file counter, or detector row as final context.',
-    'prjct auto-anchors context entries to commit, author, and files so future sessions can recall the living synthesis.',
+    'prjct auto-anchors context entries to commit, file, and symbol (staleness-checked at HEAD) so future sessions can recall the living synthesis.',
   ].join('\n')
 }
 

@@ -151,10 +151,19 @@ export async function enrichedRecall(
 
   // Reinforcement: nudge proven-useful entries up (bounded — relevance
   // still leads). This is how recall gets smarter with use.
-  const rerankedEntries =
+  const usefulnessRanked =
     ageFilteredEntries.length > 1
       ? usefulnessService.rerank(projectId, ageFilteredEntries)
       : ageFilteredEntries
+
+  // Anchor staleness (memory/anchors.ts): an entry whose file/symbol anchor no
+  // longer resolves at HEAD is served LAST, never dropped — old ≠ wrong, but
+  // it must not outrank a fresh hit. The `[stale@sha]` render cue tells the
+  // agent to verify before trusting it.
+  const rerankedEntries = [
+    ...usefulnessRanked.filter((entry) => !entry.staleAt),
+    ...usefulnessRanked.filter((entry) => entry.staleAt),
+  ]
 
   // One hop of relationship-graph traversal so a recall carries its own
   // context instead of dangling `mem_N` pointers the agent must chase.
