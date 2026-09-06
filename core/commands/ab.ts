@@ -158,8 +158,12 @@ function defaultDeps(
             env: { ...process.env, PRJCT_CLI_HOME: home, PRJCT_NO_DAEMON: '1' },
             timeoutMs: 60_000,
           })
+          // A cell whose seed did not land is NOT a "harness with memory"
+          // sample; fail the setup so the sweep stops instead of scoring it.
           if (res.code !== 0) {
-            console.error(`ab: seed failed for ${ctx.task.id} (${seed.type}): exit ${res.code}`)
+            throw new Error(
+              `ab: seed failed for ${ctx.task.id} (${seed.type}): exit ${res.code} — the with-arm would be measured without its recorded knowledge`
+            )
           }
         }
       }

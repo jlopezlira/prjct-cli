@@ -924,7 +924,8 @@ function computePromptGuidance(
     text && policy.maxInjectChars > 0 && text.length > policy.maxInjectChars
       ? safeTruncate(text, policy.maxInjectChars, undefined, Math.floor(policy.maxInjectChars / 4))
       : text
-  const cueResult = silentOptional ? null : buildTopicalCueResult(projectId, prompt)
+  const rawCue = silentOptional ? null : buildTopicalCueResult(projectId, prompt)
+  const cueResult = rawCue ? { ...rawCue, cue: capOptional(rawCue.cue) ?? rawCue.cue } : null
   const harness = buildTaskHarness(prompt)
   // Provider- and task-classification-independent. An unknown/terse prompt is
   // not permission to ignore the repository; the same source-first contract
@@ -943,14 +944,16 @@ function computePromptGuidance(
     turn.cls === 'VERIFY' && policy.verifyContract
       ? 'Verify contract: record the failure first (`prjct verify repro "<cmd>"`), edit, then prove the flip (`prjct verify fix "<cmd>"`) — the same command must pass on a changed tree.'
       : null
+  // The verify cue is a property of VERIFY turns, not a fallback: it rides
+  // alongside any authored guidance, and the whole text is capped together.
   const selective = silentOptional ? null : buildSelectiveGuidance(projectId, prompt)
-  const guidance: SelectiveGuidanceResult | null = silentOptional
-    ? null
-    : selective
-      ? { ...selective, text: capOptional(selective.text) ?? selective.text }
-      : verifyCue
-        ? { text: verifyCue, memoryIds: [] }
-        : null
+  const guidanceText = [selective?.text, verifyCue]
+    .filter((t): t is string => Boolean(t))
+    .join('\n')
+  const guidance: SelectiveGuidanceResult | null =
+    silentOptional || !guidanceText
+      ? null
+      : { memoryIds: selective?.memoryIds ?? [], text: capOptional(guidanceText) ?? guidanceText }
   const deliveryIntent = classifyDeliveryIntent(prompt)
   const routingInput = {
     intent: prompt,

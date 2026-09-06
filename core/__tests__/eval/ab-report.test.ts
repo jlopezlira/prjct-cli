@@ -5,8 +5,11 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { type AbRow, renderAbMd, rowDisagreement, toOutcomeRuns } from '../../eval/ab-report'
-import { loadTasks } from '../../eval/ab-tasks'
+import { findPackageRoot, loadTasks } from '../../eval/ab-tasks'
 import { evaluateLiveOutcome } from '../../services/outcome-evidence'
 
 const tasks = loadTasks()
@@ -59,6 +62,30 @@ function fixtureRows(): AbRow[] {
   }
   return rows
 }
+
+describe('corpus location', () => {
+  it('resolves the package root from the bundled chunk dir, not a fixed ../..', () => {
+    // Installed layout: <pkg>/dist/bin/core-chunks is where __dirname lands.
+    const pkg = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-pkgroot-'))
+    const chunks = path.join(pkg, 'dist', 'bin', 'core-chunks')
+    fs.mkdirSync(chunks, { recursive: true })
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'prjct-cli' }))
+    try {
+      expect(findPackageRoot(chunks)).toBe(pkg)
+      // A foreign package.json above does not count.
+      const other = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-other-'))
+      fs.writeFileSync(path.join(other, 'package.json'), JSON.stringify({ name: 'someone-else' }))
+      expect(findPackageRoot(path.join(other, 'a', 'b'))).toBeNull()
+      fs.rmSync(other, { recursive: true, force: true })
+    } finally {
+      fs.rmSync(pkg, { recursive: true, force: true })
+    }
+  })
+
+  it('loads the real corpus from the source tree', () => {
+    expect(tasks.map((t) => t.id)).toEqual(['T1-lookup', 'T2-decision', 'T4-trap'])
+  })
+})
 
 describe('toOutcomeRuns', () => {
   it('produces schema-valid runs with arm-independent config hashes', () => {

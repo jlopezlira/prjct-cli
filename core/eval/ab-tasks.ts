@@ -56,7 +56,37 @@ export interface AbTask {
   seed?: SeedMemory[]
 }
 
-const TASKS_DIR = path.join(__dirname, '..', '..', 'evals', 'ab', 'tasks')
+/**
+ * The corpus lives at `<package root>/evals/ab/tasks`. `__dirname` is
+ * `core/eval` from source but `dist/bin/core-chunks` in the bundle (esbuild
+ * defines it per output file), so a fixed `../..` is wrong in one of the two.
+ * Walk up to the directory that holds this package's package.json instead;
+ * `PRJCT_AB_TASKS_DIR` overrides for custom corpora.
+ */
+export function findPackageRoot(start: string): string | null {
+  const walk = (dir: string, depth: number): string | null => {
+    if (depth > 8) return null
+    const pkg = path.join(dir, 'package.json')
+    try {
+      const name = (JSON.parse(fs.readFileSync(pkg, 'utf-8')) as { name?: string }).name
+      if (name === 'prjct-cli') return dir
+    } catch {
+      /* not here */
+    }
+    const parent = path.dirname(dir)
+    return parent === dir ? null : walk(parent, depth + 1)
+  }
+  return walk(start, 0)
+}
+
+export function defaultTasksDir(): string {
+  const override = process.env.PRJCT_AB_TASKS_DIR?.trim()
+  if (override) return override
+  const root = findPackageRoot(__dirname) ?? path.join(__dirname, '..', '..')
+  return path.join(root, 'evals', 'ab', 'tasks')
+}
+
+const TASKS_DIR = defaultTasksDir()
 
 function isTaskClass(value: unknown): value is TaskClass {
   return typeof value === 'string' && (TASK_CLASSES as readonly string[]).includes(value)

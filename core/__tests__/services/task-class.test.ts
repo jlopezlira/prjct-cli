@@ -20,6 +20,8 @@ const CASES: Array<{ prompt: string; expect: Label }> = [
   { prompt: 'Show the default weights in core/domain/file-ranker.ts', expect: 'SELF_CONTAINED' },
   { prompt: 'Read scripts/build.js and summarize deriveShimSkipSet', expect: 'SELF_CONTAINED' },
   { prompt: 'Update the version string in package.json', expect: 'SELF_CONTAINED' },
+  { prompt: 'clean up ./core/services before the release', expect: 'SELF_CONTAINED' },
+  { prompt: 'look at /home/u/proj/core/hooks for the budget', expect: 'SELF_CONTAINED' },
   {
     prompt: 'Rename the local var in core/agent/paths.ts resolveSafePath',
     expect: 'SELF_CONTAINED',

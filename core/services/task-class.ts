@@ -49,12 +49,13 @@ const EXPLORATION_RE =
 /** Candidate path-shaped tokens; `isPathLike` decides which ones count. */
 const PATH_TOKEN_RE = /[\w.@-]+(?:\/[\w.@-]+)+|\b[\w-]+\.[a-z]{1,5}\b/g
 const CODE_EXT_RE = /\.(ts|tsx|js|mjs|cjs|json|md|c|h|py|go|rs|yml|yaml|sh|sql|css|html|toml)$/i
+// Unanchored on the left so `./core/x` and `/home/u/proj/core/x` count too.
 const SOURCE_DIR_RE =
-  /^(?:core|src|lib|app|scripts|native|bin|evals|docs|test|tests|__tests__|\.github|assets|templates|packages|apps)\//
+  /(?:^|\/)(?:core|src|lib|app|scripts|native|bin|evals|docs|test|tests|__tests__|\.github|assets|templates|packages|apps)\/[\w.@-]/
 /**
- * A real path names a source dir or ends in a code extension. Bare `a/b`
- * prose ("and/or", "A/B", "with/without") has neither and must NOT read as
- * "the prompt names the file" — that would silence the harness on prose.
+ * A real path names a source dir (at any depth) or ends in a code extension.
+ * Bare `a/b` prose ("and/or", "A/B", "with/without") has neither and must NOT
+ * read as "the prompt names the file" — that would silence the harness.
  */
 function isPathLike(token: string): boolean {
   return CODE_EXT_RE.test(token) || SOURCE_DIR_RE.test(token)
