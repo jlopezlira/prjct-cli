@@ -8,6 +8,42 @@ import {
 } from '../../services/transcript-jsonl'
 
 describe('sumTranscriptUsage', () => {
+  it('accounts for native Pi usage per request and keeps provider-qualified models', () => {
+    const lines = [
+      {
+        type: 'message',
+        timestamp: '2026-09-06T00:00:00Z',
+        message: {
+          role: 'assistant',
+          provider: 'provider-a',
+          model: 'shared-id',
+          usage: { input: 10, output: 3, cacheRead: 40, cacheWrite: 5 },
+        },
+      },
+      {
+        type: 'message',
+        timestamp: '2026-09-06T00:01:00Z',
+        message: {
+          role: 'assistant',
+          provider: 'provider-b',
+          model: 'shared-id',
+          usage: { input: 20, output: 4, cacheRead: 40, cacheWrite: 5 },
+        },
+      },
+    ]
+    expect(sumTranscriptUsage(lines)).toEqual({ tokensIn: 120, tokensOut: 7 })
+    expect(identifyTranscriptModel(lines)).toBe('mixed')
+    expect(identifyTranscriptModel(lines.slice(0, 1))).toBe('provider-a/shared-id')
+    expect(sumTranscriptUsageByModel(lines).get('provider-b/shared-id')).toEqual({
+      tokensIn: 65,
+      tokensOut: 4,
+    })
+    expect(sumTranscriptUsage(lines, { sinceIso: '2026-09-06T00:00:30Z' })).toEqual({
+      tokensIn: 65,
+      tokensOut: 4,
+    })
+  })
+
   it('sums input/output across assistant turns, counting cache reads/creations as input', () => {
     const lines = parseTranscriptJsonl(
       [

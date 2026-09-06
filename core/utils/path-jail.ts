@@ -14,8 +14,8 @@ import path from 'node:path'
 
 /**
  * Canonical absolute path for `target`, resolving through the nearest
- * existing ancestor when the leaf does not exist. Never throws — falls back
- * to the lexical `path.resolve` only if nothing along the chain exists.
+ * existing ancestor when the leaf does not exist. Unresolvable symlinks and
+ * inaccessible ancestors fail closed; they are not ordinary missing files.
  */
 export function realpathOrNearest(target: string): string {
   const absolute = path.resolve(target)
@@ -23,7 +23,17 @@ export function realpathOrNearest(target: string): string {
     try {
       const real = fs.realpathSync.native(probe)
       return trailing.length === 0 ? real : path.join(real, ...trailing)
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      const stat = (() => {
+        try {
+          return fs.lstatSync(probe)
+        } catch (statError) {
+          if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError
+          return null
+        }
+      })()
+      if (stat?.isSymbolicLink()) throw new Error(`Unresolvable symlink: ${probe}`)
       const parent = path.dirname(probe)
       if (parent === probe) return absolute
       return resolveFrom(parent, [path.basename(probe), ...trailing])
@@ -37,13 +47,17 @@ export function realpathOrNearest(target: string): string {
  * (the project root itself counts), otherwise null.
  */
 export function resolveInsideProject(projectPath: string, candidate: string): string | null {
-  const root = realpathOrNearest(projectPath)
-  const absolute = path.isAbsolute(candidate) ? candidate : path.join(root, candidate)
-  const real = realpathOrNearest(absolute)
-  if (real === root) return real
-  const rel = path.relative(root, real)
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null
-  return real
+  try {
+    const root = realpathOrNearest(projectPath)
+    const absolute = path.isAbsolute(candidate) ? candidate : path.join(root, candidate)
+    const real = realpathOrNearest(absolute)
+    if (real === root) return real
+    const rel = path.relative(root, real)
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null
+    return real
+  } catch {
+    return null
+  }
 }
 
 /** True when `candidate` canonicalises to a path under `projectPath`. */

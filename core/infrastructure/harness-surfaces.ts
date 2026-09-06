@@ -333,14 +333,15 @@ export const BENCHMARK_HARNESS_SURFACES: readonly HarnessSurfaceEntry[] = [
       notes: 'prjct install → installPiSkill() at ~/.pi/agent/skills/prjct/SKILL.md',
     },
     hooks: {
-      configPaths: [],
-      events: [],
-      format: 'extension event hooks only',
-      prjct: 'none',
-      contract: 'Skill + AGENTS.md + prjct CLI --md; no lifecycle hook pack',
+      configPaths: ['~/.pi/agent/extensions/prjct/index.ts'],
+      events: ['session_start', 'before_agent_start', 'tool_call', 'tool_result', 'agent_end'],
+      format: 'native extension events',
+      prjct: 'native',
+      contract:
+        'Native events dispatch canonical PRJCT_HOOKS; deny blocks tool execution, successful reads stamp inspection, context reaches Pi without auto-running ship.',
     },
     legibility:
-      'Native skill on prjct install when Pi is detected. AGENTS.md portable. MCP is optional via community extensions only.',
+      'Native skill and extension on prjct install: lifecycle hooks, CLI and independent delegates. AGENTS.md portable; no MCP required.',
   },
   {
     runtimeId: 'kimi-cli',
@@ -362,7 +363,7 @@ export const BENCHMARK_HARNESS_SURFACES: readonly HarnessSurfaceEntry[] = [
       paths: ['~/.kimi-code/skills/prjct/SKILL.md ($KIMI_CODE_HOME/skills/)'],
       prjct: 'native',
       notes:
-        'Compact skill via skill-generator fan-out into the shared user tier ~/.agents/skills (canonical Kimi scan dir, verified live)',
+        'Compact skill via skill-generator into the Kimi home; avoids Pi collisions in the shared ~/.agents/skills tier.',
     },
     hooks: {
       configPaths: ['~/.kimi-code/config.toml [[hooks]]'],

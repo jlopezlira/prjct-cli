@@ -6,10 +6,11 @@
  * is unit-testable without a network or a real model.
  *
  * `with`  = worktree at HEAD keeping `.prjct`, an isolated home seeded with the
- *           task's memories, default setting sources.
+ *           task's memories and explicit isolated hook settings.
  * `without` = worktree with `.prjct` removed, empty home, `prjct` shimmed to
- *           exit 127, `--setting-sources project,local`.
- * Both arms: read-only tools only, `--strict-mcp-config`, stdin closed.
+ *           exit 127 and an empty explicit hook configuration.
+ * Both arms: corpus removed, Read/Grep/Glob allowlist, no ambient settings or
+ * MCP servers, stdin closed. With-arm rows require observed prompt hooks.
  */
 
 import { detGrade, llmGrade } from './ab-grader'

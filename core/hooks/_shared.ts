@@ -69,12 +69,12 @@ export function buildDenyOutput(event: string, reason: string): DenyOutput {
 }
 
 /** Host that invoked the hook (Claude default; others remap output). */
-export type HookHost = 'claude' | 'gemini' | 'codex' | 'cursor' | 'kimi'
+export type HookHost = 'claude' | 'gemini' | 'codex' | 'cursor' | 'kimi' | 'pi'
 
 /** Validate a raw host string (env var / daemon request field) into a HookHost. */
 export function hookHostFrom(raw: string | undefined | null): HookHost {
   const v = (raw ?? 'claude').trim().toLowerCase()
-  if (v === 'gemini' || v === 'codex' || v === 'cursor' || v === 'kimi') return v
+  if (v === 'gemini' || v === 'codex' || v === 'cursor' || v === 'kimi' || v === 'pi') return v
   return 'claude'
 }
 

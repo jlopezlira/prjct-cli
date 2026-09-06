@@ -6,12 +6,12 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { WebSocketServer } from 'ws'
 import {
   backoffDelay,
   buildRealtimeUrl,
-  REALTIME_AUTH_SCHEME,
   RealtimeClient,
-  realtimeAuthProtocols,
+  realtimeAuthHeaders,
   type WebSocketLike,
 } from '../../sync/realtime-client'
 
@@ -52,7 +52,7 @@ function clientWith(opts: {
   maxDelayMs?: number
 }) {
   const sockets: FakeWebSocket[] = []
-  const dials: Array<{ url: string; protocols?: string[] }> = []
+  const dials: Array<{ url: string; headers?: Record<string, string> }> = []
   const applied: Array<{ pid: string; ev: Record<string, unknown> }> = []
   const client = new RealtimeClient({
     projectId: 'proj-1',
@@ -65,8 +65,8 @@ function clientWith(opts: {
         applied.push({ pid, ev })
         return true
       }),
-    wsFactory: (url, protocols) => {
-      dials.push({ url, protocols })
+    wsFactory: (url, headers) => {
+      dials.push({ url, headers })
       const ws = new FakeWebSocket()
       sockets.push(ws)
       return ws
@@ -88,7 +88,7 @@ describe('buildRealtimeUrl', () => {
     expect(url).not.toContain('pk_live')
     expect(q.get('device')).toBe('d1')
     expect(q.get('project')).toBe('p1')
-    expect(q.get('auth')).toBe('subprotocol')
+    expect(q.get('auth')).toBeNull()
   })
 
   it('swaps http→ws and tolerates a trailing slash', () => {
@@ -98,19 +98,56 @@ describe('buildRealtimeUrl', () => {
   })
 })
 
-describe('realtimeAuthProtocols', () => {
-  it('carries the key in the Sec-WebSocket-Protocol values, scheme first', () => {
-    expect(realtimeAuthProtocols('pk_live_x')).toEqual([REALTIME_AUTH_SCHEME, 'pk_live_x'])
-    expect(realtimeAuthProtocols('')).toEqual([])
+describe('realtimeAuthHeaders', () => {
+  it('uses the x-api-key contract already accepted by the server', () => {
+    expect(realtimeAuthHeaders('pk_live_x')).toEqual({ 'x-api-key': 'pk_live_x' })
+    expect(realtimeAuthHeaders('')).toEqual({})
   })
 
-  it('the client dials with the key in protocols, not the URL', () => {
+  it('the client dials with the key in headers, not the URL', () => {
     const { client, dials } = makeClient({})
     client.start()
     expect(dials).toHaveLength(1)
     expect(dials[0].url).not.toContain('pk_live')
-    expect(dials[0].protocols).toEqual([REALTIME_AUTH_SCHEME, 'pk_live_abc'])
+    expect(dials[0].headers).toEqual({ 'x-api-key': 'pk_live_abc' })
     client.stop()
+  })
+
+  it('authenticates a real WebSocket and applies a server event without a URL credential', async () => {
+    const server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    const address = server.address() as { port: number }
+    const requests: Array<{ url?: string; key?: string | string[] }> = []
+    server.on('connection', (socket, request) => {
+      requests.push({ url: request.url, key: request.headers['x-api-key'] })
+      socket.send(JSON.stringify({ type: 'event', event: { id: 'actual-event' } }))
+    })
+    const applied: string[] = []
+    const client = new RealtimeClient({
+      projectId: 'p',
+      deviceId: 'd',
+      apiKey: 'test-key',
+      apiUrl: `http://127.0.0.1:${address.port}`,
+      apply: async (_id, event) => {
+        applied.push(String(event.id))
+        return true
+      },
+    })
+    try {
+      client.start()
+      for (const _ of Array.from({ length: 40 })) {
+        if (applied.length) break
+        await tick(25)
+      }
+      expect(applied).toEqual(['actual-event'])
+      expect(requests[0].key).toBe('test-key')
+      expect(requests[0].url).not.toContain('test-key')
+      expect(new URL(requests[0].url!, 'http://local').searchParams.has('key')).toBe(false)
+    } finally {
+      client.stop()
+      for (const socket of server.clients) socket.terminate()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 })
 

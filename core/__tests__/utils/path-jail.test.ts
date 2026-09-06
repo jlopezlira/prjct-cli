@@ -66,6 +66,14 @@ describe('realpathOrNearest / resolveInsideProject', () => {
     expect(resolveInsideProject(fixture.root, '../outside/secret.ts')).toBeNull()
     expect(isInsideProject(fixture.root, `${fixture.root}-evil/x.ts`)).toBe(false)
   })
+
+  it('rejects dangling symlinks and loops instead of treating them as new files', () => {
+    fs.symlinkSync(path.join(fixture.outside, 'missing.ts'), path.join(fixture.root, 'dangling.ts'))
+    fs.symlinkSync('loop', path.join(fixture.root, 'loop'))
+    expect(resolveInsideProject(fixture.root, 'dangling.ts')).toBeNull()
+    expect(resolveInsideProject(fixture.root, 'loop/new.ts')).toBeNull()
+    expect(() => resolveSafePath(fixture.root, 'dangling.ts')).toThrow()
+  })
 })
 
 describe('extractSignatures jail (SEC-01)', () => {

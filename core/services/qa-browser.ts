@@ -403,17 +403,16 @@ export async function closeBrowserSession(projectId: string): Promise<BrowserRes
  * carries the app's cookies, and a step is agent-written data.
  */
 function resolveUrl(url: string, baseUrl: string | null): string | null {
-  if (/^https?:\/\//i.test(url)) return httpProbeTargetAllowed(url, baseUrl) ? url : null
-  if (!baseUrl) return null
   try {
-    return new URL(url, baseUrl).toString()
+    const target = new URL(url, baseUrl ?? undefined).toString()
+    return httpProbeTargetAllowed(target, baseUrl) ? target : null
   } catch {
     return null
   }
 }
 
 function gotoRefusal(url: string, baseUrl: string | null): string {
-  if (/^https?:\/\//i.test(url)) {
+  if (baseUrl || /^[\s]*(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(url)) {
     return `goto ${url}: outside the app under test (${baseUrl ?? 'no baseUrl'}); only qa.app.baseUrl or loopback origins are navigated`
   }
   return `goto ${url}: no baseUrl (prjct qa set app.baseUrl <url>)`

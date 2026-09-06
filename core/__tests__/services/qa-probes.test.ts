@@ -44,6 +44,16 @@ const http = (over: Record<string, unknown> = {}) => ({
 })
 
 describe('http probe target allowlist (SEC-16)', () => {
+  it('blocks absolute and protocol-relative targets supplied through path', async () => {
+    for (const target of [
+      'https://external.invalid/x',
+      '//external.invalid/x',
+      'javascript:alert(1)',
+    ]) {
+      const result = await runHttpProbe(http({ path: target }), fixture.baseUrl)
+      expect(result.outcome).toBe('blocked')
+    }
+  })
   it('allows the app origin and loopback, blocks everything else', () => {
     const base = 'https://staging.example.com:8443'
     expect(httpProbeTargetAllowed(`${base}/health`, base)).toBe(true)

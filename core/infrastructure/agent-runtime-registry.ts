@@ -262,12 +262,12 @@ export const AGENT_RUNTIME_REGISTRY: readonly AgentRuntimeDefinition[] = [
       // No built-in MCP — skills + CLI --md are the contract (pi.dev design).
       mcp: false,
       skills: true,
-      hooks: false,
+      hooks: true,
       acp: false,
       projectRules: false,
     },
     notes:
-      'Benchmark-tier minimal harness (2026-07): AGENTS.md + prjct skill at ~/.pi/agent/skills/prjct. MCP only via optional extensions — do not require it.',
+      'Native Pi skill and extension: shared lifecycle hooks, exact-argv CLI, independent delegates. No MCP required.',
   },
   {
     id: 'qwen-code',

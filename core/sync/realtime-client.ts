@@ -2,19 +2,9 @@
  * Realtime client — ONE project's live WebSocket connection to the storage
  * API, for <5s cross-device propagation.
  *
- * Uses the PLATFORM global `WebSocket` (RFC 6455 — stable in Node ≥22.5 and
- * Bun), NOT a backend SDK and NOT the `ws` package.
- *
- * Auth: the WHATWG WebSocket API cannot set arbitrary request headers, but it
- * CAN set one — `Sec-WebSocket-Protocol`, via the constructor's `protocols`
- * argument. The API key rides there (`prjct.auth.v1, <key>`), NOT in the URL
- * query, so it never lands in server access logs, proxy logs, or a Referer.
- * Only non-secret routing (device, project) stays in the query, plus an
- * `auth=subprotocol` marker so the server knows where to read the credential
- * (and can still accept legacy query-key clients during rollout). The key is
- * base64url/`pk_`-shaped, so it is a valid subprotocol token. Server contract:
- * `GET /ws` reads `Sec-WebSocket-Protocol: prjct.auth.v1, <key>`, authenticates
- * on `<key>`, and echoes back `prjct.auth.v1` as the accepted subprotocol.
+ * Uses `ws` to send the server's existing x-api-key header on Node and Bun.
+ * Credentials never enter URLs or require a coordinated server rollout.
+ * Redirects are disabled so a handshake cannot forward auth to another host.
  *
  * Responsibilities: connect, parse inbound `{type:'event', event}` frames and
  * hand them to `apply`, and reconnect with exponential backoff + jitter on
@@ -22,20 +12,19 @@
  * echo logic is unit-testable without a real socket.
  */
 
+import WebSocket from 'ws'
+
 /** Minimal subset of the WHATWG WebSocket we depend on (keeps it injectable). */
 export interface WebSocketLike {
   readyState: number
   close(code?: number, reason?: string): void
-  onopen: ((ev: unknown) => void) | null
-  onmessage: ((ev: { data: unknown }) => void) | null
-  onclose: ((ev: unknown) => void) | null
-  onerror: ((ev: unknown) => void) | null
+  onopen: WebSocket['onopen']
+  onmessage: WebSocket['onmessage']
+  onclose: WebSocket['onclose']
+  onerror: WebSocket['onerror']
 }
 
-export type WebSocketFactory = (url: string, protocols?: string[]) => WebSocketLike
-
-/** Subprotocol scheme marker; the key follows it as the second token. */
-export const REALTIME_AUTH_SCHEME = 'prjct.auth.v1'
+export type WebSocketFactory = (url: string, headers?: Record<string, string>) => WebSocketLike
 
 export type RealtimeState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
@@ -47,33 +36,27 @@ export interface RealtimeClientOptions {
   deviceId: string
   /** Applies a received event locally (echo-guarded). Returns applied?. */
   apply: (projectId: string, event: Record<string, unknown>) => Promise<boolean>
-  /** Injected for tests; defaults to the platform global WebSocket. */
+  /** Injected for tests; defaults to the header-capable ws transport. */
   wsFactory?: WebSocketFactory
   baseDelayMs?: number
   maxDelayMs?: number
 }
 
-/** Whether this runtime exposes a usable global WebSocket client. */
-export function hasGlobalWebSocket(): boolean {
-  return typeof (globalThis as { WebSocket?: unknown }).WebSocket === 'function'
-}
-
 /**
  * REST base → ws endpoint with NON-SECRET routing params only. `https`→`wss`,
- * `http`→`ws`. The credential never appears here — see `realtimeAuthProtocols`.
+ * `http`→`ws`. The credential never appears here — see `realtimeAuthHeaders`.
  */
 export function buildRealtimeUrl(apiUrl: string, projectId: string, deviceId: string): string {
   const base = apiUrl.replace(/\/$/, '').replace(/^http/, 'ws')
-  const q = new URLSearchParams({ device: deviceId, project: projectId, auth: 'subprotocol' })
+  const q = new URLSearchParams({ device: deviceId, project: projectId })
   return `${base}/ws?${q.toString()}`
 }
 
 /**
- * The `Sec-WebSocket-Protocol` values that carry auth: the scheme marker then
- * the key. Returns no auth protocol when the key is empty (caller sends none).
+ * Header contract already supported by the storage API's /ws endpoint.
  */
-export function realtimeAuthProtocols(apiKey: string): string[] {
-  return apiKey ? [REALTIME_AUTH_SCHEME, apiKey] : []
+export function realtimeAuthHeaders(apiKey: string): Record<string, string> {
+  return apiKey ? { 'x-api-key': apiKey } : {}
 }
 
 /** Exponential backoff with full jitter, capped. Pure — unit tested. */
@@ -97,10 +80,8 @@ export class RealtimeClient {
       ...options,
       wsFactory:
         options.wsFactory ??
-        ((url: string, protocols?: string[]) =>
-          new (
-            globalThis as { WebSocket: new (u: string, p?: string[]) => WebSocketLike }
-          ).WebSocket(url, protocols)),
+        ((url, headers) =>
+          new WebSocket(url, { headers, followRedirects: false, handshakeTimeout: 10000 })),
       baseDelayMs: options.baseDelayMs ?? 1000,
       maxDelayMs: options.maxDelayMs ?? 30_000,
     }
@@ -131,10 +112,10 @@ export class RealtimeClient {
   private connect(): void {
     this._state = this.attempt === 0 ? 'connecting' : 'reconnecting'
     const url = buildRealtimeUrl(this.opts.apiUrl, this.opts.projectId, this.opts.deviceId)
-    const protocols = realtimeAuthProtocols(this.opts.apiKey)
+    const headers = realtimeAuthHeaders(this.opts.apiKey)
     const ws = (() => {
       try {
-        return this.opts.wsFactory(url, protocols)
+        return this.opts.wsFactory(url, headers)
       } catch {
         return null
       }

@@ -50,6 +50,19 @@ afterEach(async () => {
 const CMD = 'test -f fixed.txt'
 
 describe('verify contract', () => {
+  it('refuses red and green receipts when the command changes the measured tree', async () => {
+    const mutatingRed = 'echo changed >> seed.txt; exit 1'
+    const red = await recordRepro(fixture.projectId, fixture.dir, mutatingRed)
+    expect(red.ok).toBe(false)
+    expect(latestContract(fixture.projectId, mutatingRed)).toBeNull()
+    const mutatingGreen = 'test -f fixed.txt || exit 1; echo changed >> seed.txt'
+    expect((await recordRepro(fixture.projectId, fixture.dir, mutatingGreen)).ok).toBe(true)
+    await fsp.writeFile(path.join(fixture.dir, 'fixed.txt'), 'fixed')
+    const green = await recordFix(fixture.projectId, fixture.dir, mutatingGreen)
+    expect(green.ok).toBe(false)
+    expect(green.reason).toMatch(/changed.*verification/i)
+    expect(latestContract(fixture.projectId, mutatingGreen)?.phase).toBe('repro')
+  })
   it('records a reproduction only when the command fails', async () => {
     const repro = await recordRepro(fixture.projectId, fixture.dir, CMD)
     expect(repro.ok).toBe(true)

@@ -4,14 +4,15 @@ import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const execAsync = promisify(execFile)
-const exec = (command, args, options) => {
+const exec = (command, args, { input, ...options }) => {
   const pending = execAsync(command, args, options)
   // Print mode consumes piped stdin before processing its prompt. Close the
   // unused pipe or a nested pi process waits forever for input from its parent.
-  pending.child.stdin?.end()
+  pending.child.stdin?.end(input)
   return pending.catch((error) => {
     const diagnostic = String(error.stdout || error.stderr || error.message).slice(0, limit)
     throw new Error(`${command} failed (${error.code ?? error.name}): ${diagnostic}`)
@@ -26,11 +27,17 @@ function requireModel(ctx) {
 
 // One options shape for every child the bridge spawns: cwd, the scrubbed
 // session env, the caller's abort signal, a per-kind timeout, 4 MiB buffer.
-function execOptions(ctx, signal, timeout) {
-  return { cwd: ctx.cwd, env: sessionEnv(ctx), signal, timeout, maxBuffer: 4 * 1024 * 1024 }
+function execOptions(ctx, signal, timeout, independent = false) {
+  return {
+    cwd: ctx.cwd,
+    env: sessionEnv(ctx, independent),
+    signal,
+    timeout,
+    maxBuffer: 4 * 1024 * 1024,
+  }
 }
 
-export function sessionEnv(ctx) {
+export function sessionEnv(ctx, independent = false) {
   const env = { ...process.env, AI_AGENT: 'pi', PI_CODING_AGENT: 'true', PRJCT_AGENT_RUNTIME: 'pi' }
   for (const key of [
     'PI_SESSION_ID',
@@ -40,9 +47,15 @@ export function sessionEnv(ctx) {
     'PI_REASONING_LEVEL',
   ])
     delete env[key]
-  env.PI_SESSION_ID = ctx.sessionManager.getSessionId()
-  const file = ctx.sessionManager.getSessionFile()
-  if (file) env.PI_SESSION_FILE = file
+  if (independent) {
+    env.PRJCT_PI_DELEGATE = '1'
+    for (const key of ['PRJCT_SESSION_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID', 'PRJCT_AGENT'])
+      delete env[key]
+  } else {
+    env.PI_SESSION_ID = ctx.sessionManager.getSessionId()
+    const file = ctx.sessionManager.getSessionFile()
+    if (file) env.PI_SESSION_FILE = file
+  }
   if (ctx.model) {
     env.PI_PROVIDER = ctx.model.provider
     env.PI_MODEL = ctx.model.id
@@ -59,6 +72,8 @@ export function childArgs(ctx, promptFile, readOnly) {
     'json',
     '--no-session',
     '--no-extensions',
+    '--extension',
+    fileURLToPath(new URL('./index.ts', import.meta.url)),
     '--no-skills',
     '--no-prompt-templates',
     '--no-context-files',
@@ -148,7 +163,7 @@ export async function runAgent(prompt, readOnly, ctx, signal, execute = exec) {
     const result = await execute(
       'pi',
       childArgs(ctx, file, readOnly),
-      execOptions(ctx, signal, 600000)
+      execOptions(ctx, signal, 600000, true)
     )
     const parsed = parseChildOutput(result.stdout)
     // Return evidence, not a fabricated ledger verdict. Parent uses existing CLI gates.
@@ -178,4 +193,99 @@ export async function runAgent(prompt, readOnly, ctx, signal, execute = exec) {
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+}
+
+/** Translate native Pi events only; workflow policy stays in the CLI hooks. */
+export async function runHook(subcommand, payload, ctx, signal, execute = exec) {
+  const options = execOptions(ctx, signal, 10000)
+  const result = await execute('prjct', ['hook', subcommand], {
+    ...options,
+    env: { ...options.env, PRJCT_HOOK_HOST: 'pi' },
+    input: JSON.stringify(payload),
+  })
+  const output = JSON.parse(result.stdout || '{}')
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    throw new Error('Invalid prjct hook response')
+  }
+  return output
+}
+
+export function registerLifecycle(pi, specs, executeHook = runHook) {
+  const tools = {
+    bash: 'Bash',
+    read: 'Read',
+    edit: 'Edit',
+    write: 'Write',
+    grep: 'Grep',
+    find: 'Glob',
+  }
+  const message = (content) => ({ customType: 'prjct-hook', content, display: false })
+  const publish = (content) => {
+    if (content) pi.sendMessage(message(content), { triggerTurn: false })
+  }
+  const dispatch = async (eventName, event, ctx) => {
+    const toolName = tools[event.toolName] ?? event.toolName ?? ''
+    const payload = {
+      cwd: ctx.cwd,
+      session_id: ctx.sessionManager.getSessionId(),
+      transcript_path: ctx.sessionManager.getSessionFile(),
+      hook_event_name: eventName,
+      tool_name: toolName,
+      tool_input: event.input,
+      tool_response: event.content,
+      tool_use_id: event.toolCallId,
+      agent_id: event.toolCallId,
+      prompt: event.prompt,
+      source: event.reason,
+      model: ctx.model?.id,
+    }
+    const context = []
+    for (const spec of specs) {
+      if (
+        spec.event !== eventName ||
+        (spec.matcher && !new RegExp(`^(?:${spec.matcher})$`).test(toolName))
+      )
+        continue
+      try {
+        const result = await executeHook(spec.subcommand, payload, ctx, ctx.signal)
+        const output = result.hookSpecificOutput
+        if (output?.permissionDecision === 'deny') {
+          return { block: true, reason: output.permissionDecisionReason || 'Blocked by prjct' }
+        }
+        const text = output?.additionalContext || result.systemMessage
+        if (text) context.push(text)
+      } catch (error) {
+        const reason = `prjct ${spec.subcommand} unavailable: ${error.message}`
+        if (eventName === 'PreToolUse' && ['Bash', 'Edit', 'Write'].includes(toolName)) {
+          return { block: true, reason }
+        }
+        context.push(reason)
+      }
+    }
+    return { context: context.join('\n\n') }
+  }
+  pi.on('session_start', async (event, ctx) => {
+    publish((await dispatch('SessionStart', event, ctx)).context)
+  })
+  pi.on('before_agent_start', async (event, ctx) => {
+    const result = await dispatch('UserPromptSubmit', event, ctx)
+    if (result.context) return { message: message(result.context) }
+  })
+  const handleTool = (phase) => async (event, ctx) => {
+    if (phase === 'PostToolUse' && event.isError && event.toolName !== 'prjct_agent') return
+    const nativeEvent =
+      event.toolName === 'prjct_agent'
+        ? phase === 'PreToolUse'
+          ? 'SubagentStart'
+          : 'SubagentStop'
+        : phase
+    const result = await dispatch(nativeEvent, event, ctx)
+    if (result.block) return { block: true, reason: result.reason }
+    publish(result.context)
+  }
+  pi.on('tool_call', handleTool('PreToolUse'))
+  pi.on('tool_result', handleTool('PostToolUse'))
+  pi.on('agent_end', async (event, ctx) => {
+    publish((await dispatch('Stop', event, ctx)).context)
+  })
 }

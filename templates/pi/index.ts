@@ -1,9 +1,11 @@
 // prjct-managed pi bridge v1
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
-import { runAgent, runCli } from './bridge.mjs'
+import { registerLifecycle, runAgent, runCli } from './bridge.mjs'
+import hooks from './hooks.json'
 
 export default function (pi: ExtensionAPI) {
+  registerLifecycle(pi, hooks)
   pi.registerCommand('prjct', {
     description: 'Run any prjct workflow through the native prjct skill',
     handler: async (args) => {
@@ -21,6 +23,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ args: Type.Array(Type.String(), { minItems: 1 }) }),
     execute: async (_id, { args }, signal, _update, ctx) => runCli(args, ctx, signal),
   })
+  if (process.env.PRJCT_PI_DELEGATE === '1') return
   pi.registerTool({
     name: 'prjct_agent',
     label: 'prjct delegate',

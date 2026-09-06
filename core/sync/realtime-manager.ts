@@ -8,23 +8,23 @@
  *  - `prjct cloud pause` / `unlink` → `stop(projectId)`
  *  - daemon shutdown → `stopAll()`
  *
- * Realtime only runs INSIDE the daemon (the sole long-lived process) and only
- * when the runtime exposes a global WebSocket. In ephemeral (`PRJCT_NO_DAEMON`)
+ * Realtime only runs INSIDE the daemon (the sole long-lived process).
+ * In ephemeral (`PRJCT_NO_DAEMON`)
  * mode every method is a no-op — the command still updates the registry/config,
  * and the daemon picks it up on next boot. Pull-based sync covers that gap.
  */
 
 import authConfig from './auth-config'
 import { listLinkedProjects } from './cloud-registry'
-import { hasGlobalWebSocket, RealtimeClient, type RealtimeState } from './realtime-client'
+import { RealtimeClient, type RealtimeState } from './realtime-client'
 import syncManager from './sync-manager'
 
 class RealtimeManager {
   private clients = new Map<string, RealtimeClient>()
 
-  /** Realtime can run only inside the daemon with a usable global WebSocket. */
+  /** Ephemeral commands leave connection ownership with the daemon. */
   available(): boolean {
-    return process.env.PRJCT_IN_DAEMON === '1' && hasGlobalWebSocket()
+    return process.env.PRJCT_IN_DAEMON === '1'
   }
 
   /** Reopen connections for every linked project (daemon boot). Best-effort. */

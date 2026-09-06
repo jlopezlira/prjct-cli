@@ -20,9 +20,8 @@ export type TranscriptJsonlLine = Record<string, unknown>
 export function identifyTranscriptModel(lines: TranscriptJsonlLine[]): string {
   const models = new Set<string>()
   for (const line of lines) {
-    const message = asRecord(line.message)
-    const raw = message?.model ?? line.model
-    if (typeof raw === 'string' && raw.trim()) models.add(raw.trim().slice(0, 120))
+    const model = modelFromLine(line)
+    if (model) models.add(model)
   }
   if (models.size === 0) return 'unknown'
   if (models.size > 1) return 'mixed'
@@ -66,6 +65,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
 
+function modelFromLine(line: TranscriptJsonlLine): string | null {
+  const message = asRecord(line.message)
+  const raw = message?.model ?? line.model
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const model = raw.trim()
+  const provider = message?.provider
+  return (
+    typeof provider === 'string' && provider && !model.startsWith(`${provider}/`)
+      ? `${provider}/${model}`
+      : model
+  ).slice(0, 120)
+}
+
 function num(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
@@ -82,6 +94,15 @@ function num(value: unknown): number {
  * Cache reads/creations count as input — real billed input the cycle incurred.
  */
 function usagePairFrom(usage: Record<string, unknown>): TranscriptUsage & { cacheRead: number } {
+  // Pi's native usage fields are per-request amounts, including cache I/O.
+  // Keep their billed sum separate from legacy cumulative-prefix handling.
+  if (typeof usage.input === 'number') {
+    return {
+      tokensIn: num(usage.input) + num(usage.cacheWrite) + num(usage.cacheRead),
+      tokensOut: num(usage.output),
+      cacheRead: 0,
+    }
+  }
   // Per-turn input deltas (safe to sum): genuinely new input each turn.
   const tokensIn =
     num(usage.input_tokens) +
@@ -201,8 +222,7 @@ export function sumTranscriptUsageByModel(
     if (!usage) continue
     // Kimi `usage.record` lines carry the model at the TOP level (no
     // `message` envelope); Claude nests it under `message.model`.
-    const rawModel = message?.model ?? line.model
-    const model = typeof rawModel === 'string' && rawModel ? rawModel : 'unknown'
+    const model = modelFromLine(line) ?? 'unknown'
     const pair = usagePairFrom(usage)
     const cur = acc.get(model) ?? { tokensIn: 0, tokensOut: 0, maxCacheRead: 0 }
     cur.tokensIn += pair.tokensIn

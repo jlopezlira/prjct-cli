@@ -14,9 +14,14 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import {
+  abEnvironment,
+  assertAbHarnessObserved,
+  prepareAbEnvironment,
+} from '../eval/ab-environment'
 import { type AbRow, parseResultsJsonl, renderAbMd, toOutcomeRuns } from '../eval/ab-report'
 import { type AbRunnerDeps, type RunContext, runAb } from '../eval/ab-runner'
-import { type AbTask, loadTasks, loadTasksById } from '../eval/ab-tasks'
+import { type AbTask, findPackageRoot, loadTasks, loadTasksById } from '../eval/ab-tasks'
 import { evaluateLiveOutcome, type OutcomeRun } from '../services/outcome-evidence'
 import type { CommandResult } from '../types/commands'
 import { getErrorMessage } from '../types/fs'
@@ -123,6 +128,13 @@ function defaultDeps(
 ): AbRunnerDeps {
   const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prjct-ab-'))
   const template = process.env.PRJCT_AB_HOME_TEMPLATE
+  const packageRoot = findPackageRoot(__dirname)
+  const entry = packageRoot ? path.join(packageRoot, 'dist', 'bin', 'prjct.mjs') : ''
+  if (!fs.existsSync(entry)) throw new Error('ab: build prjct before running the live evaluation')
+  const cliArgs = [
+    ...(path.basename(process.execPath).includes('bun') ? [] : ['--experimental-sqlite']),
+    entry,
+  ]
   return {
     async head() {
       const { stdout } = await run('git', ['rev-parse', 'HEAD'], { cwd: repo })
@@ -142,11 +154,15 @@ function defaultDeps(
           await fsp.rm(path.join(worktree, '.prjct'), { recursive: true, force: true })
         }
       }
-      // Seed the harness arm's memory with the task's declared entries so a
-      // PROJECT_KNOWLEDGE task measures recall of knowledge that IS recorded,
-      // not the accident of what a template happened to hold.
-      if (ctx.arm === 'with' && ctx.task.seed?.length) {
-        try {
+      try {
+        const environment = await prepareAbEnvironment({ worktree, home, arm: ctx.arm }, [
+          process.execPath,
+          ...cliArgs,
+        ])
+        // Seed the harness arm's memory with the task's declared entries so a
+        // PROJECT_KNOWLEDGE task measures recall of knowledge that IS recorded,
+        // not the accident of what a template happened to hold.
+        if (ctx.arm === 'with' && ctx.task.seed?.length) {
           for (const seed of ctx.task.seed) {
             const tagArg = seed.tags
               ? Object.entries(seed.tags)
@@ -159,9 +175,9 @@ function defaultDeps(
               seed.content,
               ...(tagArg ? ['--tags', tagArg] : []),
             ]
-            const res = await spawnCollect('prjct', args, {
+            const res = await spawnCollect(process.execPath, [...cliArgs, ...args], {
               cwd: worktree,
-              env: { ...process.env, PRJCT_CLI_HOME: home, PRJCT_NO_DAEMON: '1' },
+              env: environment,
               timeoutMs: 60_000,
             })
             // A cell whose seed did not land is NOT a "harness with memory"
@@ -172,15 +188,15 @@ function defaultDeps(
               )
             }
           }
-        } catch (error) {
-          // setup runs before runCell's try/finally, so it owns its own cleanup:
-          // never leave a registered worktree behind in the user's repo.
-          await run('git', ['worktree', 'remove', '--force', worktree], { cwd: repo }).catch(
-            () => undefined
-          )
-          await fsp.rm(home, { recursive: true, force: true }).catch(() => undefined)
-          throw error
         }
+      } catch (error) {
+        // setup runs before runCell's try/finally, so it owns its own cleanup:
+        // never leave a registered worktree behind in the user's repo.
+        await run('git', ['worktree', 'remove', '--force', worktree], { cwd: repo }).catch(
+          () => undefined
+        )
+        await fsp.rm(home, { recursive: true, force: true }).catch(() => undefined)
+        throw error
       }
       return { worktree, home }
     },
@@ -195,18 +211,25 @@ function defaultDeps(
         'stream-json',
         '--verbose',
         '--strict-mcp-config',
+        '--setting-sources',
+        '',
+        '--settings',
+        path.join(ctx.home, 'claude-settings.json'),
+        '--tools',
+        'Read,Grep,Glob',
+        '--allowedTools',
+        'Read,Grep,Glob',
         '--max-budget-usd',
         String(budgetUsd),
       ]
       if (ctx.arm === 'without') {
-        args.push('--setting-sources', 'project,local')
         await fsp.mkdir(shimDir, { recursive: true })
         const shim = path.join(shimDir, 'prjct')
         await fsp.writeFile(shim, '#!/bin/sh\necho "prjct: command not found" >&2\nexit 127\n', {
           mode: 0o755,
         })
       }
-      const env: NodeJS.ProcessEnv = { ...process.env, PRJCT_CLI_HOME: ctx.home }
+      const env = abEnvironment(ctx)
       if (ctx.arm === 'without') env.PATH = `${shimDir}:${process.env.PATH ?? ''}`
       const started = Date.now()
       const result = await spawnCollect('claude', args, {
@@ -214,6 +237,7 @@ function defaultDeps(
         env,
         timeoutMs: 1_200_000,
       })
+      if (ctx.arm === 'with') await assertAbHarnessObserved(ctx.home)
       return { stdout: result.stdout, wallMs: Date.now() - started, rc: result.code }
     },
     async runGrader(prompt, jsonSchema) {

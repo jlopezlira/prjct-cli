@@ -171,6 +171,15 @@ describe('qa-browser — session protocol', () => {
   // A metadata/off-origin URL is refused before it reaches the session, so
   // the app's cookies never ride to an attacker-chosen host.
   it('refuses an off-origin absolute goto without navigating', async () => {
+    for (const target of [
+      '//external.invalid/x',
+      'javascript:alert(1)',
+      ' https://external.invalid/x',
+    ]) {
+      const result = await runBrowserPrimitive('proj', ['goto', target], 'http://localhost:3000')
+      expect(result.ok).toBe(false)
+      expect(result.text).toMatch(/outside the app under test/)
+    }
     const steps = await runBrowserSteps(
       'proj',
       [{ do: 'goto', url: 'http://169.254.169.254/latest/meta-data' }],

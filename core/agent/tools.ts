@@ -118,16 +118,14 @@ export const editTool: AgentTool = {
  * Deny destructive / networky / privilege-changing shell shapes (defense in
  * depth — the tool's contract is "no network, no sudo").
  *
- * Two regexes so the network/privilege verbs match only in COMMAND position
- * (string start, or after `;`, `|`, `&&`, `(`, a newline, or a backtick) —
- * that catches `curl|sh`, `x && sudo y`, `nc -e …` while leaving `echo …
- * curl` and `git log --grep=wget` alone. The second regex is for shapes that
- * are dangerous as a substring anywhere (`/dev/tcp`, `rm -rf /`, `dd if=`).
+ * Recognizes command position, including ordinary assignments and transparent
+ * wrappers. This is defense in depth, not a shell sandbox: interpreter code
+ * still requires the host's process/network isolation.
  */
 const BASH_DENY_VERB =
-  /(?:^|[\n;&|(`])\s*(?:sudo|doas|pkexec|su|curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|mkfs|shutdown|reboot|halt|chown|chgrp|crontab)\b/i
+  /(?:^|[\n;&|(`])\s*(?:(?:[A-Z_][A-Z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)|(?:\/[\w.-]+)*\/?(?:env|command|exec|nohup|nice|timeout|stdbuf)|(?:-u|-C|--unset|--chdir|--argv0|-a)\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)|--?[\w=-]+|\d+[smhd]?)\s+)*(?:\/[\w.-]+)*\/?(?:sudo|doas|pkexec|su|curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|mkfs|shutdown|reboot|halt|chown|chgrp|crontab)\b/i
 const BASH_DENY_ALWAYS =
-  /(?:\bopenssl\s+s_client\b|\/dev\/(?:tcp|udp)\/|\bpython[23]?\s+-m\s+http\.server\b|\bgit\s+push\b|\bnpm\s+publish\b|\bdd\s+if=|\brm\s+-[a-z]*r[a-z]*f?[a-z]*\s+(?:\/|~|\$HOME)(?:\s|$)|\bchmod\s+(?:-R\s+)?[0-7]*777\b|\bkill\s+-9\s+-1\b)/i
+  /(?:\benv\b[^\n;&|]*\s(?:-S|--split-string)\b|\bopenssl\s+s_client\b|\/dev\/(?:tcp|udp)\/|\bpython[23]?\s+-m\s+http\.server\b|\bgit\s+push\b|\bnpm\s+publish\b|\bdd\s+if=|\brm\s+-[a-z]*r[a-z]*f?[a-z]*\s+(?:\/|~|\$HOME)(?:\s|$)|\bchmod\s+(?:-R\s+)?[0-7]*777\b|\bkill\s+-9\s+-1\b)/i
 
 /** Env vars a shelled-out child must never inherit from the host agent. */
 const ENV_SECRET_KEY = /(?:token|secret|passw(?:or)?d|api[_-]?key|private[_-]?key|credential)/i

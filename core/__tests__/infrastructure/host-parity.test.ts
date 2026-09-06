@@ -27,6 +27,7 @@ const HOOK_INSTALLERS: Record<string, () => Promise<Record<string, unknown>>> = 
   cursor: () => import('../../utils/cursor-hooks'),
   gemini: () => import('../../utils/gemini-settings'),
   codex: () => import('../../utils/codex-hooks'),
+  pi: () => import('../../infrastructure/pi-bridge'),
 }
 
 /** Registry id → KNOWN_AGENTS id when they differ (kimi-cli ↔ kimi). */

@@ -14,6 +14,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getGrokSkillInstallPath } from '../infrastructure/grok-skill'
 import { getKimiSkillPath } from '../infrastructure/kimi-skill-path'
+import { hasPiBridge } from '../infrastructure/pi-bridge'
 import { getPiSkillInstallPath } from '../infrastructure/pi-skill'
 import { resolveUserHome } from '../infrastructure/user-home'
 import { getCodexHooksJsonPath } from '../utils/codex-hooks'
@@ -254,6 +255,7 @@ export async function probeHarnessCoverage(
 
   const piDetected = Boolean(piCmd || piDir || piAgentDir || projectPiDir)
   const piSkillLive = Boolean(piSkillExists)
+  const piHooksLive = await hasPiBridge(path.resolve(path.dirname(piSkill), '../..'))
 
   const kimiDetected = Boolean(kimiCmd || kimiDir)
   const kimiHooksLive = hasPrjctManagedToml(kimiTomlText) || hasPrjctHookCommand(kimiTomlText)
@@ -367,15 +369,15 @@ export async function probeHarnessCoverage(
       id: 'pi',
       displayName: 'Pi',
       detected: piDetected,
-      hooksLive: false,
+      hooksLive: piHooksLive,
       mcpLive: false, // Pi has no native MCP
-      // Skill-only is full for Pi (anti-MCP-by-default design).
-      organic: !piDetected ? 'absent' : piSkillLive ? 'full' : 'none',
-      evidence: piSkillLive
-        ? '~/.pi/agent/skills/prjct/SKILL.md'
-        : piDetected
-          ? 'detected — run prjct install for Pi skill'
-          : 'not installed',
+      organic: organicOf(piDetected, piHooksLive, piSkillLive),
+      evidence:
+        piSkillLive && piHooksLive
+          ? 'Pi native skill + verified extension: lifecycle hooks, CLI and independent delegates'
+          : piDetected
+            ? 'incomplete Pi skill/extension — run prjct install'
+            : 'not installed',
     },
     {
       id: 'kimi-cli',

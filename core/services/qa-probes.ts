@@ -86,7 +86,7 @@ export async function runHttpProbe(
       return null
     }
   })()
-  if (target && probe.url && !httpProbeTargetAllowed(target, baseUrl)) {
+  if (target && !httpProbeTargetAllowed(target, baseUrl)) {
     return {
       type: 'http',
       ok: false,

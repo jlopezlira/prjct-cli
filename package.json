@@ -83,6 +83,7 @@
     "chalk": "4.1.2",
     "chokidar": "5.0.0",
     "jsonc-parser": "3.3.1",
+    "ws": "8.21.3",
     "zod": "4.3.6"
   },
   "overrides": {
@@ -99,6 +100,7 @@
     "@types/bun": "latest",
     "@types/chokidar": "2.1.7",
     "@types/node": "^22",
+    "@types/ws": "8.18.1",
     "esbuild": "0.28.1",
     "knip": "6.3.1",
     "lefthook": "2.1.0",
