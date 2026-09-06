@@ -8,7 +8,7 @@
  * renders the table + provisional Δ that `prjct harness score` also surfaces.
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -25,6 +25,36 @@ import { PrjctCommandsBase } from './base'
 
 const run = promisify(execFile)
 const PAIRED_OUTCOMES_REL = ['.prjct', 'evaluations', 'paired-outcomes.json']
+
+/**
+ * Spawn with stdin CLOSED (the runner contract: a headless `claude -p` must
+ * never wait on a pipe), collect stdout/stderr, honour a wall-clock budget.
+ */
+function spawnCollect(
+  cmd: string,
+  args: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }
+): Promise<{ stdout: string; code: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const out: Buffer[] = []
+    child.stdout.on('data', (c: Buffer) => out.push(c))
+    child.stderr.on('data', () => undefined)
+    const timer = setTimeout(() => child.kill('SIGKILL'), opts.timeoutMs)
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve({ stdout: Buffer.concat(out).toString('utf-8'), code: -1 })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve({ stdout: Buffer.concat(out).toString('utf-8'), code: code ?? -1 })
+    })
+  })
+}
 
 interface AbOptions {
   md?: boolean
@@ -112,6 +142,27 @@ function defaultDeps(
           await fsp.rm(path.join(worktree, '.prjct'), { recursive: true, force: true })
         }
       }
+      // Seed the harness arm's memory with the task's declared entries so a
+      // PROJECT_KNOWLEDGE task measures recall of knowledge that IS recorded,
+      // not the accident of what a template happened to hold.
+      if (ctx.arm === 'with' && ctx.task.seed?.length) {
+        for (const seed of ctx.task.seed) {
+          const tagArg = seed.tags
+            ? Object.entries(seed.tags)
+                .map(([k, v]) => `${k}:${v}`)
+                .join(',')
+            : ''
+          const args = ['remember', seed.type, seed.content, ...(tagArg ? ['--tags', tagArg] : [])]
+          const res = await spawnCollect('prjct', args, {
+            cwd: worktree,
+            env: { ...process.env, PRJCT_CLI_HOME: home, PRJCT_NO_DAEMON: '1' },
+            timeoutMs: 60_000,
+          })
+          if (res.code !== 0) {
+            console.error(`ab: seed failed for ${ctx.task.id} (${seed.type}): exit ${res.code}`)
+          }
+        }
+      }
       return { worktree, home }
     },
     async runAgent(ctx, prompt, budgetUsd) {
@@ -139,23 +190,15 @@ function defaultDeps(
       const env: NodeJS.ProcessEnv = { ...process.env, PRJCT_CLI_HOME: ctx.home }
       if (ctx.arm === 'without') env.PATH = `${shimDir}:${process.env.PATH ?? ''}`
       const started = Date.now()
-      const result = await run('claude', args, {
+      const result = await spawnCollect('claude', args, {
         cwd: ctx.worktree,
         env,
-        maxBuffer: 64 * 1024 * 1024,
-        timeout: 1_200_000,
-      }).catch((e: { stdout?: string; code?: number }) => ({
-        stdout: e.stdout ?? '',
-        code: e.code ?? -1,
-      }))
-      return {
-        stdout: result.stdout ?? '',
-        wallMs: Date.now() - started,
-        rc: 'code' in result && typeof result.code === 'number' ? result.code : 0,
-      }
+        timeoutMs: 1_200_000,
+      })
+      return { stdout: result.stdout, wallMs: Date.now() - started, rc: result.code }
     },
     async runGrader(prompt, jsonSchema) {
-      const { stdout } = await run(
+      const { stdout } = await spawnCollect(
         'claude',
         [
           '-p',
@@ -172,9 +215,9 @@ function defaultDeps(
           '--max-budget-usd',
           '0.5',
         ],
-        { cwd: repo, maxBuffer: 16 * 1024 * 1024, timeout: 300_000 }
-      ).catch((e: { stdout?: string }) => ({ stdout: e.stdout ?? '' }))
-      return stdout ?? ''
+        { cwd: repo, env: process.env, timeoutMs: 300_000 }
+      )
+      return stdout
     },
     async teardown(ctx: RunContext) {
       await run('git', ['worktree', 'remove', '--force', ctx.worktree], { cwd: repo }).catch(

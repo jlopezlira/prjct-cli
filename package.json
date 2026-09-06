@@ -122,6 +122,7 @@
     "bin/prjct",
     "bin/prjct.cjs",
     "dist/",
+    "evals/ab/tasks/",
     "templates/",
     "scripts/install.sh",
     "LICENSE",

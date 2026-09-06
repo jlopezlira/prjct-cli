@@ -63,7 +63,8 @@ export class VerifyCommands extends PrjctCommandsBase {
       }
 
       if (sub === 'fix') {
-        const cmd = rest || (await detectVerifyCommand(projectPath))
+        // `fix auto` mirrors `repro auto`: resolve, never run the literal word.
+        const cmd = rest && rest !== 'auto' ? rest : await detectVerifyCommand(projectPath)
         if (!cmd) return { success: false, error: 'no command for fix' }
         const res = await recordFix(projectId, projectPath, cmd, { timeoutMs })
         const body = res.ok

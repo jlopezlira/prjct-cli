@@ -89,8 +89,13 @@ export function parseTask(raw: unknown, source: string): AbTask {
   }
 }
 
-/** Load every task in the corpus, sorted by id for stable output. */
+/**
+ * Load every task in the corpus, sorted by id for stable output. A missing
+ * corpus dir (a build that did not ship `evals/`) is an empty corpus, not a
+ * crash — `report`/`import` over an existing paired-outcomes file must work.
+ */
 export function loadTasks(dir: string = TASKS_DIR): AbTask[] {
+  if (!fs.existsSync(dir)) return []
   const files = fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.json'))

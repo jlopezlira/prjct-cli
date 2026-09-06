@@ -68,11 +68,28 @@ export async function recordRepro(
       reason: `\`${command}\` already passes — a reproduction must fail. Nothing to fix.`,
     }
   }
+  // A reproduction is a command that RAN and failed. A command that never ran
+  // (timeout, spawn error, output overflow → exitCode null) or that the shell
+  // could not find (127) proves nothing and must not be stored as red.
+  if (run.exitCode === null || run.exitCode === 127) {
+    return {
+      ok: false,
+      reason: `\`${command}\` did not run to a real failure (${run.detail || `exit ${run.exitCode}`}) — fix the command before recording a reproduction.`,
+    }
+  }
+  const binding = await verificationBinding(projectPath, ['verify', command])
+  if (!binding) {
+    return {
+      ok: false,
+      reason:
+        'Cannot bind the reproduction to a tree (not a git repository, or the tree changed while stamping). The red→green proof needs a git checkout.',
+    }
+  }
   const receipt: VerifyReceipt = {
     version: 1,
     command,
     phase: 'repro',
-    binding: await verificationBinding(projectPath, ['verify', command]),
+    binding,
     exitCode: run.exitCode,
     detail: run.detail.slice(-2000),
     at: new Date().toISOString(),
@@ -108,7 +125,17 @@ export async function recordFix(
     }
   }
   const binding = await verificationBinding(projectPath, ['verify', command])
-  if (binding && repro.binding && binding.treeHash === repro.binding.treeHash) {
+  // The proof IS the tree change; if it cannot be established, refuse rather
+  // than record a green that proves nothing.
+  if (!binding || !repro.binding) {
+    return {
+      ok: false,
+      reason:
+        'Cannot bind the fix to a tree (not a git repository, or the tree changed while stamping) — the red→green proof cannot be established.',
+      repro,
+    }
+  }
+  if (binding.treeHash === repro.binding.treeHash) {
     return {
       ok: false,
       reason: `\`${command}\` passes but the working tree is unchanged from the reproduction — a fix must change the code. Edit, then re-run.`,

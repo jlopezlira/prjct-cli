@@ -9,48 +9,30 @@
 import type { TaskClass } from './task-class'
 
 export type PromptLane = 'silent' | 'inject' | 'ranked'
-export type PreSearchMode = 'inject' | 'allow' | 'deny'
 
+/**
+ * Every field here is CONSUMED by core/hooks/prompt.ts — a policy knob that
+ * nothing reads is dead config. Pre-search judgment injection is governed by
+ * `enforce.knowledgeFirst` (it has no turn class), not by this table.
+ */
 export interface HarnessPolicy {
-  /** What the prompt hook's optional lanes do this turn. */
+  /** What the prompt hook's optional lane does this turn (`silent` drops it). */
   promptLane: PromptLane
-  /** Cap on injected additionalContext chars. */
+  /** Cap on the optional lane's injected chars this turn (0 = no cap). */
   maxInjectChars: number
-  /** What pre-search does with recorded judgment about a grepped token. */
-  preSearch: PreSearchMode
-  /** Whether a VERIFY-class turn gets the repro→fix contract injected. */
+  /** Whether a VERIFY-class turn gets the repro→fix contract cue. */
   verifyContract: boolean
 }
 
 type ClassPolicies = Record<TaskClass | 'UNKNOWN', HarnessPolicy>
 
 const BASELINE: ClassPolicies = {
-  SELF_CONTAINED: {
-    promptLane: 'silent',
-    maxInjectChars: 0,
-    preSearch: 'allow',
-    verifyContract: false,
-  },
-  PROJECT_KNOWLEDGE: {
-    promptLane: 'inject',
-    maxInjectChars: 600,
-    preSearch: 'inject',
-    verifyContract: false,
-  },
-  EXPLORATION: {
-    promptLane: 'ranked',
-    maxInjectChars: 900,
-    preSearch: 'inject',
-    verifyContract: false,
-  },
-  VERIFY: { promptLane: 'inject', maxInjectChars: 300, preSearch: 'inject', verifyContract: true },
+  SELF_CONTAINED: { promptLane: 'silent', maxInjectChars: 0, verifyContract: false },
+  PROJECT_KNOWLEDGE: { promptLane: 'inject', maxInjectChars: 600, verifyContract: false },
+  EXPLORATION: { promptLane: 'ranked', maxInjectChars: 900, verifyContract: false },
+  VERIFY: { promptLane: 'inject', maxInjectChars: 300, verifyContract: true },
   // UNKNOWN falls back to today's behaviour (inject), never to silence.
-  UNKNOWN: {
-    promptLane: 'inject',
-    maxInjectChars: 600,
-    preSearch: 'inject',
-    verifyContract: false,
-  },
+  UNKNOWN: { promptLane: 'inject', maxInjectChars: 600, verifyContract: false },
 }
 
 /**

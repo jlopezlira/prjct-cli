@@ -46,17 +46,24 @@ const DECISION_RE =
 const EXPLORATION_RE =
   /\b(where (is|are|does)|find (all|every|the|where)|all callers|every (place|caller|usage)|across (the )?(codebase|repo|code|files)|trace (through|the|how)|how (does|do) .{0,50}(work|flow)|flows? through|what (calls|uses|depends on)|refactor|rename .{0,30}(everywhere|across))/i
 
-/** A token that looks like a file path (a slash, or a bare `name.ext`). */
-const PATH_TOKEN_RE =
-  /[\w./-]*\/[\w./-]+\.\w{1,6}\b|\b[\w-]+\/[\w./-]+\b|\b[\w-]+\.(ts|tsx|js|mjs|cjs|json|md|c|py|go|rs|yml|yaml|sh|sql)\b/g
+/** Candidate path-shaped tokens; `isPathLike` decides which ones count. */
+const PATH_TOKEN_RE = /[\w.@-]+(?:\/[\w.@-]+)+|\b[\w-]+\.[a-z]{1,5}\b/g
+const CODE_EXT_RE = /\.(ts|tsx|js|mjs|cjs|json|md|c|h|py|go|rs|yml|yaml|sh|sql|css|html|toml)$/i
+const SOURCE_DIR_RE =
+  /^(?:core|src|lib|app|scripts|native|bin|evals|docs|test|tests|__tests__|\.github|assets|templates|packages|apps)\//
+/**
+ * A real path names a source dir or ends in a code extension. Bare `a/b`
+ * prose ("and/or", "A/B", "with/without") has neither and must NOT read as
+ * "the prompt names the file" — that would silence the harness on prose.
+ */
+function isPathLike(token: string): boolean {
+  return CODE_EXT_RE.test(token) || SOURCE_DIR_RE.test(token)
+}
 /** A token that looks like a code identifier worth checking against the index. */
 const SYMBOL_TOKEN_RE = /\b([A-Z][a-zA-Z0-9]{3,}|[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\b/g
 
 function pathTokens(prompt: string): string[] {
-  // A slash (a real path) or a bare `name.ext` (config files like package.json).
-  return [...new Set(prompt.match(PATH_TOKEN_RE) ?? [])].filter(
-    (t) => t.includes('/') || /\.\w{1,6}$/.test(t)
-  )
+  return [...new Set(prompt.match(PATH_TOKEN_RE) ?? [])].filter(isPathLike)
 }
 
 function symbolTokens(prompt: string): string[] {

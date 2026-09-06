@@ -64,6 +64,32 @@ describe('verify contract', () => {
     expect(res.reason).toMatch(/already passes/i)
   })
 
+  it('refuses a command that never really ran (not found / timeout) as a reproduction', async () => {
+    const missing = await recordRepro(
+      fixture.projectId,
+      fixture.dir,
+      'definitely-not-a-command-xyz'
+    )
+    expect(missing.ok).toBe(false)
+    expect(missing.reason).toMatch(/did not run to a real failure/i)
+    const timedOut = await recordRepro(fixture.projectId, fixture.dir, 'sleep 5', {
+      timeoutMs: 150,
+    })
+    expect(timedOut.ok).toBe(false)
+    expect(timedOut.reason).toMatch(/did not run to a real failure/i)
+  })
+
+  it('refuses the contract outside a git checkout — the proof needs a tree', async () => {
+    const plain = await fsp.mkdtemp(path.join(os.tmpdir(), 'prjct-verify-nogit-'))
+    try {
+      const res = await recordRepro(fixture.projectId, plain, 'exit 1')
+      expect(res.ok).toBe(false)
+      expect(res.reason).toMatch(/cannot bind/i)
+    } finally {
+      await fsp.rm(plain, { recursive: true, force: true })
+    }
+  })
+
   it('refuses a fix with no prior reproduction', async () => {
     const res = await recordFix(fixture.projectId, fixture.dir, CMD)
     expect(res.ok).toBe(false)

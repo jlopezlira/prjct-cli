@@ -208,7 +208,10 @@ export interface LocalConfig {
   /**
    * Harness tuning. `mcpTier` documents the intended MCP tool tier (the live
    * default is set in code — see DEFAULT_MCP_TOOL_TIER); `policy` overrides the
-   * per-task-class prompt/pre-search behaviour (see core/services/harness-policy).
+   * per-task-class prompt-hook behaviour by class name (SELF_CONTAINED,
+   * PROJECT_KNOWLEDGE, EXPLORATION, VERIFY, UNKNOWN — see
+   * core/services/harness-policy). Pre-search judgment injection is governed by
+   * `enforce.knowledgeFirst`, not here.
    */
   harness?: {
     mcpTier?: 'micro' | 'lean' | 'core' | 'standard' | 'all'
@@ -217,7 +220,6 @@ export interface LocalConfig {
       {
         promptLane?: 'silent' | 'inject' | 'ranked'
         maxInjectChars?: number
-        preSearch?: 'inject' | 'allow' | 'deny'
         verifyContract?: boolean
       }
     >

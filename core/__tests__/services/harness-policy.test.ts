@@ -15,7 +15,7 @@ describe('resolvePolicy', () => {
 
     const know = resolvePolicy('haiku', 'PROJECT_KNOWLEDGE')
     expect(know.promptLane).toBe('inject')
-    expect(know.preSearch).toBe('inject')
+    expect(know.maxInjectChars).toBeGreaterThan(0)
   })
 
   it('hands EXPLORATION a ranked set and gives VERIFY the contract', () => {
@@ -31,6 +31,6 @@ describe('resolvePolicy', () => {
     const cfg = { harness: { policy: { SELF_CONTAINED: { promptLane: 'inject' as const } } } }
     expect(resolvePolicy('haiku', 'SELF_CONTAINED', cfg).promptLane).toBe('inject')
     // Untouched fields keep the baseline.
-    expect(resolvePolicy('haiku', 'SELF_CONTAINED', cfg).preSearch).toBe('allow')
+    expect(resolvePolicy('haiku', 'SELF_CONTAINED', cfg).verifyContract).toBe(false)
   })
 })

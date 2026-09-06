@@ -30,7 +30,7 @@ import { projectMemory } from '../memory/project-memory'
 import { buildAlignmentCard } from '../services/alignment-card'
 import { contextPressureVerdict } from '../services/context-pressure'
 import { buildRepositoryAlignmentCard } from '../services/file-cue'
-import { resolvePolicy } from '../services/harness-policy'
+import { type PolicyConfig, resolvePolicy } from '../services/harness-policy'
 import {
   buildDeliveryGuidance,
   classifyDeliveryIntent,
@@ -909,13 +909,21 @@ function computePromptGuidance(
   budget = STATE_BUDGET,
   tddMode?: 'off' | 'assist' | 'strict',
   hasMergeConflicts = false,
-  repositoryAlignmentOverride?: string | null
+  repositoryAlignmentOverride?: string | null,
+  policyConfig?: PolicyConfig
 ): PromptGuidanceComputation {
   // Turn router: on a SELF_CONTAINED turn (the prompt names the file/symbol to
   // touch) the agent alone is fastest, so the OPTIONAL lane stays silent — the
   // Δ evidence's "silence where the agent wins". The required repository
   // alignment below is deliberately task-class-independent and still fires.
-  const silentOptional = resolvePolicy('', classifyTurn(prompt).cls).promptLane === 'silent'
+  // `harness.policy` (project config) overrides the class defaults last.
+  const turn = classifyTurn(prompt)
+  const policy = resolvePolicy('', turn.cls, policyConfig)
+  const silentOptional = policy.promptLane === 'silent'
+  const capOptional = (text: string | null): string | null =>
+    text && policy.maxInjectChars > 0 && text.length > policy.maxInjectChars
+      ? safeTruncate(text, policy.maxInjectChars, undefined, Math.floor(policy.maxInjectChars / 4))
+      : text
   const cueResult = silentOptional ? null : buildTopicalCueResult(projectId, prompt)
   const harness = buildTaskHarness(prompt)
   // Provider- and task-classification-independent. An unknown/terse prompt is
@@ -928,8 +936,21 @@ function computePromptGuidance(
     repositoryAlignmentOverride === undefined
       ? buildRepositoryAlignmentCard(projectId, prompt, `${prompt}\n${state}`)?.content
       : repositoryAlignmentOverride
-  const delivery = silentOptional ? null : buildDeliveryGuidance(prompt)
-  const guidance = silentOptional ? null : buildSelectiveGuidance(projectId, prompt)
+  const delivery = silentOptional ? null : capOptional(buildDeliveryGuidance(prompt))
+  // VERIFY class: the proof-carrying contract rides the optional lane when no
+  // authored guidance claimed it — a fix is a measurement, not a claim.
+  const verifyCue =
+    turn.cls === 'VERIFY' && policy.verifyContract
+      ? 'Verify contract: record the failure first (`prjct verify repro "<cmd>"`), edit, then prove the flip (`prjct verify fix "<cmd>"`) — the same command must pass on a changed tree.'
+      : null
+  const selective = silentOptional ? null : buildSelectiveGuidance(projectId, prompt)
+  const guidance: SelectiveGuidanceResult | null = silentOptional
+    ? null
+    : selective
+      ? { ...selective, text: capOptional(selective.text) ?? selective.text }
+      : verifyCue
+        ? { text: verifyCue, memoryIds: [] }
+        : null
   const deliveryIntent = classifyDeliveryIntent(prompt)
   const routingInput = {
     intent: prompt,
@@ -1205,7 +1226,8 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
             budget,
             config.tdd?.mode,
             hasMergeConflicts,
-            repositoryFresh ? repositoryAlignment?.content : null
+            repositoryFresh ? repositoryAlignment?.content : null,
+            config
           )
           const privateGuidanceGate =
             preview.privateGuidance && preview.privateGuidanceKey
@@ -1389,7 +1411,8 @@ export function runPromptHook(projectPath: string = process.cwd(), io?: HookIo):
           budget,
           config.tdd?.mode,
           hasMergeConflicts,
-          repositoryFresh ? repositoryAlignment?.content : null
+          repositoryFresh ? repositoryAlignment?.content : null,
+          config
         )
         const privateGuidanceGate =
           preview.privateGuidance && preview.privateGuidanceKey
@@ -1552,7 +1575,9 @@ async function rebuildPromptAfterEmit(
     state ?? '',
     STATE_BUDGET,
     config.tdd?.mode,
-    detectRepositoryWorkflowState(projectPath).hasMergeConflicts
+    detectRepositoryWorkflowState(projectPath).hasMergeConflicts,
+    undefined,
+    config
   )
   return {
     projectId: config.projectId,
