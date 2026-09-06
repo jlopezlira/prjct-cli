@@ -1,5 +1,5 @@
-// prjct-managed pi bridge v1
-// Transport only: CLI owns workflow, persistence, review policy and ship gates.
+// prjct-managed pi bridge v1 (transport)
+// CLI owns workflow, persistence, review policy and ship gates.
 import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -18,6 +18,17 @@ const exec = (command, args, options) => {
   })
 }
 const limit = 50 * 1024
+
+function requireModel(ctx) {
+  if (!ctx.model) throw new Error('Pi has no active model; select a model before delegating.')
+  return ctx.model
+}
+
+// One options shape for every child the bridge spawns: cwd, the scrubbed
+// session env, the caller's abort signal, a per-kind timeout, 4 MiB buffer.
+function execOptions(ctx, signal, timeout) {
+  return { cwd: ctx.cwd, env: sessionEnv(ctx), signal, timeout, maxBuffer: 4 * 1024 * 1024 }
+}
 
 export function sessionEnv(ctx) {
   const env = { ...process.env, AI_AGENT: 'pi', PI_CODING_AGENT: 'true', PRJCT_AGENT_RUNTIME: 'pi' }
@@ -41,7 +52,7 @@ export function sessionEnv(ctx) {
 }
 
 export function childArgs(ctx, promptFile, readOnly) {
-  if (!ctx.model) throw new Error('Pi has no active model; select a model before delegating.')
+  const model = requireModel(ctx)
   return [
     '--print',
     '--mode',
@@ -53,9 +64,9 @@ export function childArgs(ctx, promptFile, readOnly) {
     '--no-context-files',
     '--no-approve',
     '--provider',
-    ctx.model.provider,
+    model.provider,
     '--model',
-    ctx.model.id,
+    model.id,
     ...(ctx.thinkingLevel ? ['--thinking', ctx.thinkingLevel] : []),
     '--tools',
     readOnly ? 'read,grep,find,ls' : 'read,bash,edit,write,grep,find,ls',
@@ -82,7 +93,8 @@ export function parseChildOutput(stdout) {
       'Pi delegate did not complete successfully; no review approval may be inferred.'
     )
   }
-  const text = final.content
+  // A message_end without content is a malformed stream, not a TypeError.
+  const text = (Array.isArray(final.content) ? final.content : [])
     .filter((item) => item.type === 'text')
     .map((item) => item.text)
     .join('\n')
@@ -118,19 +130,13 @@ export async function runCli(args, ctx, signal, execute = exec) {
     throw new Error('prjct requires a nonempty argv array of strings.')
   }
   // Never shell-join arguments or replay failed mutation commands.
-  const result = await execute('prjct', args, {
-    cwd: ctx.cwd,
-    env: sessionEnv(ctx),
-    signal,
-    timeout: 900000,
-    maxBuffer: 4 * 1024 * 1024,
-  })
+  const result = await execute('prjct', args, execOptions(ctx, signal, 900000))
   return resultText(result.stdout || result.stderr || '(no output)', { command: 'prjct', args })
 }
 
 export async function runAgent(prompt, readOnly, ctx, signal, execute = exec) {
   if (!prompt?.trim()) throw new Error('An explicit bounded task is required.')
-  if (!ctx.model) throw new Error('Pi has no active model; select a model before delegating.')
+  const { provider, id: modelId } = requireModel(ctx)
   const dir = await mkdtemp(join(tmpdir(), 'prjct-pi-agent-'))
   const file = join(dir, 'task.txt')
   try {
@@ -139,13 +145,11 @@ export async function runAgent(prompt, readOnly, ctx, signal, execute = exec) {
       `${prompt}\n\nReturn your findings to the parent. Do not spawn agents, ship, approve judgments, or change prjct policy.`,
       { mode: 0o600 }
     )
-    const result = await execute('pi', childArgs(ctx, file, readOnly), {
-      cwd: ctx.cwd,
-      env: sessionEnv(ctx),
-      signal,
-      timeout: 600000,
-      maxBuffer: 4 * 1024 * 1024,
-    })
+    const result = await execute(
+      'pi',
+      childArgs(ctx, file, readOnly),
+      execOptions(ctx, signal, 600000)
+    )
     const parsed = parseChildOutput(result.stdout)
     // Return evidence, not a fabricated ledger verdict. Parent uses existing CLI gates.
     const usage = {
@@ -164,8 +168,8 @@ export async function runAgent(prompt, readOnly, ctx, signal, execute = exec) {
     }
     return {
       ...(await resultText(parsed.text, {
-        provider: ctx.model.provider,
-        model: ctx.model.id,
+        provider,
+        model: modelId,
         independent: true,
         readOnly,
       })),
