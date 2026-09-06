@@ -369,9 +369,8 @@ function generateDaemonShim() {
   //   - On a `retry` response (daemon refused because its CODE IS STALE — the
   //     request did NOT execute, so there are zero side effects): the generic
   //     path re-runs DIRECTLY in-process (set PRJCT_NO_DAEMON=1 so the imported
-  //     core skips the dying daemon) on the fresh code; the hook path re-spills
-  //     the payload to the run dir and punts (exit 89, no output) so the next
-  //     `||` chain stage re-runs the hook from the spill — see
+  //     core skips the dying daemon) on the fresh code; the hook path preserves
+  //     the payload and imports the dedicated cold-hook entry itself — see
   //     core/hooks/stdin-spill.ts. This is the definitive fix for the recurring
   //     stale-daemon trap — output is never served from an outdated build.
   //
@@ -421,23 +420,21 @@ const withAuth=(o)=>{const a=authToken();return a?{...o,auth:a}:o};
 // Hook fast path: forward the event (stdin, or the spill an earlier chain
 // stage left behind) to the warm daemon and write its response raw. Hooks
 // must never disturb the host session, so ANY failure (connect error,
-// timeout, closed socket, stale-code retry) RE-SPILLS the payload and punts
-// (exit 89, no output) — the next || chain stage re-runs the hook from the
-// spill. Invoked outside a chain (manual "prjct hook X"), exit 89 + empty
-// stdout is the same host-visible no-op the old {} emit was.
+// timeout, closed socket, stale-code retry) preserves the payload and runs
+// the dedicated cold hook here. Pi and direct CLI callers have no shell
+// fallback chain: exit 89 is an error that otherwise blocks their tools.
 const hookCompletion=new AbortController();
 function sendHook(sub,data){
   if(hookCompletion.signal.aborted)return;hookCompletion.abort();
   const msg=JSON.stringify(withAuth({id:randomUUID(),command:"hook",args:sub?[sub]:[],options:{},cwd:process.cwd(),stdin:data,...(process.env.PRJCT_HOOK_HOST?{hookHost:process.env.PRJCT_HOOK_HOST}:{})}))+"\\n";
   const sock=connect(sockPath);const chunks=[],completion=new AbortController();
-  const soft=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();writeSpill(sub,data);process.exit(89)}};
-  // Unauthenticated (token unreadable): the daemon will NOT restart to fix
-  // that, so punting would leave every later chain stage punting too. Run
-  // the hook cold from the spill instead — same output, one process later.
+  const soft=()=>cold();
+  // Preserve hook decisions and original stdin in the dedicated hook bundle.
+  // Generic mutating commands retain their separate no-replay policy.
   const cold=()=>{if(!completion.signal.aborted){completion.abort();clearTimeout(t);sock.destroy();writeSpill(sub,data);process.env.PRJCT_NO_DAEMON="1";import("./prjct-hooks.mjs").catch(()=>{process.stdout.write("{}\\n");process.exit(0)})}};
   const t=setTimeout(soft,800);
   sock.on("connect",()=>sock.write(msg));
-  sock.on("data",c=>{chunks.push(c.toString());const buf=chunks.join("");const n=buf.indexOf("\\n");if(n!==-1){const r=JSON.parse(buf.slice(0,n));if(r.unauthenticated){cold();return}if(r.retry){soft();return}completion.abort();clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(r.exitCode!=null?r.exitCode:0)}});
+  sock.on("data",c=>{if(completion.signal.aborted)return;chunks.push(c.toString());const buf=chunks.join("");if(buf.length>1048576){soft();return}const n=buf.indexOf("\\n");if(n!==-1){try{const r=JSON.parse(buf.slice(0,n));if(!r||typeof r!=="object"||Array.isArray(r)||r.unauthenticated||r.retry||r.success!==true||r.exitCode!==0||typeof r.stdout!=="string"){soft();return}completion.abort();clearTimeout(t);sock.end();if(r.stdout)process.stdout.write(r.stdout);process.exit(0)}catch{soft()}}});
   sock.on("error",soft);
   sock.on("close",soft);
 }

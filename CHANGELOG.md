@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [4.25.1] - 2026-09-06
+
+### Added
+- fix: preserve Pi hooks when the daemon is unavailable
+
 ## [4.25.0] - 2026-09-06
 
 ### Added

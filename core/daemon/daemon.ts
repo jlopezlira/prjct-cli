@@ -589,6 +589,13 @@ async function handleRequest(request: DaemonRequest): Promise<DaemonResponse> {
     }
   }
 
+  // Control requests never capture console output. Keep them outside both
+  // the command queue and operation journal so a slow sync cannot make a
+  // healthy daemon look dead or prevent an operator from stopping it.
+  if (request.command === '__ping' || request.command === 'daemon') {
+    return handleRequestInner(request)
+  }
+
   return daemonRequestJournal.run(request, async () => {
     state.activeRequests++
     try {
